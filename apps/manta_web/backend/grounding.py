@@ -15,7 +15,13 @@ EPS = 1e-9
 
 _NUM = re.compile(r"(?<![\w.])[-+]?(?:\d[\d,]*(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?(?![\w])")
 
-_ENUM = re.compile(r"(?m)^[ \t]*\d{1,2}[.)][ \t]")
+_ENUM = re.compile(
+    r"(?mi)"
+    r"^[ \t]*\d{1,2}[.)][ \t]"
+    r"|\b(?:die|der|das|den|nummer|nr\.?|punkt|option|methode|variante|schritt|frage"
+    r"|method|option|point|step|number|item)\s+\d{1,2}\b"
+    r"|\bdie\s+\d{1,2}\."
+    r"|\(\s*\d{1,2}\s*\)")
 
 _WORD_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.:/")
 
