@@ -447,9 +447,13 @@ repository.
 - **rELA** — Suzuki, Nakaoka, Fukuda, Masuya 2021, Ecological Monographs 91(3):e01469.
   Downloaded by `tools/ela/fetch_rela.sh` from <https://github.com/kecosz/rELA>.
 - **cutadapt** — Martin 2011, EMBnet.journal 17:10, [doi:10.14806/ej.17.1.200](https://doi.org/10.14806/ej.17.1.200).
-- **Neo4j**, **FastAPI**, **React**, **Apache ECharts**, **MapLibre GL JS** and all other packages
-  listed in `requirements.txt` and `package.json` — installed from PyPI and npm under their own
-  licenses.
+- **Neo4j** — the `neo4j:5.26` image, which is the **Community Edition under GPL v3**. It is
+  pulled from Docker Hub, not contained here, and runs as its own process: MANTA talks to it over
+  the Bolt protocol, and the driver it links against (`neo4j` on PyPI) is Apache 2.0. Community
+  Edition is free to run on your own server. It has no online backup, which is why
+  `deploy/backup.sh` stops the database for the few seconds the dump takes, and no clustering.
+- **FastAPI**, **React**, **Apache ECharts**, **MapLibre GL JS** and all other packages listed in
+  `requirements.txt` and `package.json` — installed from PyPI and npm under their own licenses.
 - **Qwen 2.5** language models — Alibaba Cloud; license per model size as stated in step 1.
 
 **Data**
