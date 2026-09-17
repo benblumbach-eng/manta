@@ -22,7 +22,7 @@ Explore Marine Amplicon Time-series locally in your browser.
 [Workflow](#workflow) ·
 [Installation](#installation) ·
 [Importing data](#importing-data) ·
-[When something breaks](#when-something-breaks) ·
+[Troubleshooting](#troubleshooting) ·
 [Sources and licenses](#sources-and-licenses)
 
 <br>
@@ -395,7 +395,7 @@ OTTER's own two network tests do the same thing through a patch kept in this rep
 rather than as a commit in the submodule. Applying it is only of interest for running those
 tests; the import does not touch them.
 
-## When something breaks
+## Troubleshooting
 
 Every entry below happened during a real first installation, on Windows and in WSL. The message
 is the key — search this table for the text you see.
