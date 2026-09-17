@@ -1,0 +1,5 @@
+# MANTA ist ein Forschungswerkzeug mit Zugangskontrolle, kein Angebot an Suchmaschinen.
+# Caddy sendet zusaetzlich X-Robots-Tag: noindex, nofollow — diese Datei ist die zweite Schranke,
+# weil robots.txt vor dem Abruf gelesen wird und der Header erst danach kommt.
+User-agent: *
+Disallow: /

@@ -1,0 +1,17 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+COPY apps/manta_web/backend/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+COPY apps/manta_web/backend /app/apps/manta_web/backend
+COPY apps/manta_mcp /app/apps/manta_mcp
+
+RUN useradd --system --uid 10001 --create-home --home-dir /home/manta manta \
+    && mkdir -p /data && chown -R manta:manta /data /app
+USER manta
+
+ENV PYTHONUNBUFFERED=1
+WORKDIR /app/apps/manta_web/backend
+EXPOSE 8000
+CMD ["python", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

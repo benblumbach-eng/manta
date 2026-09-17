@@ -1,0 +1,8 @@
+.venv/
+.env
+__pycache__/
+.pytest_cache/
+
+manta_auth.db
+manta_auth.db-shm
+manta_auth.db-wal

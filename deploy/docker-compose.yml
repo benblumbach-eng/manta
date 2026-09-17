@@ -1,0 +1,87 @@
+services:
+  neo4j:
+    image: neo4j:5.26
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?bitte in .env setzen}
+      NEO4J_server_memory_heap_initial__size: ${NEO4J_HEAP:-1G}
+      NEO4J_server_memory_heap_max__size: ${NEO4J_HEAP:-1G}
+      NEO4J_server_memory_pagecache_size: ${NEO4J_PAGECACHE:-512M}
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    ports:
+      - "${NEO4J_BIND:-127.0.0.1}:${NEO4J_PORT_BOLT:-7687}:7687"
+      - "${NEO4J_BIND:-127.0.0.1}:${NEO4J_PORT_HTTP:-7474}:7474"
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    restart: unless-stopped
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    environment:
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?bitte in .env setzen}
+      MANTA_ALLOWED_ORIGINS: ${MANTA_ALLOWED_ORIGINS:-http://localhost:5173}
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b}
+      MANTA_AUTH_DB: /data/manta_auth.db
+      MANTA_REQUEST_MAILTO: ${MANTA_REQUEST_MAILTO:-}
+      MANTA_SMTP_HOST: ${MANTA_SMTP_HOST:-}
+      MANTA_SMTP_PORT: ${MANTA_SMTP_PORT:-587}
+      MANTA_SMTP_TLS: ${MANTA_SMTP_TLS:-starttls}
+      MANTA_SMTP_USER: ${MANTA_SMTP_USER:-}
+      MANTA_SMTP_PASSWORD: ${MANTA_SMTP_PASSWORD:-}
+      MANTA_MAIL_FROM: ${MANTA_MAIL_FROM:-manta@localhost}
+      MANTA_PUBLIC_URL: ${MANTA_PUBLIC_URL:-}
+      MANTA_GROUNDING: ${MANTA_GROUNDING:-mark}
+      MANTA_OPENAI_BASE_URL: ${MANTA_OPENAI_BASE_URL:-}
+      MANTA_OPENAI_API_KEY: ${MANTA_OPENAI_API_KEY:-}
+      MANTA_OPENAI_MODELS: ${MANTA_OPENAI_MODELS:-}
+      MANTA_OPENAI_TIMEOUT: ${MANTA_OPENAI_TIMEOUT:-120}
+    volumes:
+      - auth_data:/data
+    expose:
+      - "8000"
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama_models:/root/.ollama
+    expose:
+      - "11434"
+    ports:
+      - "127.0.0.1:${OLLAMA_PORT:-11434}:11434"
+
+  caddy:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+      args:
+        VITE_API_BASE: ${VITE_API_BASE:-/api}
+    restart: unless-stopped
+    depends_on: [api]
+    environment:
+      MANTA_SITE_ADDRESS: ${MANTA_SITE_ADDRESS:-:80}
+    ports:
+      - "${WEB_BIND:-127.0.0.1}:${HTTP_PORT:-8080}:80"
+      - "${WEB_BIND:-127.0.0.1}:${HTTPS_PORT:-8443}:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  neo4j_data:
+  auth_data:
+  ollama_models:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,25 @@
+{$MANTA_SITE_ADDRESS::80} {
+	encode gzip zstd
+
+	handle_path /api/* {
+		reverse_proxy api:8000 {
+			lb_try_duration 20s
+			lb_try_interval 500ms
+			transport http {
+				read_timeout 30m
+				write_timeout 30m
+			}
+		}
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+
+	header X-Robots-Tag "noindex, nofollow"
+
+	@ueber_https expression {scheme} == "https"
+	header @ueber_https Strict-Transport-Security "max-age={$MANTA_HSTS_MAX_AGE:86400}"
+}

@@ -1,0 +1,27 @@
+diff --git a/test_A_001_create_con.py b/test_A_001_create_con.py
+index 16bede7..5dbaca4 100644
+--- a/test_A_001_create_con.py
++++ b/test_A_001_create_con.py
+@@ -29,7 +29,8 @@ def test_create_con_network():
+         index_col=0,
+     )
+     calculator = Networkz(
+-        df_spec, None, df_taxa_info, method=CON_METHOD, num_coefficients=FFT_COEFFS
++        df_spec, None, df_taxa_info, method=CON_METHOD, num_coefficients=FFT_COEFFS,
++        num_cores=1,  # MANTA: erzwingt deterministische Kantenreihenfolge (imap_unordered ist sonst nicht-deterministisch)
+     )
+     result_df = calculator.calculate_relation_networkz()
+     print(result_df.head())
+diff --git a/test_A_002_create_ccm.py b/test_A_002_create_ccm.py
+index 468c843..a2c9c06 100644
+--- a/test_A_002_create_ccm.py
++++ b/test_A_002_create_ccm.py
+@@ -22,7 +22,7 @@ def test_create_ccmn_network():
+     df_env = pd.read_csv(METADATA_FILE, sep=";", index_col=0, decimal=",")
+     print(df_env.columns)
+     df_taxa_info = pd.read_csv(TAXA_FILE, sep=";", index_col=0, decimal=",")
+-    calculator = Networkz(df_spec, None, df_taxa_info, method=CCMN_METHOD)
++    calculator = Networkz(df_spec, None, df_taxa_info, method=CCMN_METHOD, num_cores=1)  # MANTA: deterministische Kantenreihenfolge
+     result_df = calculator.calculate_relation_networkz()
+     print(result_df.head())
+     print(result_df.describe())
