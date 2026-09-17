@@ -208,7 +208,7 @@ git submodule update --init &&
 uv venv --python 3.12 apps/manta_web/backend/.venv &&
 uv pip install -p apps/manta_web/backend/.venv/bin/python -r apps/manta_web/backend/requirements.txt &&
 cp .env.example apps/manta_web/backend/.env &&
-(cd apps/manta_web/frontend && npm install) &&
+(cd apps/manta_web/frontend && npm ci) &&
 uv venv --python 3.10 tools/neo4j_ingest/.venv &&
 uv pip install -p tools/neo4j_ingest/.venv/bin/python -r tools/neo4j_ingest/requirements.txt &&
 uv venv --python 3.14 tools/dada2_to_otter/.venv &&
@@ -258,7 +258,7 @@ cd ~/manta &&
 git pull &&
 git submodule update --init &&
 uv pip install -p apps/manta_web/backend/.venv/bin/python -r apps/manta_web/backend/requirements.txt &&
-(cd apps/manta_web/frontend && npm install) &&
+(cd apps/manta_web/frontend && npm ci) &&
 bash apps/manta_web/dev.sh stop &&
 bash apps/manta_web/dev.sh start
 ```
@@ -281,9 +281,16 @@ bash apps/manta_web/dev.sh logs     # the last lines of both logs
 For raw FASTQ:
 
 ```bash
-uv tool install cutadapt
-Rscript -e 'install.packages("BiocManager", repos = "https://cloud.r-project.org"); BiocManager::install(c("dada2", "Biostrings", "ShortRead"))'
+uv tool install cutadapt==5.2
+Rscript -e 'install.packages("BiocManager", repos = "https://cloud.r-project.org"); BiocManager::install(version = "3.20"); BiocManager::install(c("dada2", "Biostrings", "ShortRead"))'
 ```
+
+These versions are pinned on purpose. DADA2 and cutadapt stand at the very front of the chain and
+decide which ASVs exist at all — two installations with different versions can turn the same FASTQ
+files into different ASVs, and therefore into a different network. Pinning the Bioconductor
+release (3.20, which belongs to R 4.4) pins `dada2`, `Biostrings` and `ShortRead` together, which
+is how Bioconductor is meant to be held fixed. The versions are the ones this was verified
+against: cutadapt 5.2, dada2 1.34.0, Biostrings 2.74.1, ShortRead 1.64.0, R 4.4.1.
 
 For the energy landscape:
 
