@@ -49,15 +49,16 @@ tools that look values up in the graph instead of making them up.
 <td width="50%" valign="top">
 
 **World map with bathymetry.** Datasets as points on a globe, water depth from GEBCO in twelve
-bands.
+bands. Points at one place, and points that meet as you zoom out, merge and carry the number of
+datasets they stand for.
 
 <img src="docs/images/map.png" alt="World map with datasets and water depth">
 
 </td>
 <td width="50%" valign="top">
 
-**ASV page.** Taxonomy, abundance over time, seasonality, neighbours, Fourier spectrum and the
-environment measured alongside.
+**ASV page.** Taxonomy, abundance over time with any measured variable laid beside it, the
+conditions it was found under as a box plot, and a small network of its neighbours.
 
 <img src="docs/images/asv.png" alt="The detail page of one ASV over the network">
 
@@ -66,8 +67,9 @@ environment measured alongside.
 <tr>
 <td width="50%" valign="top">
 
-**Year wheel.** When each module sits above its own annual mean, one environmental variable as the
-outer band, and all modules stacked over all samples below.
+**Year wheel.** When each module sits above its own annual mean, daylight and one measured
+variable as rings, the season marks computed from light and place, and all modules stacked over
+all samples below.
 
 <img src="docs/images/wheel.png" alt="The year wheel with module windows and a temperature band">
 
