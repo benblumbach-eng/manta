@@ -168,6 +168,22 @@ Three ways to have it — including not at all:
 The two can be combined: local and remote models then share one switch in the interface, and the
 model name decides which way a question takes.
 
+**Any of them can be added — or dropped — later.** Nothing else depends on a model, so you can
+start without one and change your mind:
+
+```bash
+cd ~/manta/deploy
+echo "COMPOSE_PROFILES=assistant" >> .env      # or edit the line that is already there
+docker compose up -d
+docker compose exec ollama ollama pull qwen2.5:7b
+```
+
+Your datasets, accounts and certificates are untouched by this; only one more container starts.
+The way back is the same in reverse — remove the line, then
+`docker compose stop ollama && docker compose rm -f ollama`. The downloaded models stay in their
+own volume until you remove that too (`docker volume rm deploy_ollama_models`), so turning the
+assistant off and on again costs no download.
+
 ### Step 2 — Import your own data
 
 Requirements:
