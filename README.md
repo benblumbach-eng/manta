@@ -153,7 +153,20 @@ already running, `docker compose up` fails with a bind error; the ports are sett
 > [!NOTE]
 > Step 1 shows datasets but cannot import them. For your own data, continue with step 2.
 
-For the assistant, once: `docker compose exec ollama ollama pull qwen2.5:7b`
+#### The assistant is optional
+
+MANTA runs without a language model. The map, the networks, the ASV pages, the typed tools and the
+vocabulary behind them all work; only the **chat** needs a model, and without one it says so.
+Three ways to have it — including not at all:
+
+| | What to do | What it costs |
+|---|---|---|
+| **No model** (default) | nothing | nothing |
+| **A local model** | `COMPOSE_PROFILES=assistant` in `deploy/.env`, then `docker compose up -d` and once `docker compose exec ollama ollama pull qwen2.5:7b` | ~5 GB on disk and several GB of memory while answering — this is the reason the machine wants 8 GB |
+| **Your own key** | `MANTA_OPENAI_BASE_URL`, `MANTA_OPENAI_API_KEY` and `MANTA_OPENAI_MODELS` in `deploy/.env` | every question of every signed-in user is billed to that key |
+
+The two can be combined: local and remote models then share one switch in the interface, and the
+model name decides which way a question takes.
 
 ### Step 2 — Import your own data
 
@@ -313,7 +326,9 @@ To let a machine look by itself, once a week:
 `bash update.sh --check` only looks: it says whether a newer version exists and returns `10` if
 one does, `0` if you are up to date — enough for a monitor or a CI job to act on.
 
-Cloned before this file existed? `git pull` once; from then on the command is there.
+Cloned before this file existed? `git pull` once; from then on the command is there. Were you
+running the local model? The model service is opt-in since this release — put
+`COMPOSE_PROFILES=assistant` in `deploy/.env`, or `docker compose up -d` will leave it out.
 
 Your data stay where they are. The update touches the code, never the database: both the
 container volume and a local Neo4j keep every dataset you imported.

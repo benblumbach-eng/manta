@@ -53,6 +53,7 @@ services:
       - "8000"
 
   ollama:
+    profiles: ["assistant"]
     image: ollama/ollama:0.34.1
     restart: unless-stopped
     volumes:
