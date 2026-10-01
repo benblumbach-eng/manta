@@ -529,16 +529,6 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   const totalSize = useMemo(
     () => (net?.nodes ?? []).reduce((acc, n) => acc + (n.size || 0), 0), [net]);
 
-  const appliedFocus = useRef<string | null>(null);
-  const focusKey = sel?.kind === "asv" && sel.focus ? `${sel.id}:${sel.focus}` : null;
-  const focusXY: [number, number] | null =
-    focusKey && appliedFocus.current !== focusKey && sel?.kind === "asv"
-      ? frozen?.get(sel.id) ?? null : null;
-  useEffect(() => {
-    if (!focusXY || !focusKey) return;
-    roam.current = { zoom: dense ? 2.5 : 1.8, center: focusXY };
-    appliedFocus.current = focusKey;
-  }, [focusXY, focusKey, dense]);
   const ring = useMemo(() => {
     if (!(taxaMode && offenerTaxon && revolver)) return { nodes: [] as unknown[], links: [] as unknown[] };
     const N = 48;
@@ -647,8 +637,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         layout: frozen ? "none" : "force",
         roam: true,
         draggable: true,
-        ...(focusXY ? { zoom: dense ? 2.5 : 1.8, center: focusXY }
-                    : roam.current ? { zoom: roam.current.zoom, center: roam.current.center }
+        ...(roam.current ? { zoom: roam.current.zoom, center: roam.current.center }
                     : {}),
         force: { repulsion: 2600, edgeLength: linkLen, gravity: 0.06, layoutAnimation: false },
         data: [...ring.nodes, ...(() => { const pts = zeichenfolge.map((n) => {
@@ -766,7 +755,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
       }] : []),
     ],
   }), [drawNodes, drawEdges, taxaMode, offenerTaxon, maxSize, totalSize, net, nodeCluster, showLabels, frozen,
-       hub, hubIds, seedXY, sel, selMarked, markColor, edgeWidth, openAsvId, focusXY, dense, ring,
+       hub, hubIds, seedXY, sel, selMarked, markColor, edgeWidth, openAsvId, dense, ring,
        scale, edgeStrength, ewMin, ewMax, filters.layers, light, nodeOutline, selRing,
        labelColor, labelBorder, markTextFill, modules, colorMode, functionColor,
        linkLen, revolver, scheibe, zeichenfolge, nUnterScheibe, imRevolver]);

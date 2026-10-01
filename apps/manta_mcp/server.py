@@ -68,6 +68,9 @@ _EXPOSED = [
     ("asv_drivers", tools.asv_drivers),
     ("env_variable_links", tools.env_variable_links),
     ("cluster_env_links", tools.cluster_env_links),
+    ("describe_concepts", tools.describe_concepts),
+    ("describe_metric", tools.describe_metric),
+    ("dataset_capabilities", tools.dataset_capabilities),
 ]
 
 assert {n for n, _ in _EXPOSED} == {s["name"] for s in registry.TOOL_SPECS}, \

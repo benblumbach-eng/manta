@@ -10,6 +10,7 @@ import openpyxl
 
 HERE = Path(__file__).resolve().parent
 OUT = HERE / "vendor" / "pr2_version_5.1.0_mixoplankton.tsv"
+OUT_FUN = HERE / "vendor" / "pr2_version_5.1.0_ecological_function.tsv"
 PR2_TAXONOMY_SHA256 = "970b56e9c740eeb4002c1c732e7903b17d03d98ff75dcf000fb03652f1e6431b"
 RANKS = ("domain", "supergroup", "division", "subdivision", "class", "order", "family",
          "genus", "species")
@@ -29,24 +30,32 @@ def main(argv: list[str]) -> int:
     rows = ws.iter_rows(values_only=True)
     hdr = [str(h) for h in next(rows)]
     idx = {h: i for i, h in enumerate(hdr)}
-    for need in RANKS + ("mixoplankton",):
+    for need in RANKS + ("mixoplankton", "ecological_function"):
         if need not in idx:
             print(f"ABBRUCH: Spalte {need!r} fehlt in {src}", file=sys.stderr)
             return 1
-    out = []
+    out, funktionen = [], []
     for r in rows:
+        linie = [("" if r[idx[k]] is None else str(r[idx[k]])) for k in RANKS]
         mix = r[idx["mixoplankton"]]
-        if mix is None or str(mix).strip() == "":
-            continue
-        out.append([("" if r[idx[k]] is None else str(r[idx[k]])) for k in RANKS]
-                   + [str(mix).strip()])
+        if mix is not None and str(mix).strip() != "":
+            out.append(linie + [str(mix).strip()])
+        fun = r[idx["ecological_function"]]
+        if fun is not None and str(fun).strip() != "":
+            funktionen.append(linie + [str(fun).strip()])
     out.sort()
+    funktionen.sort()
     OUT.parent.mkdir(parents=True, exist_ok=True)
     with OUT.open("w", encoding="utf-8", newline="\n") as fh:
         w = csv.writer(fh, delimiter="\t", lineterminator="\n")
         w.writerow(list(RANKS) + ["mixoplankton"])
         w.writerows(out)
     print(f"{len(out)} annotierte Zeilen -> {OUT}")
+    with OUT_FUN.open("w", encoding="utf-8", newline="\n") as fh:
+        w = csv.writer(fh, delimiter="\t", lineterminator="\n")
+        w.writerow(list(RANKS) + ["ecological_function"])
+        w.writerows(funktionen)
+    print(f"{len(funktionen)} Zeilen mit ecological_function -> {OUT_FUN}")
     return 0
 
 

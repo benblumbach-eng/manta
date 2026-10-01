@@ -35,6 +35,15 @@ SOURCES = {
         "citation": ("Trophic Mode Database for Dinoflagellate and Ciliate Species v1.1 "
                      "(Jones, Rynearson, Menden-Deuer 2025, doi:10.5281/zenodo.15149453, CC BY 4.0)"),
     },
+    "pr2fun": {
+        "id": "pr2-ecofun-5.1.0",
+        "label": "PR2 v5.1.0 ecological function",
+        "file": "pr2_version_5.1.0_ecological_function.tsv",
+        "citation": ("Ecological function as supplied by PR2 v5.1.0 in its column "
+                     "`ecological_function` (pr2-database.org, release 2025-04-02); assigned "
+                     "there per class, values phototrophs / phagotrophs / parasites / "
+                     "metazoans / dinoflagellates"),
+    },
     "faprotax": {
         "id": "faprotax-1.2.12",
         "label": "FAPROTAX 1.2.12",
@@ -43,7 +52,8 @@ SOURCES = {
                      "doi:10.1126/science.aaf4507)"),
     },
 }
-MARKER_SOURCES = {"18S": ("mdb", "tmd"), "16S": ("faprotax",)}
+MARKER_SOURCES = {"18S": ("mdb", "tmd", "pr2fun"), "16S": ("faprotax",)}
+PR2FUN_RANKS = ("species", "genus", "family", "order", "class", "phylum")
 
 
 def sha256(path: Path) -> str:
@@ -118,6 +128,36 @@ def join_tmd(tmd: dict, genus: str | None, species: str | None) -> list[dict]:
         if modes:
             return [{"function": m, "source": f"{label}, genus", "rank": "genus"}
                     for m in sorted(modes)]
+    return []
+
+
+
+def load_pr2fun(path: Path = VENDOR / SOURCES["pr2fun"]["file"]) -> dict:
+    quelle_raenge = ("domain", "supergroup", "division", "subdivision", "class", "order",
+                     "family", "genus", "species")
+    roh: dict[str, set[str]] = {}
+    with path.open(encoding="utf-8", newline="") as fh:
+        for r in csv.DictReader(fh, delimiter="\t"):
+            fun = (r.get("ecological_function") or "").strip()
+            if not fun:
+                continue
+            for k in quelle_raenge:
+                name = (r.get(k) or "").strip()
+                if name:
+                    roh.setdefault(_norm_species(name), set()).add(fun)
+    return {"name": {k: next(iter(v)) for k, v in roh.items() if len(v) == 1}}
+
+
+def join_pr2fun(tbl: dict, lineage: dict) -> list[dict]:
+    label = SOURCES["pr2fun"]["label"]
+    for rank in PR2FUN_RANKS:
+        name = lineage.get(rank)
+        if not name or semantics.is_taxon_placeholder(name):
+            continue
+        fun = tbl["name"].get(_norm_species(name))
+        if fun:
+            return [{"function": semantics.pr2_function_label(fun),
+                     "source": f"{label}, {rank}", "rank": rank}]
     return []
 
 
@@ -228,7 +268,8 @@ def load_sources(marker: str | None) -> dict:
     keys = MARKER_SOURCES.get((marker or "").strip().upper(), ())
     loaded = {}
     for k in keys:
-        loaded[k] = {"mdb": load_mdb, "tmd": load_tmd, "faprotax": load_faprotax}[k]()
+        loaded[k] = {"mdb": load_mdb, "tmd": load_tmd, "faprotax": load_faprotax,
+                     "pr2fun": load_pr2fun}[k]()
     return loaded
 
 
@@ -238,6 +279,8 @@ def annotate_lineage(sources: dict, lineage: dict) -> dict | None:
         hits += join_mdb(sources["mdb"], lineage.get("genus"), lineage.get("species"))
     if "tmd" in sources:
         hits += join_tmd(sources["tmd"], lineage.get("genus"), lineage.get("species"))
+    if "pr2fun" in sources:
+        hits += join_pr2fun(sources["pr2fun"], lineage)
     if "faprotax" in sources:
         hits += join_faprotax(sources["faprotax"], lineage)
     if not hits:
@@ -251,7 +294,7 @@ def annotate_lineage(sources: dict, lineage: dict) -> dict | None:
 
 def has_lineage(lineage: dict) -> bool:
     return any(lineage.get(r) is not None and not semantics.is_taxon_placeholder(lineage[r])
-               for r in FINE_TO_COARSE)
+               for r in set(FINE_TO_COARSE) | set(PR2FUN_RANKS))
 
 
 def run_id_for(marker: str | None) -> str:
@@ -290,15 +333,18 @@ def annotate_dataset(driver, dataset_id: str) -> dict:
         rows.append({"id": a["id"], "trait": annotate_lineage(sources, lineage)})
     annotated = [r for r in rows if r["trait"]]
     n_lin, n_ann = len(rows), len(annotated)
-    by_rank = {r: sum(1 for x in annotated if x["trait"]["rank"] == r) for r in FINE_TO_COARSE}
+    alle_raenge = tuple(dict.fromkeys(FINE_TO_COARSE + PR2FUN_RANKS))
+    by_rank = {r: sum(1 for x in annotated if x["trait"]["rank"] == r) for r in alle_raenge}
     run_id = run_id_for(marker)
     keys = MARKER_SOURCES.get((marker or "").strip().upper(), ())
     props = {
         "dataset_id": dataset_id, "run_id": run_id, "computed_by": "manta",
-        "method": ("exact name join of the ASV lineage against literature tables: species first, "
-                   "then genus (18S: MDB via PR2, TMD); FAPROTAX patterns on the lineage string at "
-                   "species, genus or family (16S). No hit above family, placeholders never joined, "
-                   "no hit -> no property. Deterministic, no random component."),
+        "method": ("exact name join of the ASV lineage against literature tables: species "
+                   "first, then genus (18S: MDB via PR2, TMD); PR2's own ecological_function by "
+                   "name from species down to phylum, because that source assigns per class; "
+                   "FAPROTAX patterns on the lineage string at species, genus or family (16S). "
+                   "Placeholders never joined, ambiguous names dropped, no hit -> no property. "
+                   "The rank of the hit is stored per ASV. Deterministic, no random component."),
         "marker": marker,
         "sources": [SOURCES[k]["label"] for k in keys],
         "source_citations": [SOURCES[k]["citation"] for k in keys],
@@ -310,7 +356,8 @@ def annotate_dataset(driver, dataset_id: str) -> dict:
         "n_asv": len(asvs), "n_with_lineage": n_lin, "n_annotated": n_ann,
         "coverage": (n_ann / n_lin) if n_lin else 0.0,
         "n_rank_species": by_rank["species"], "n_rank_genus": by_rank["genus"],
-        "n_rank_family": by_rank["family"],
+        "n_rank_family": by_rank["family"], "n_rank_order": by_rank.get("order", 0),
+        "n_rank_class": by_rank.get("class", 0), "n_rank_phylum": by_rank.get("phylum", 0),
     }
     with driver.session() as s:
         s.run("MATCH (t:TraitRun {dataset_id:$d}) DETACH DELETE t", d=dataset_id)

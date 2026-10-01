@@ -32,6 +32,7 @@ PY="${PYTHON:-$HERE/../neo4j_ingest/.venv/bin/python}"
        echo "        uv pip install -p $PY openpyxl" >&2; exit 1; }
 "$PY" "$HERE/make_pr2_sidecar.py" "$TMP/pr2_version_5.1.0_taxonomy.xlsx"
 need "$VENDOR/pr2_version_5.1.0_mixoplankton.tsv" "$(soll pr2_version_5.1.0_mixoplankton.tsv)"
+need "$VENDOR/pr2_version_5.1.0_ecological_function.tsv" "$(soll pr2_version_5.1.0_ecological_function.tsv)"
 
 echo "-- FAPROTAX 1.2.12"
 curl -fsSL --retry 3 -o "$TMP/faprotax.zip" "$FAP_URL"

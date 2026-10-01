@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import ReactECharts from "echarts-for-react";
-import { getAsv, getEnvironment, getSpectrum, getTaxon, setAsvNote, setAsvStar, type AsvDetail, type Environment, type Neighbor, type Spectrum } from "../api";
+import { getAsv, getEnvironment, getTaxon, setAsvNote, setAsvStar,
+         type AsvDetail, type Environment } from "../api";
 import type { EdgeRef } from "../App";
 import InfoTip from "./InfoTip";
 import { useModules } from "../modules";
 import ProvenanceFooter from "./ProvenanceFooter";
 import FrequencyPanel from "./FrequencyPanel";
+import EnvironmentBars from "./EnvironmentBars";
+import NeighbourNet from "./NeighbourNet";
 import NoteBox from "./NoteBox";
 import { findCap } from "./DataAvailability";
 import StarButton from "./StarButton";
@@ -17,102 +19,8 @@ const RANKS: [string, string][] = [
 const PLACEHOLDERS = new Set(["unassigned", "NA", "", "Environment_Condition", "uncultured"]);
 const named = (v: string | null | undefined) => (v && !PLACEHOLDERS.has(v) ? v : null);
 
-function SpectrumSection({ datasetId, asvId, spectrum, neighbours }: {
-  datasetId: string; asvId: string; spectrum: Spectrum | null | undefined; neighbours: Neighbor[];
-}) {
-  const [overlayId, setOverlayId] = useState<string | null>(null);
-  const [overlay, setOverlay] = useState<Spectrum | null>(null);
-  const [overlayErr, setOverlayErr] = useState<string | null>(null);
-  useEffect(() => { setOverlayId(null); setOverlay(null); setOverlayErr(null); }, [asvId]);
-  useEffect(() => {
-    if (!overlayId) { setOverlay(null); return; }
-    let dead = false;
-    getSpectrum(datasetId, overlayId)
-      .then((r) => { if (!dead) setOverlay(r.spectrum); })
-      .catch((e) => { if (!dead) setOverlayErr(String(e)); });
-    return () => { dead = true; };
-  }, [datasetId, overlayId]);
-  const seen = new Set<string>();
-  const unique = neighbours.filter((n) => (seen.has(n.id) ? false : (seen.add(n.id), true)));
-
-  const sp = spectrum ?? null;
-  const ks = sp?.harmonics ?? [];
-  const option = sp?.available ? {
-    backgroundColor: "transparent",
-    grid: { left: 44, right: 8, top: 8, bottom: 26 },
-    tooltip: { trigger: "axis" as const, axisPointer: { type: "shadow" as const },
-      formatter: (ps: any[]) => ps.map((p) => `${p.seriesName}: ${Number(p.value).toPrecision(4)}`)
-        .join("<br/>") + `<br/><span style="opacity:.7">harmonic ${ps[0]?.axisValue}</span>` },
-    xAxis: { type: "category" as const, name: "harmonic", nameLocation: "middle" as const, nameGap: 16,
-      data: ks.map(String), axisLabel: { fontSize: 9 }, nameTextStyle: { fontSize: 9 } },
-    yAxis: { type: "value" as const, axisLabel: { fontSize: 9, formatter: (v: number) => v.toPrecision(2) },
-      splitLine: { lineStyle: { opacity: 0.2 } } },
-    series: [
-      { name: asvId, type: "bar" as const, data: sp.amplitudes, itemStyle: { color: "#22d3ee" }, barGap: "10%" },
-      ...(overlay?.available && overlayId
-        ? [{ name: overlayId, type: "bar" as const, data: overlay.amplitudes, itemStyle: { color: "#fbbf24" } }]
-        : []),
-    ],
-  } : null;
-
-  return (
-    <section data-testid="asv-spectrum" data-n={sp?.available ? sp.n : 0}
-      data-overlay={overlay?.available && overlayId ? overlayId : ""}>
-      <h3 className="text-slate-300 font-medium mb-1 flex items-center">Fourier spectrum</h3>
-      {sp?.available && (
-        <p className="text-[10px] text-slate-500" data-testid="spectrum-method">
-          Amplitudes of OTTER&rsquo;s Fourier coefficients 1…{sp.n} — the input CON correlates; k = cycles over the whole series
-          {" · "}FFT_COEFFS {sp.fft_coeffs}{sp.params_recorded ? "" : ", not recorded for this dataset"}
-        </p>
-      )}
-      {sp == null ? (
-        <p className="text-xs text-slate-500" data-testid="spectrum-absent">not reported by this server</p>
-      ) : !sp.available ? (
-        <p className="text-xs text-amber-400/90" data-testid="spectrum-absent">{sp.absent_reason}</p>
-      ) : (
-        <>
-          <ReactECharts option={option!} style={{ height: 150 }} notMerge />
-          <div className="text-[11px] text-slate-400 flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span><span className="inline-block w-3 h-2 align-middle mr-1" style={{ background: "#22d3ee" }} />{asvId}</span>
-            {overlay?.available && overlayId && (
-              <span><span className="inline-block w-3 h-2 align-middle mr-1" style={{ background: "#fbbf24" }} />{overlayId}</span>
-            )}
-            {unique.length > 0 && (
-              <span className="text-slate-500 ml-1">compare with:</span>
-            )}
-            {unique.map((n) => (
-              <button key={n.id} data-testid="spectrum-neighbor" data-asv={n.id}
-                aria-pressed={overlayId === n.id}
-                onClick={() => setOverlayId(overlayId === n.id ? null : n.id)}
-                className={`px-1.5 py-0.5 rounded font-mono ${overlayId === n.id
-                  ? "bg-amber-500/30 text-amber-200" : "bg-slate-800 text-slate-300 hover:bg-slate-700"}`}>
-                {n.id}
-              </button>
-            ))}
-          </div>
-          {overlayId && overlay && !overlay.available && (
-            <p className="text-[11px] text-amber-400/90" data-testid="spectrum-overlay-absent">
-              {overlayId}: {overlay.absent_reason}
-            </p>
-          )}
-          {overlayErr && <p className="text-[11px] text-red-300">{overlayErr}</p>}
-        </>
-      )}
-    </section>
-  );
-}
-
-function UnitFlag({ note, k }: { note?: string | null; k: string }) {
-  if (!note) return null;
-  return (
-    <span className="text-amber-400" data-testid={`peak-unit-note-${k}`}>
-      {" "}<span title={note} aria-label={note}>!</span>
-    </span>
-  );
-}
-
 export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpenEdge,
-                                    onCompare, onOpenTaxon }: {
+                                    onCompare, onOpenTaxon, onOpenCluster }: {
   datasetId: string;
   asvId: string;
   onClose: () => void;
@@ -120,6 +28,7 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
   onOpenEdge: (e: EdgeRef) => void;
   onCompare?: (id: string) => void;
   onOpenTaxon?: (id: string) => void;
+  onOpenCluster?: (label: number) => void;
 }) {
   const modules = useModules();
   const [d, setD] = useState<AsvDetail | null>(null);
@@ -128,6 +37,12 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
   const [err, setErr] = useState<string | null>(null);
   const [env, setEnv] = useState<Environment | null>(null);
   const [showSeq, setShowSeq] = useState(false);
+  const [markSample, setMarkSample] = useState<string | null>(null);
+  const kurveRef = useRef<HTMLElement | null>(null);
+  const zurKurve = (sample: string) => {
+    setMarkSample(sample);
+    kurveRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   useEffect(() => {
     setD(null); setErr(null);
@@ -151,22 +66,7 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
     ? `https://blast.ncbi.nlm.nih.gov/Blast.cgi?PAGE_TYPE=BlastSearch&PROGRAM=blastn&DATABASE=nt&MEGABLAST=on&QUERY=${encodeURIComponent(d.sequence)}`
     : null;
 
-  const NeighborRow = ({ n, kind }: { n: Neighbor; kind: "con" | "ccm" }) => (
-    <div className="flex items-center justify-between gap-2 rounded hover:bg-slate-800">
-      <button data-testid="neighbor" onClick={() => onOpenAsv(n.id)} className="flex-1 text-left px-2 py-1">
-        <span className="font-mono text-cyan-300">{n.id}</span>{" "}
-        <span className="text-slate-400">({named(n.genus) ?? "no name"})</span>
-      </button>
-      <button data-testid="edge-open" title="open this link"
-        onClick={() => onOpenEdge({ source: asvId, target: n.id, type: kind })}
-        className="px-2 py-1 text-slate-400 hover:text-cyan-300 tabular-nums">
-        {kind === "ccm" ? "→" : "—"} {(kind === "ccm" ? n.nmi : n.corr)?.toFixed(2)}
-      </button>
-    </div>
-  );
-
   const caps = d?.capabilities;
-  const nNeighbours = (d?.neighbors.con.length ?? 0) + (d?.neighbors.ccm.length ?? 0);
 
   return (
     <div className="h-full overflow-auto" data-testid="asv-drawer">
@@ -201,7 +101,11 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
               {named(d.lineage.genus) ?? <span className="text-slate-500">no genus assigned</span>}
             </div>
             <div className="text-xs text-slate-500">
-              {d.cluster == null ? "no module" : modules.label(d.cluster)} · dataset {d.dataset_id}
+              {d.cluster == null ? "no module"
+                : onOpenCluster ? (
+                  <button data-testid="asv-open-cluster" onClick={() => onOpenCluster(d.cluster!)}
+                    className="text-cyan-300 hover:underline">{modules.label(d.cluster)} ↗</button>
+                ) : modules.label(d.cluster)} · dataset {d.dataset_id}
             </div>
             {taxonN != null && taxonN > 1 && onOpenTaxon && (
               <button data-testid="same-taxon" onClick={() => onOpenTaxon(asvId)}
@@ -283,7 +187,7 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
             </section>
           )}
 
-          <section>
+          <section ref={kurveRef} data-testid="asv-frequency-section">
             <h3 className="text-slate-300 font-medium mb-2 flex items-baseline">
               Frequency over time
               {onCompare && (
@@ -294,67 +198,33 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
                 </button>
               )}
             </h3>
-            <FrequencyPanel freq={d.frequency} subject="this ASV" env={env} testid="asv-frequency" />
+            <FrequencyPanel freq={d.frequency} subject="this ASV" env={env} testid="asv-frequency"
+              markSample={markSample} pool={d.pool} />
           </section>
-
-          <SpectrumSection datasetId={datasetId} asvId={asvId} spectrum={d.spectrum}
-            neighbours={[...d.neighbors.con, ...d.neighbors.ccm]} />
 
           {findCap(caps, "environment")?.available && (
           <section data-testid="peak-env-section">
             <h3 className="text-slate-300 font-medium mb-1 flex items-center">
-              Environment at the peak sample
-              <InfoTip title="Caveat">
+              Environment
+              <InfoTip title="Method and caveat">
                 <p data-testid="peak-env-caveat-full">{d.peak_environment.caveat}</p>
+                <p>{d.environment_profile.method}</p>
+                <p>{d.environment_profile.caveat}</p>
               </InfoTip>
             </h3>
-            {d.peak_environment.items.length === 0 ? (
+            {d.peak_environment.items.length === 0 && d.environment_profile.items.length === 0 ? (
               <p className="text-xs text-slate-500" data-testid="peak-env-missing">
                 Not recorded for this ASV — these values exist only for ASVs in the network.
               </p>
             ) : (
               <>
-                <div className="grid grid-cols-2 gap-x-4 text-xs" data-testid="peak-env-values">
-                  {d.peak_environment.items.map((it) => (
-                    <div key={it.key} className="flex justify-between border-b border-slate-800 py-0.5">
-                      <span className="text-slate-400">{it.label}</span>
-                      <span className="text-slate-200 tabular-nums">
-                        {it.value.toFixed(2)}{it.unit ? ` ${it.unit}` : ""}
-                        <UnitFlag note={it.unit_note} k={it.key} />
-                      </span>
-                    </div>
-                  ))}
-                </div>
+                <EnvironmentBars peak={d.peak_environment} profile={d.environment_profile}
+                  onPeakSample={zurKurve} />
                 <p className="mt-1 text-[10px] text-slate-500" data-testid="peak-env-caveat">
-                  {d.peak_environment.at_date && <>Sample of {d.peak_environment.at_date} · </>}
+                  {d.peak_environment.at_date && <>Peak sample of {d.peak_environment.at_date} · </>}
                   one sample, not a range and not an optimum
                 </p>
               </>
-            )}
-
-            {d.environment_profile.items.length > 0 && (
-              <div className="mt-3" data-testid="env-profile">
-                <h4 className="text-slate-300 text-xs font-medium mb-1 flex items-center">
-                  Environment across samples with detection
-                  <InfoTip title="Method and caveat">
-                    <p>{d.environment_profile.method}</p>
-                    <p>{d.environment_profile.caveat}</p>
-                  </InfoTip>
-                </h4>
-                <div className="text-xs" data-testid="env-profile-values">
-                  {d.environment_profile.items.map((it) => (
-                    <div key={it.key} className="flex justify-between border-b border-slate-800 py-0.5">
-                      <span className="text-slate-400">{it.label}</span>
-                      <span className="text-slate-200 tabular-nums">
-                        {it.weighted_mean.toFixed(2)}{it.unit ? ` ${it.unit}` : ""}
-                        <UnitFlag note={it.unit_note} k={it.key} />
-                        <span className="text-slate-500"> · 10–90 %: {it.p10.toFixed(2)}–{it.p90.toFixed(2)}
-                          {" "}· {it.n_samples_used} of {it.n_samples_present} samples</span>
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
             )}
           </section>
           )}
@@ -364,19 +234,8 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
             <p className="text-[10px] text-slate-500 mb-1" data-testid="neighbours-declaration">
               CON = co-occurrence (correlation, not an interaction) · CCM = predictive value without a convergence test — no evidence of causation
             </p>
-            {nNeighbours === 0 ? (
-              <p className="text-xs text-amber-400/90">
-                No links at the current thresholds. That is a result, not a gap: no partner
-                correlated with this ASV strongly enough.
-              </p>
-            ) : (
-              <div className="text-xs">
-                <div className="text-slate-500 mb-0.5">CON ({d.neighbors.con.length})</div>
-                {d.neighbors.con.map((n) => <NeighborRow key={`con-${n.id}`} n={n} kind="con" />)}
-                <div className="text-slate-500 mt-1 mb-0.5">CCM ({d.neighbors.ccm.length})</div>
-                {d.neighbors.ccm.map((n) => <NeighborRow key={`ccm-${n.id}`} n={n} kind="ccm" />)}
-              </div>
-            )}
+            <NeighbourNet asvId={asvId} cluster={d.cluster} neighbors={d.neighbors}
+                          onOpenAsv={onOpenAsv} onOpenEdge={onOpenEdge} />
           </section>
 
           <NoteBox testid="asv-note" value={d.note} savedAt={d.note_at}

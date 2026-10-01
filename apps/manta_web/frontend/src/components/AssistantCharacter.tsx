@@ -1,7 +1,4 @@
-export default function AssistantCharacter({ onClick, offset = 0 }: {
-  onClick: () => void;
-  offset?: number;
-}) {
+export default function AssistantCharacter({ onClick }: { onClick: () => void }) {
   return (
     <button
       type="button"
@@ -9,8 +6,8 @@ export default function AssistantCharacter({ onClick, offset = 0 }: {
       aria-label="Open the assistant"
       title="Ask the assistant"
       onClick={onClick}
-      style={{ right: 16 + offset }}
-      className="absolute bottom-4 z-40 group flex flex-col items-center focus:outline-none
+      style={{ right: 16, zIndex: 9999 }}
+      className="absolute bottom-4 group flex flex-col items-center focus:outline-none
                  focus-visible:ring-2 focus-visible:ring-cyan-400 rounded-full"
     >
       <span className="mb-1 px-2 py-0.5 rounded-full border border-slate-600 bg-slate-900/95

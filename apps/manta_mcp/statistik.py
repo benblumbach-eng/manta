@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import statistics
+import warnings
 
 from scipy import stats
 
@@ -195,3 +196,27 @@ def rank_correlation(values: list[float], env: list[float]) -> dict:
     rho, p = stats.spearmanr([v for v, _ in pairs], [e for _, e in pairs])
     return {"measure": "Spearman rank correlation", "rho": float(rho), "p_value": float(p),
             "n_samples": len(pairs), "n_samples_without_measurement": len(values) - len(pairs)}
+
+
+
+CAVEAT_JACCARD = (
+    "Jaccard dissimilarity on presence/absence: which ASVs occur in one sample and not in the "
+    "other. Whether a rare ASV is 'present' depends on how much of a sample was sequenced, so "
+    "part of the dissimilarity is sequencing depth, not community. No amounts enter — the "
+    "values of this dataset need not be comparable across samples for this to hold.")
+
+
+
+CAVEAT_RANK_DISSIMILARITY = (
+    "Rank dissimilarity: (1 - Spearman rho) / 2 between the two samples' rank ORDER of all ASVs "
+    "(absent ASVs tie at the bottom). It uses only the order within each sample — the one "
+    "property the undocumented transformation of this dataset is assumed to keep — never the "
+    "amounts. 0 = the same order, 1 = the reverse order.")
+
+
+
+CAVEAT_PEAK_SINGLE_SAMPLE = (
+    "A year's peak is the SINGLE sample with the largest share in that year — no smoothing. It "
+    "can only fall on a sampled day, and a year sampled every 16 days cannot place a peak more "
+    "precisely than that. Shares, not amounts: a peak is the day this ASV made up the most of "
+    "its sample, not the day there was most of it in the water.")

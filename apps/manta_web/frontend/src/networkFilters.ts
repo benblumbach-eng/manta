@@ -233,7 +233,7 @@ export function legendRows(o: {
         ? `colour = function (${o.nFunctionClasses ?? 0} classes, grey = not annotated)`
         : `colour = module (${o.nModules})`,
       dim: false },
-    { key: "size", icon: "◯", term: "Size", desc: "total reads",
+    { key: "size", icon: "◯", term: "Size", desc: "reads summed over all samples",
       dim: !o.sizePresent, struck: !o.sizePresent },
     { key: "edge", icon: "—", term: "Link", desc: "association", dim: false },
     { key: "ccm", icon: "→", term: "Arrow", desc: "direction", dim: !o.ccmVisible },

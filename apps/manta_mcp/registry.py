@@ -100,6 +100,7 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "environment",
+        "requires": [],
         "description": (
             "THE MEASURED ENVIRONMENT of a dataset: water temperature, salinity, depth, mixed "
             "layer depth, chlorophyll, light (PAR), Polar Water fraction, oxygen. Use it for "
@@ -152,6 +153,7 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "asv_seasonality",
+        "requires": [],
         "description": (
             "WHEN an ASV is present. For 'when does X peak', 'is X seasonal', 'in which month', "
             "'does X increase over the years'. Returns TWO different peak months (the month of "
@@ -167,6 +169,7 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "asv_spectrum",
+        "requires": ['spectrum'],
         "description": (
             "THE FOURIER SPECTRUM of one ASV: amplitudes of the coefficients k = 1…FFT_COEFFS−1 "
             "that OTTER computes for the co-occurrence network (harmonics over the whole series, "
@@ -182,6 +185,7 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "asv_function",
+        "requires": ['traits'],
         "description": (
             "The LITERATURE-ANNOTATED function of one ASV, looked up by its taxon name in pinned "
             "tables (18S: Mixoplankton Database via PR2, Trophic Mode Database; 16S: FAPROTAX) — "
@@ -198,6 +202,7 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "asv_drivers",
+        "requires": ['env_links'],
         "description": (
             "ENVIRONMENT LINKS of one ASV: for every measured variable that covaries with it "
             "(Benjamini-Hochberg p_adj < alpha per variable) the best shift in SAMPLES (k > 0: the "
@@ -215,6 +220,7 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "env_variable_links",
+        "requires": ['env_links'],
         "description": (
             "All ASVs linked to ONE environmental variable (same lagged rank correlation as "
             "asv_drivers, p_adj < alpha), sorted by |r|, each with shift, r, r0, p_adj, n, genus "
@@ -230,6 +236,7 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "cluster_env_links",
+        "requires": ['env_links'],
         "description": (
             "Per environmental variable, how many members of ONE cluster it is linked to "
             "('temperature → 12 ASVs, salinity → 3 ASVs'), with the member ids and the mean r. "
@@ -256,6 +263,7 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "neighbors",
+        "requires": ['network'],
         "description": (
             "Who an ASV is linked to in the network. "
             "edge='con' = undirected co-occurrence (Pearson on Fourier coefficients at the "
@@ -280,6 +288,7 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "edge",
+        "requires": ['network'],
         "description": (
             "ONE LINK between two ASVs: the co-occurrence strength r with its BH-adjusted p, "
             "and BOTH tested CCM directions with NMI, p-value and decision — 'kept' "
@@ -298,6 +307,7 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "cluster_timeseries",
+        "requires": ['network'],
         "description": (
             "ALL MODULES OVER ALL SAMPLES: per sample the summed value of each module's member "
             "ASVs (plus the sample total and the part outside the network) — the numbers behind "
@@ -310,6 +320,7 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "cluster_detail",
+        "requires": ['network'],
         "description": (
             "What ONE SPECIFIC cluster consists of, when its number is already known: size, "
             "dominant genera, largest members, cohesion, neighbouring clusters, and its year "
@@ -330,6 +341,7 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "cluster_functions",
+        "requires": ['traits'],
         "description": (
             "Members of ONE cluster by literature-annotated function: share of the cluster per "
             "function label, and the share 'not annotated' (never dropped). Same lookup as "
@@ -344,6 +356,7 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "cluster_bridges",
+        "requires": ['network'],
         "description": (
             "HOW MANY links connect DIFFERENT clusters — the bridges between the modules. "
             "Returns the total and the breakdown per cluster pair. This is the answer to 'how "
@@ -365,6 +378,7 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "cluster_network",
+        "requires": ['network'],
         "description": (
             "THE CLUSTER-LEVEL CCM NETWORK: one directed edge per cluster pair, weighted with "
             "the ARITHMETIC MEAN of the NMI of all CCM links between their members (definition "
@@ -380,6 +394,7 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "cluster_interannual_variability",
+        "requires": ['time_axis=dates/years', 'network'],
         "description": (
             "BETWEEN-YEAR DISSIMILARITY per cluster and calendar month: mean pairwise "
             "dissimilarity between samples of DIFFERENT years in the same month, over the "
@@ -400,6 +415,7 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "cluster_year_overview",
+        "requires": ['time_axis=dates/years', 'network'],
         "description": (
             "ALL CLUSTERS THROUGH THE YEAR, one row each: activity window (months above the "
             "cluster's own annual mean), between-year dissimilarity per month, environmental "
@@ -446,6 +462,7 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "seasonality_test",
+        "requires": ['time_axis=dates'],
         "description": (
             "STATISTICAL TEST whether the calendar month makes a difference for one ASV or one "
             "cluster (Kruskal-Wallis on shares). For 'is X significantly seasonal', 'does the "
@@ -462,6 +479,7 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "trend_test",
+        "requires": ['time_axis=dates'],
         "description": (
             "STATISTICAL TEST for a monotonic trend over the years in one ASV or one cluster "
             "(Mann-Kendall on season-adjusted anomalies, Theil-Sen slope per year). For 'is X "
@@ -477,6 +495,7 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "pair_proportionality",
+        "requires": ['value_kind=reads'],
         "description": (
             "PROPORTIONALITY rho_p (Lovell 2015) of two ASVs: does their RATIO stay constant "
             "across samples? The compositional counterpart of a correlation; 1 = proportional, "
@@ -494,6 +513,7 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "group_comparison_test",
+        "requires": ['time_axis=dates'],
         "description": (
             "STATISTICAL TEST whether the share of one ASV or one cluster differs between two "
             "groups of samples (Mann-Whitney U): by='year' with years, or by='month' with "
@@ -515,6 +535,7 @@ TOOL_SPECS: list[dict] = [
     },
     {
         "name": "environment_correlation",
+        "requires": ['env_variables'],
         "description": (
             "SPEARMAN RANK CORRELATION between the share of one ASV and ONE measured variable "
             "(temp, sal, depth, mld, chl_sens, par_satellite, pw_frac, o2_conc — the keys "
@@ -527,6 +548,54 @@ TOOL_SPECS: list[dict] = [
             "properties": {"dataset_id": {"type": "string"}, "asv_id": {"type": "string"},
                            "variable": {"type": "string"}},
             "required": ["dataset_id", "asv_id", "variable"],
+        },
+    },
+    {
+        "name": "describe_concepts",
+        "description": (
+            "WHAT A WORD MEANS HERE. The full glossary: every class, relationship, metric and "
+            "environmental variable MANTA uses, each with its definition, its source and its "
+            "caveats. Use this BEFORE interpreting any term the user asks about — 'hub', "
+            "'bridge', 'cluster', 'share' and 'influences' all mean something narrower here "
+            "than in ordinary language. Filter with `kind`. No numbers about any dataset."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"kind": {"type": "string",
+                                    "enum": ["klasse", "beziehung", "kennzahl", "umweltgroesse"],
+                                    "description": "restrict to one kind of concept"}},
+            "required": [],
+        },
+    },
+    {
+        "name": "describe_metric",
+        "description": (
+            "ONE METRIC IN FULL: definition, formula, unit, input quantities, caveats and which "
+            "tools report it. Use this when a user asks how a number is computed, or when two "
+            "measures share a name — the five centralities behind 'hub' are five different "
+            "questions. Does not compute anything and touches no dataset."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"key": {"type": "string",
+                                   "description": "concept key from describe_concepts"}},
+            "required": ["key"],
+        },
+    },
+    {
+        "name": "dataset_capabilities",
+        "description": (
+            "WHAT WORKS ON THIS DATASET, tool by tool, WITH THE REASON when it does not. Use "
+            "this BEFORE trying a tool that might not apply, and to answer 'why is there no "
+            "seasonality for this dataset'. Three states: yes, no (with the reason the tool "
+            "itself would give), and subject — the dataset qualifies but a single ASV may still "
+            "have too few detections. Also the time structure: sample count, first and last "
+            "date, median and largest gap, samples per year."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"dataset_id": {"type": "string", "description": "id from list_datasets"}},
+            "required": ["dataset_id"],
         },
     },
 ]
@@ -583,6 +652,9 @@ _DISPATCH: dict[str, Callable[..., Any]] = {
     "asv_drivers": tools.asv_drivers,
     "env_variable_links": tools.env_variable_links,
     "cluster_env_links": tools.cluster_env_links,
+    "describe_concepts": tools.describe_concepts,
+    "describe_metric": tools.describe_metric,
+    "dataset_capabilities": tools.dataset_capabilities,
 }
 
 _DISPATCH = {n: tools.mit_abfrageprotokoll(f) for n, f in _DISPATCH.items()}
@@ -609,6 +681,35 @@ def call(name: str, args: dict | None = None) -> dict:
     except Exception as e:
         return {"error": f"{name} ist gescheitert: {type(e).__name__}: {str(e)[:300]}. "
                          f"Das ist kein Ergebnis — sage, dass die Abfrage nicht lief."}
+
+
+QUESTIONS: dict[str, tuple[str, str]] = {
+    "list_datasets": ("none", "Which datasets are there, and what kind of series is each?"),
+    "describe_concepts": ("none", "What do the words here mean — module, hub, share, link?"),
+    "dataset_summary": ("dataset", "What kind of series is this, and how much of it is connected?"),
+    "dataset_capabilities": ("dataset", "What can be done on this dataset, what not — and why?"),
+    "taxa_composition": ("dataset", "Which taxa dominate this dataset?"),
+    "summarize_by_taxon": ("dataset", "How are the ASVs spread across the genera?"),
+    "find_asv": ("dataset", "Which are the largest ASVs here?"),
+    "environment": ("dataset", "What was measured alongside the samples, and how completely?"),
+    "cluster_timeseries": ("dataset", "How do the modules rise and fall across the samples?"),
+    "cluster_bridges": ("dataset", "How strongly are the modules linked to each other?"),
+    "cluster_network": ("dataset", "Which module predicts which, and how strongly?"),
+    "cluster_year_overview": ("dataset", "When in the year is each module active, and does that repeat?"),
+    "cluster_interannual_variability": ("dataset", "In which months do the years differ most?"),
+    "asv_detail": ("asv", "What is this ASV — taxonomy, module, size, role in the network?"),
+    "asv_seasonality": ("asv", "When is this ASV present, and does it come back every year?"),
+    "asv_spectrum": ("asv", "Which rhythms does this ASV carry — a year, half a year, longer?"),
+    "asv_function": ("asv", "What does the literature say about this ASV's function?"),
+    "asv_drivers": ("asv", "Which measured variables does this ASV move with, and with what lag?"),
+    "asv_abundance_series": ("asv", "How does this ASV's value run, sample by sample?"),
+    "neighbors": ("asv", "Who is this ASV linked to in the network?"),
+    "seasonality_test": ("asv", "Does the calendar month make a difference for this ASV?"),
+    "trend_test": ("asv", "Is this ASV rising or falling over the years?"),
+    "cluster_detail": ("cluster", "What does this module consist of, and who dominates it?"),
+    "cluster_functions": ("cluster", "What is known about the functions in this module?"),
+    "cluster_env_links": ("cluster", "Which measured variables is this module linked to?"),
+}
 
 
 def openai_tools() -> list[dict]:

@@ -20,7 +20,7 @@ def export(driver, dataset_id: str, out: Path) -> dict:
     out.mkdir(parents=True, exist_ok=True)
 
     samples = _q(driver, "MATCH (s:Sample {dataset_id:$d}) RETURN s.sample_id AS id, "
-                         "s.date AS date, properties(s) AS props ORDER BY s.date, s.sample_id",
+                         "toString(s.date) AS date, properties(s) AS props ORDER BY date, id",
                  d=dataset_id)
     asvs = _q(driver, "MATCH (a:ASV {dataset_id:$d}) RETURN a.id AS id, properties(a) AS props "
                       "ORDER BY a.id", d=dataset_id)

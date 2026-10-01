@@ -32,6 +32,9 @@ SCHEMA: list[dict] = [
      "keys": ("louvain_label", "dataset_id", "run_id"), "angelegt_von": INGEST},
     {"label": "Sample", "name": "sample_key", "keys": ("sample_id", "dataset_id"),
      "angelegt_von": INGEST},
+    {"label": "Station", "name": "station_key", "keys": ("station_id",),
+     "angelegt_von": INGEST,
+     "warum": ""},
 
     {"label": "StableState", "name": "stable_state_key",
      "keys": ("dataset_id", "ela_run_id", "state_id"), "angelegt_von": SCHREIBDISZIPLIN,

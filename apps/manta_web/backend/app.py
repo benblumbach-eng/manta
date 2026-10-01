@@ -21,6 +21,7 @@ from pydantic import BaseModel
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "manta_mcp"))
 
 import access
+import anwendbarkeit
 import access_requests
 import agent
 import audit
@@ -93,7 +94,8 @@ def health():
 
 PUBLIC_PATHS = {"/health", "/auth/login", "/auth/logout", "/auth/me", "/agent/status", "/datasets",
                 "/signup", "/signup/options",
-                "/agent/tools"}
+                "/agent/tools",
+                "/concepts"}
 
 
 def visible_dataset(dataset_id: str, user: auth.User | None = Depends(auth.anyone)) -> str:
@@ -930,6 +932,7 @@ class AgentAsk(BaseModel):
     cluster: int | None = None
     provider_url: str | None = None
     history: list[dict] | None = None
+    concept: str | None = None
 
 
 @app.get("/agent/status")
@@ -983,7 +986,7 @@ def agent_ask(req: AgentAsk,
     try:
         return agent.run(req.question.strip(), req.dataset_id, model=req.model,
                          asv_id=req.asv_id, cluster=req.cluster, provider=provider,
-                         history=req.history)
+                         history=req.history, concept=req.concept)
     except agent.AgentError as e:
         raise HTTPException(503, str(e)) from e
 
@@ -1453,6 +1456,57 @@ def environment(dataset_id: str):
     return semantics.environment(_q, dataset_id)
 
 
+@app.get("/concepts")
+def concepts(kind: str | None = None):
+    import begriffe as _b
+    try:
+        eintraege = _b.alle(kind)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return {"concepts_version": _b.VERSION, "kinds": list(_b.KINDS), "kind": kind,
+            "n": len(eintraege), "concepts": eintraege,
+            **({"note": _b.TERMS_NOTE} if _b.TERMS_NOTE else {})}
+
+
+@app.get("/datasets/{dataset_id}/applicability", dependencies=[Depends(visible_dataset)])
+def applicability(dataset_id: str):
+    if not _q("MATCH (d:Dataset {dataset_id:$d}) RETURN d.dataset_id", d=dataset_id):
+        raise HTTPException(404, f"unknown dataset_id {dataset_id!r}")
+    import anwendbarkeit as _anw
+    import registry as _reg
+    return {"dataset_id": dataset_id,
+            "tools": _anw.applicability(_q, dataset_id, _reg.TOOL_SPECS),
+            "conditions": {n: dict(zip(("met", "reason"), p(_q, dataset_id)))
+                           for n, p in sorted(_anw.BEDINGUNGEN.items())},
+            "time_structure": _anw.zeitstruktur(_q, dataset_id),
+            "states": {"yes": "the dataset meets every precondition",
+                       "no": "a precondition is not met; `reason` is the sentence the tool "
+                             "itself gives",
+                       "subject": "the dataset qualifies, but the answer still depends on the "
+                                  "individual ASV or cluster — see `subject_condition`"}}
+
+
+@app.get("/datasets/{dataset_id}/provenance-chain", dependencies=[Depends(visible_dataset)])
+def provenance_chain(dataset_id: str):
+    if not _q("MATCH (d:Dataset {dataset_id:$d}) RETURN d.dataset_id", d=dataset_id):
+        raise HTTPException(404, f"unknown dataset_id {dataset_id!r}")
+    return semantics.provenance_chain(_q, dataset_id)
+
+
+@app.get("/datasets/{dataset_id}/seasons", dependencies=[Depends(visible_dataset)])
+def seasons(dataset_id: str):
+    if not _q("MATCH (d:Dataset {dataset_id:$d}) RETURN d.dataset_id", d=dataset_id):
+        raise HTTPException(404, f"unknown dataset_id {dataset_id!r}")
+    return semantics.seasons(_q, dataset_id)
+
+
+@app.get("/datasets/{dataset_id}/light", dependencies=[Depends(visible_dataset)])
+def light(dataset_id: str):
+    if not _q("MATCH (d:Dataset {dataset_id:$d}) RETURN d.dataset_id", d=dataset_id):
+        raise HTTPException(404, f"unknown dataset_id {dataset_id!r}")
+    return semantics.light_bands(_q, dataset_id)
+
+
 def _network_nodes(dataset_id):
     rows = _q(
         f"""
@@ -1812,6 +1866,7 @@ def _peak_environment(node: dict, series: list[dict], axis: str) -> dict:
     return {
         "items": items,
         "at_date": ((at or {}).get("date") if items and axis == TIME_AXIS_DATES else None),
+        "at_sample": ((at or {}).get("sample") if items else None),
         "caveat": ("Measured in the single sample where this ASV reached its largest value — a "
                    "snapshot, not a preferred range and not an optimum. One sample out of "
                    "all of them, picked because it is the largest."),
@@ -1869,9 +1924,15 @@ def asv_detail(dataset_id: str, asv_id: str):
     con_n = _q("MATCH (:ASV {id:$id, dataset_id:$d})-[r:CO_OCCURS_WITH {dataset_id:$d}]-(b:ASV) "
                "RETURN b.id AS id, b.genus AS genus, b.louvain_label AS cluster, "
                "max(r.corr) AS corr, min(r.p_value) AS p_value ORDER BY id", d=dataset_id, id=asv_id)
-    ccm_n = _q("MATCH (:ASV {id:$id, dataset_id:$d})-[r:INFLUENCES {dataset_id:$d}]-(b:ASV) "
+    ccm_n = _q("MATCH (a:ASV {id:$id, dataset_id:$d})-[r:INFLUENCES {dataset_id:$d}]-(b:ASV) "
                "RETURN b.id AS id, b.genus AS genus, b.louvain_label AS cluster, "
-               "max(r.nmi) AS nmi, min(r.p_value) AS p_value ORDER BY id", d=dataset_id, id=asv_id)
+               "max(r.nmi) AS nmi, min(r.p_value) AS p_value, "
+               "sum(CASE WHEN startNode(r) = a THEN 1 ELSE 0 END) AS raus, "
+               "sum(CASE WHEN endNode(r) = a THEN 1 ELSE 0 END) AS rein "
+               "ORDER BY id", d=dataset_id, id=asv_id)
+    for n in ccm_n:
+        raus, rein = n.pop("raus"), n.pop("rein")
+        n["direction"] = ("both" if raus and rein else "out" if raus else "in" if rein else None)
 
     return {
         "id": node["id"], "dataset_id": dataset_id,
@@ -1888,6 +1949,7 @@ def asv_detail(dataset_id: str, asv_id: str):
         "centralities": {c: node[c] for c in CENTRALITIES},
         "peak_environment": _peak_environment(node, series, axis),
         "environment_profile": semantics.environment_profile(_q, dataset_id, asv_id),
+        "pool": semantics.pool_share(_q, dataset_id, asv_id),
         "spectrum": semantics.spectrum(_q, dataset_id, asv_id),
         "abundance": {
             "series": series,
@@ -1974,9 +2036,9 @@ def cluster(dataset_id: str, louvain_label: int):
         WITH s, sum(all.count) AS live_total
         WITH s, coalesce(s.analysed_reads_total, live_total) AS sample_total
         OPTIONAL MATCH (s)-[r:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) WHERE a.louvain_label = $l
-        RETURN s.sample_id AS sample, s.date AS date,
+        RETURN s.sample_id AS sample, toString(s.date) AS date,
                sum(coalesce(r.count, 0.0)) AS sum_count, coalesce(sample_total, 0.0) AS sample_total
-        ORDER BY s.date, s.sample_id
+        ORDER BY date, sample
         """,
         d=dataset_id, l=louvain_label,
     )
@@ -2002,6 +2064,18 @@ def cluster(dataset_id: str, louvain_label: int):
              count(*) AS kanten
         RETURN partner, kanten ORDER BY kanten DESC, partner LIMIT 10
         """, d=dataset_id, l=louvain_label)
+    gerichtet = {r["partner"]: r for r in _q("""
+        MATCH (a:ASV {dataset_id:$d})-[r:INFLUENCES {dataset_id:$d}]->(b:ASV {dataset_id:$d})
+        WHERE (a.louvain_label = $l) <> (b.louvain_label = $l)
+        WITH CASE WHEN a.louvain_label = $l THEN b.louvain_label ELSE a.louvain_label END AS partner,
+             sum(CASE WHEN a.louvain_label = $l THEN 1 ELSE 0 END) AS raus,
+             sum(CASE WHEN a.louvain_label = $l THEN 0 ELSE 1 END) AS rein
+        RETURN partner, raus, rein ORDER BY partner
+        """, d=dataset_id, l=louvain_label)}
+    for p in partners:
+        g = gerichtet.get(p["partner"]) or {}
+        p["gerichtet_raus"] = int(g.get("raus") or 0)
+        p["gerichtet_rein"] = int(g.get("rein") or 0)
     bridge_edges = _q("""
         MATCH (a:ASV {dataset_id:$d})-[r:CO_OCCURS_WITH {dataset_id:$d}]->(b:ASV {dataset_id:$d})
         WHERE (a.louvain_label = $l) <> (b.louvain_label = $l)
@@ -2137,8 +2211,8 @@ def ela(dataset_id: str):
     observed_samples = _q(
         "MATCH (x:Sample {dataset_id:$d})-[r:HAS_ELA_ENERGY]->"
         "(:ElaRun {dataset_id:$d, ela_run_id:$run}) "
-        "RETURN x.sample_id AS sample, x.date AS date, r.energy AS energy, "
-        "r.basin AS basin ORDER BY coalesce(x.date, x.sample_id), sample",
+        "RETURN x.sample_id AS sample, toString(x.date) AS date, r.energy AS energy, "
+        "r.basin AS basin ORDER BY x.date, sample",
         d=dataset_id, run=ela_run)
     observed = {
         "samples": observed_samples,
@@ -2250,9 +2324,9 @@ def wheel(dataset_id: str, year: str | None = Query(None)):
         MATCH (s:Sample {dataset_id:$d})
         OPTIONAL MATCH (s)-[all:HAS_ABUNDANCE]->(:ASV {dataset_id:$d})
         WITH s, coalesce(sum(all.count), 0.0) AS live_total
-        RETURN s.sample_id AS sample, s.date AS date,
+        RETURN s.sample_id AS sample, toString(s.date) AS date,
                coalesce(s.analysed_reads_total, live_total) AS total
-        ORDER BY s.date, s.sample_id
+        ORDER BY date, sample
         """, d=dataset_id)
     if year is not None:
         samples = [s for s in samples if str(s["date"]).startswith(year)]
@@ -2276,22 +2350,26 @@ def wheel(dataset_id: str, year: str | None = Query(None)):
             tot = s["total"] or 0.0
             series.append({"sample": s["sample"], "date": s["date"], "sum_count": cnt,
                            "share": (cnt / tot) if tot > 0 else None})
-        act = semantics.activity(semantics.frequency(_q, dataset_id, series, with_rank=False))
+        freq = semantics.frequency(_q, dataset_id, series, with_rank=False)
+        act = semantics.activity(freq)
+        climo = [c for c in ((freq.get("seasonal") or {}).get("climatology") or [])
+                 if c.get("mean") is not None]
         clusters.append({
             "louvain_label": l, "n_members": n_members.get(l, 0),
             "window": act["window"],
             "window_months": [month_no[m] for m in act["window"]],
             "peak": act["peak"],
             "peak_month": month_no.get(act["peak"]),
+            "by_month": [{"month": c["month"], "mean": c["mean"], "n": c["n"]} for c in climo],
             "n_min": act["n_min"], "statement": act["statement"],
         })
     clusters.sort(key=lambda c: (not c["window_months"], c["window_months"][0]
                                  if c["window_months"] else 99, c["louvain_label"]))
 
     env_rows = _q(
-        "MATCH (s:Sample {dataset_id:$d}) RETURN s.date AS date, "
+        "MATCH (s:Sample {dataset_id:$d}) RETURN toString(s.date) AS date, "
         + ", ".join(f"s.{v['key']} AS {v['key']}" for v in semantics.ENVIRONMENT_VARS)
-        + " ORDER BY s.date, s.sample_id", d=dataset_id)
+        + " ORDER BY date, s.sample_id", d=dataset_id)
     if year is not None:
         env_rows = [r for r in env_rows if str(r["date"]).startswith(year)]
     env_vars, env_monthly = [], {}

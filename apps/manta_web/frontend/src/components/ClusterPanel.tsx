@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { getCluster, getClusterAtSample, getEnvironment, setClusterNote, setClusterStar,
          type ClusterAtSample, type ClusterDetail, type Environment } from "../api";
 import type { EdgeRef } from "../App";
+import ClusterNet from "./ClusterNet";
+import EnvironmentBars from "./EnvironmentBars";
 import InfoTip from "./InfoTip";
 import { useModules } from "../modules";
 import { setClusterLabel } from "../api";
@@ -73,6 +75,7 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
     return (c?.bridge_partners ?? []).map((p) => ({
       partner: p.partner,
       total: p.kanten,
+      raus: p.gerichtet_raus, rein: p.gerichtet_rein,
       edges: (shown.get(p.partner) ?? []).sort((a, b) => b.corr - a.corr || a.other.localeCompare(b.other)),
     })).sort((a, b) => b.total - a.total || a.partner - b.partner);
   }, [c]);
@@ -222,16 +225,7 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
                 </InfoTip>
               </div>
               <div className="text-xs mt-1" data-testid="cluster-env-profile-values">
-                {c.environment_profile.items.map((it) => (
-                  <div key={it.key} className="flex justify-between border-b border-slate-800 py-0.5">
-                    <span className="text-slate-400">{it.label}</span>
-                    <span className="text-slate-200 tabular-nums">
-                      {it.weighted_mean.toFixed(2)}{it.unit ? ` ${it.unit}` : ""}
-                      <span className="text-slate-500"> · 10–90 %: {it.p10.toFixed(2)}–{it.p90.toFixed(2)}
-                        {" "}· {it.n_samples_used} of {it.n_samples_present} samples</span>
-                    </span>
-                  </div>
-                ))}
+                <EnvironmentBars profile={c.environment_profile} />
               </div>
             </section>
           )}
@@ -336,6 +330,8 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
               </p>
             ) : (
               <div className="mt-1 space-y-2">
+                <ClusterNet label={label} partners={byPartner}
+                  onOpenCluster={onOpenCluster} onOpenEdge={onOpenEdge} />
                 {byPartner.map(({ partner, total, edges }) => {
                   const open = openPartners.has(partner);
                   const visible = open ? edges : edges.slice(0, PREVIEW);

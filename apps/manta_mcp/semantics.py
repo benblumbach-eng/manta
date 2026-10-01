@@ -5,8 +5,12 @@ import re
 import statistics
 from typing import Callable
 
+import tageslicht
+
 TIME_AXIS_DATES = "dates"
 TIME_AXIS_ORDINAL = "ordinal"
+NO_DATES = ("This dataset has NO real time axis (sample order only) — calendar months and "
+            "years do not exist here, so this test cannot be run.")
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 Runner = Callable[..., list[dict]]
@@ -88,6 +92,26 @@ def trio_statement(summary: dict, qty: dict) -> str:
     return " · ".join(teile)
 
 
+def taxon_statement(rank: str, name: "str | None", grouped_by: str, rows: list[dict],
+                    n_asv_total: int) -> str:
+    benannt = [r for r in rows if not r.get("is_unassigned")]
+    ohne = next((r for r in rows if r.get("is_unassigned")), None)
+    wer = f"{name} ({rank})" if name else f"All ASVs by {rank}"
+    k = len(benannt)
+    teile = [f"{wer}: {n_asv_total} ASVs in total",
+             f"in {k} named {grouped_by} group{'' if k == 1 else 's'}"]
+    if ohne is not None:
+        teile.append(f"plus {ohne['n_asv']} without a {grouped_by} assignment "
+                     f"(kept apart — no assignment is not a taxon)")
+    satz = ", ".join(teile)
+    if 1 < len(rows) <= 6:
+        satz += " (" + " + ".join(str(r["n_asv"]) for r in rows) + f" = {n_asv_total})"
+    elif len(rows) > 6:
+        top = ", ".join(f"{r['taxon']} {r['n_asv']}" for r in benannt[:3])
+        satz += f"; largest: {top}"
+    return satz + "."
+
+
 def value_declaration(q: Runner, dataset_id: str, frame: str) -> dict:
     kind = value_kind(q, dataset_id)
     return {
@@ -113,10 +137,10 @@ def series(q: Runner, dataset_id: str, asv_id: str) -> list[dict]:
         WITH s, own_count, coalesce(sum(ha.count), 0.0) AS live_total,
              count(ha) AS n_present,
              sum(CASE WHEN ha.count > own_count THEN 1 ELSE 0 END) AS n_greater
-        RETURN s.sample_id AS sample, s.date AS date, own_count AS count,
+        RETURN s.sample_id AS sample, toString(s.date) AS date, own_count AS count,
                coalesce(s.analysed_reads_total, live_total) AS sample_total,
                n_present AS n_present, n_greater AS n_greater
-        ORDER BY s.date, s.sample_id
+        ORDER BY date, sample
         """,
         d=dataset_id, id=asv_id,
     )
@@ -199,8 +223,8 @@ def seasonal_stats(rows, key):
 
 
 def sample_years(q: Runner, dataset_id: str) -> list[dict]:
-    rows = q("MATCH (s:Sample {dataset_id:$d}) RETURN s.date AS date "
-             "ORDER BY s.date, s.sample_id", d=dataset_id)
+    rows = q("MATCH (s:Sample {dataset_id:$d}) RETURN toString(s.date) AS date "
+             "ORDER BY date, s.sample_id", d=dataset_id)
     months: dict[str, set] = {}
     counts: dict[str, int] = {}
     for r in rows:
@@ -521,9 +545,9 @@ CLUSTER_TIMESERIES_QUERY = (
     "WITH s, coalesce(s.analysed_reads_total, live_total) AS sample_total "
     "OPTIONAL MATCH (s)-[r:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) WHERE a.louvain_label IS NOT NULL "
     "WITH s, sample_total, a.louvain_label AS l, sum(r.count) AS v "
-    "RETURN s.sample_id AS sample, s.date AS date, sample_total AS sample_total, "
+    "RETURN s.sample_id AS sample, toString(s.date) AS date, sample_total AS sample_total, "
     "collect({label: l, value: v}) AS per_module "
-    "ORDER BY s.date, s.sample_id")
+    "ORDER BY date, sample")
 CLUSTER_TIMESERIES_METHOD = (
     "Per sample, the sum of the stored values of each module's member ASVs — the same quantity "
     "cluster_at_sample returns for one sample, here for every sample and every module; a Cypher "
@@ -561,6 +585,9 @@ def cluster_timeseries(q: Runner, dataset_id: str) -> dict | None:
             "cluster_caveat": cluster_partition_caveat(q, dataset_id)}
 
 
+SPECTRUM_ABSENT_NO_TABLE = ("No spectra were recorded for this dataset: its run left no FFT "
+                            "table (older runs). Recomputing the network brings them.")
+
 SPECTRUM_METHOD = (
     "Amplitudes |c_k| of the Fourier coefficients k = 1 … FFT_COEFFS−1 that OTTER computes for "
     "the co-occurrence network (lutra/con.py, np.fft.fft over the series in sample order; the "
@@ -588,8 +615,7 @@ def spectrum(q: Runner, dataset_id: str, asv_id: str) -> dict | None:
     base = {"fft_coeffs": t["fft_coeffs"], "params_recorded": t["recorded"],
             "hellinger": hellinger, "method": SPECTRUM_METHOD, "caveat": SPECTRUM_CAVEAT}
     if amps is None:
-        reason = ("No spectra were recorded for this dataset: its run left no FFT table "
-                  "(older runs). Recomputing the network brings them."
+        reason = (SPECTRUM_ABSENT_NO_TABLE
                   if ks is None else
                   "This ASV was not part of the network run, so OTTER computed no Fourier "
                   "coefficients for it.")
@@ -762,8 +788,8 @@ def interannual_variability(q: Runner, dataset_id: str, metric: str = "jaccard")
     if not metrics[metric]["available"]:
         return {**base, "clusters": [], "absent_reason": metrics[metric]["reason"]}
 
-    samples = q("MATCH (s:Sample {dataset_id:$d}) RETURN s.sample_id AS sample, s.date AS date "
-                "ORDER BY s.date, s.sample_id", d=dataset_id)
+    samples = q("MATCH (s:Sample {dataset_id:$d}) RETURN s.sample_id AS sample, toString(s.date) AS date "
+                "ORDER BY date, sample", d=dataset_id)
     rows = q("MATCH (s:Sample {dataset_id:$d})-[r:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) "
              "WHERE a.louvain_label IS NOT NULL AND r.count > 0 "
              "RETURN s.sample_id AS sample, a.louvain_label AS cluster, a.id AS asv, r.count AS count "
@@ -823,8 +849,8 @@ def cluster_series(q: Runner, dataset_id: str, louvain_label: int) -> list[dict]
         "WITH s, sum(all.count) AS live_total "
         "WITH s, coalesce(s.analysed_reads_total, live_total) AS sample_total "
         "OPTIONAL MATCH (s)-[r:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) WHERE a.louvain_label = $l "
-        "RETURN s.sample_id AS sample, s.date AS date, sum(coalesce(r.count, 0.0)) AS sum_count, "
-        "coalesce(sample_total, 0.0) AS sample_total ORDER BY s.date, s.sample_id",
+        "RETURN s.sample_id AS sample, toString(s.date) AS date, sum(coalesce(r.count, 0.0)) AS sum_count, "
+        "coalesce(sample_total, 0.0) AS sample_total ORDER BY date, sample",
         d=dataset_id, l=louvain_label)
     for r in rows:
         tot = r["sample_total"] or 0.0
@@ -893,18 +919,18 @@ def taxon_series(q: Runner, dataset_id: str, member_ids: list[str]) -> dict:
         rows = q("MATCH (s:Sample {dataset_id:$d}) "
                  "OPTIONAL MATCH (s)-[r:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) "
                  "WHERE a.id IN $ids AND r.count > 0 "
-                 "RETURN s.sample_id AS sample, s.date AS date, count(r) AS n_members_present "
-                 "ORDER BY s.date, s.sample_id", d=dataset_id, ids=member_ids)
+                 "RETURN s.sample_id AS sample, toString(s.date) AS date, count(r) AS n_members_present "
+                 "ORDER BY date, sample", d=dataset_id, ids=member_ids)
         return {"rows": rows, "absent_reason": TAXON_SUM_ABSENT, "value_kind": kind}
     rows = q("MATCH (s:Sample {dataset_id:$d}) "
              "OPTIONAL MATCH (s)-[all:HAS_ABUNDANCE]->(:ASV {dataset_id:$d}) "
              "WITH s, sum(all.count) AS live_total "
              "WITH s, coalesce(s.analysed_reads_total, live_total) AS sample_total "
              "OPTIONAL MATCH (s)-[r:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) WHERE a.id IN $ids "
-             "RETURN s.sample_id AS sample, s.date AS date, "
+             "RETURN s.sample_id AS sample, toString(s.date) AS date, "
              "sum(coalesce(r.count, 0.0)) AS sum_count, "
              "sum(CASE WHEN r.count > 0 THEN 1 ELSE 0 END) AS n_members_present, "
-             "coalesce(sample_total, 0.0) AS sample_total ORDER BY s.date, s.sample_id",
+             "coalesce(sample_total, 0.0) AS sample_total ORDER BY date, sample",
              d=dataset_id, ids=member_ids)
     for r in rows:
         tot = r["sample_total"] or 0.0
@@ -976,11 +1002,25 @@ TRAIT_MDB_CATEGORIES = {
     "pSNCM": "plastidic specialist non-constitutive mixoplankton",
     "eSNCM": "endosymbiotic specialist non-constitutive mixoplankton",
 }
-TRAIT_RANK_ORDER = ("species", "genus", "family")
+TRAIT_RANK_ORDER = ("species", "genus", "family", "order", "class", "phylum")
 
 
 def mdb_label(category: str) -> str:
     return f"mixoplankton ({category})"
+
+
+PR2_FUNCTION_LABELS = {
+    "phototrophs": "phototroph",
+    "phagotrophs": "phagotroph",
+    "parasites": "parasite",
+    "metazoans": "metazoan",
+    "dinoflagellates": "dinoflagellate (trophic mode mixed)",
+    "unknown": "unknown",
+}
+
+
+def pr2_function_label(value: str) -> str:
+    return PR2_FUNCTION_LABELS.get((value or "").strip().lower(), (value or "").strip())
 
 
 def trait_group_label(functions) -> str:
@@ -1206,30 +1246,30 @@ ENVIRONMENT_UNITS_SOURCE = f"{SOURCE_PUBLICATION} (Methods) — the publication 
 
 ENVIRONMENT_VARS: list[dict] = [
     {"key": "temp", "source_column": "temp", "label": "Water temperature",
-     "unit": "°C", "unit_note": None},
+     "unit": "°C", "unit_note": None, "role": "environment", "scale": "interval"},
     {"key": "sal", "source_column": "sal", "label": "Salinity",
-     "unit": "PSU", "unit_note": None},
+     "unit": "PSU", "unit_note": None, "role": "environment", "scale": "ratio"},
     {"key": "depth", "source_column": "depth", "label": "Sampling depth",
-     "unit": "m", "unit_note": None},
+     "unit": "m", "unit_note": None, "role": "coordinate", "scale": "ratio"},
     {"key": "mld", "source_column": "MLD", "label": "Mixed Layer Depth (MLD)",
-     "unit": "m", "unit_note": None},
+     "unit": "m", "unit_note": None, "role": "environment", "scale": "ratio"},
     {"key": "chl_sens", "source_column": "chl_sens",
      "label": "Chlorophyll concentration (in situ sensor)",
-     "unit": "μg l⁻¹", "unit_note": None},
+     "unit": "μg l⁻¹", "unit_note": None, "role": "environment", "scale": "ratio"},
     {"key": "par_satellite", "source_column": "PAR_satellite",
      "label": "Photosynthetically Active Radiation (PAR)",
      "unit": "μmol photons m⁻² d⁻¹",
      "unit_note": ("The publication states μmol photons m⁻² d⁻¹. The values in this dataset run "
                    "from 0 to 24, which is the usual magnitude of a polar summer day in MOL "
                    "photons m⁻² d⁻¹, not μmol. The values are shown unchanged; the unit is the "
-                   "published one and the mismatch is left visible rather than corrected here.")},
+                   "published one and the mismatch is left visible rather than corrected here."), "role": "environment", "scale": "ratio"},
     {"key": "pw_frac", "source_column": "PW_frac", "label": "Polar Water Fraction",
      "unit": "%",
      "unit_note": ("The publication states %. Every value in this dataset lies between 0 and "
                    "0.68, so the column holds a fraction of one, not a percentage. Shown "
-                   "unchanged — multiplying by 100 would be our arithmetic, not the measurement.")},
+                   "unchanged — multiplying by 100 would be our arithmetic, not the measurement."), "role": "environment", "scale": "ratio"},
     {"key": "o2_conc", "source_column": "O2_conc", "label": "Oxygen concentration",
-     "unit": "μmol l⁻¹", "unit_note": None},
+     "unit": "μmol l⁻¹", "unit_note": None, "role": "environment", "scale": "ratio"},
 ]
 
 ENVIRONMENT_KEYS = [v["key"] for v in ENVIRONMENT_VARS]
@@ -1245,6 +1285,25 @@ ENVIRONMENT_UNITS_NOTE = (
     f"carries no units. Two of them do not match the values in this dataset; that is stated at "
     f"the parameter instead of being corrected."
 )
+
+
+def pool_share(q: Runner, dataset_id: str, asv_id: str) -> dict:
+    rows = q("MATCH (s:Sample {dataset_id:$d})-[h:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) "
+             "RETURN sum(h.count) AS gesamt, "
+             "       sum(CASE WHEN a.id = $a THEN h.count ELSE 0 END) AS eigen, "
+             "       count(DISTINCT a) AS n_asv", d=dataset_id, a=asv_id)
+    if not rows or not rows[0]["gesamt"]:
+        return {"share": None, "n_asv": 0, "absent_reason":
+                "No stored values for this dataset, so there is no whole to be a part of."}
+    r = rows[0]
+    return {
+        "share": float(r["eigen"] or 0.0) / float(r["gesamt"]),
+        "n_asv": int(r["n_asv"] or 0),
+        "basis": "the summed values of all analysed ASVs of this dataset, over all samples",
+        "caveat": ("A share of the whole dataset, not an amount: the values are compositional, "
+                   "and a larger part can mean that the others became smaller."),
+        "absent_reason": None,
+    }
 
 
 def environment_profile(q: Runner, dataset_id: str, asv_id: str) -> dict:
@@ -1264,7 +1323,7 @@ def cluster_environment_profile(q: Runner, dataset_id: str, louvain_label: int) 
     props = ", ".join(f"s.`{v['key']}` AS `{v['key']}`" for v in ENVIRONMENT_VARS)
     rows = q(f"MATCH (s:Sample {{dataset_id:$d}})-[h:HAS_ABUNDANCE]->(a:ASV {{dataset_id:$d}}) "
              f"WHERE a.louvain_label = $l WITH s, sum(h.count) AS w WHERE w > 0 "
-             f"RETURN w, {props}", d=dataset_id, l=louvain_label)
+             f"RETURN w, {props} ORDER BY s.sample_id", d=dataset_id, l=louvain_label)
     out = _weighted_env_profile(rows)
     out["series_definition"] = CLUSTER_SERIES_DEFINITION
     out["series_note"] = ("Method after " + SOURCE_PUBLICATION + "; the publication does not name "
@@ -1291,9 +1350,12 @@ def _weighted_env_profile(rows: list[dict]) -> dict:
                     return x
             return _pairs[-1][0]
 
+        mittel = sum(x * w for x, w in pairs) / wsum
+        sd = ((sum(w * (x - mittel) ** 2 for x, w in pairs) / wsum) ** 0.5
+              if len(pairs) > 1 else None)
         items.append({"key": key, "label": spec["label"], "unit": spec["unit"],
                       "unit_note": spec.get("unit_note"),
-                      "weighted_mean": sum(x * w for x, w in pairs) / wsum,
+                      "weighted_mean": mittel, "weighted_sd": sd,
                       "p10": pct(0.10), "p90": pct(0.90),
                       "n_samples_used": len(pairs), "n_samples_present": n_present})
     return {
@@ -1301,7 +1363,9 @@ def _weighted_env_profile(rows: list[dict]) -> dict:
         "method": ("Weighted by this ASV's value in each sample, over all samples with a "
                    "detection (count > 0) and a measured value; the percentiles are the "
                    "smallest value whose cumulative weight reaches 10 % / 90 % of the total "
-                   "weight. Samples without a measurement are excluded, never filled."),
+                   "weight. The spread is the weighted standard deviation around that mean — "
+                   "how far the conditions scattered, not how precise the mean is. Samples "
+                   "without a measurement are excluded, never filled."),
         "caveat": ("A weighted summary of the conditions this ASV was found under — NOT a "
                    "niche model, NOT an optimum in the physiological sense, and NOT a "
                    "correlation: with compositional data such a correlation would partly "
@@ -1309,11 +1373,136 @@ def _weighted_env_profile(rows: list[dict]) -> dict:
     }
 
 
+SAMPLER_NOTE = (
+    "Sampling depth is where the sampler hung on that day — a drifting mooring, not a chosen "
+    "depth. A sample below the mixed layer depth (MLD) comes from a different water body than "
+    "one above it on the same date; a seasonal pattern can therefore be the sampler's, not the "
+    "organism's.")
+
+
+def sampler_position(rows: list[dict]) -> "dict | None":
+    mit_tiefe = [r for r in rows if r.get("depth") is not None]
+    if not mit_tiefe:
+        return None
+    samples, n = [], {"within": 0, "below": 0, "unknown": 0}
+    for r in mit_tiefe:
+        if r.get("mld") is None:
+            lage = "unknown"
+        elif r["depth"] <= r["mld"]:
+            lage = "within"
+        else:
+            lage = "below"
+        n[lage] += 1
+        samples.append({"sample": r["sample"], "date": r.get("date"), "depth": r["depth"],
+                        "mld": r.get("mld"), "position": lage})
+    tiefen = [r["depth"] for r in mit_tiefe]
+    mlds = [r["mld"] for r in mit_tiefe if r.get("mld") is not None]
+    satz = f"{n['within']} of {len(mit_tiefe)} samples within the mixed layer, {n['below']} below it"
+    if n["unknown"]:
+        satz += f", {n['unknown']} unknown"
+    satz += f" · sampling depth {min(tiefen):.0f}–{max(tiefen):.0f} m"
+    return {"n_within": n["within"], "n_below": n["below"], "n_unknown": n["unknown"],
+            "n_total": len(mit_tiefe), "samples": samples, "statement": satz + ".",
+            "note": SAMPLER_NOTE}
+
+
+def _solar_marks(lat: float, lon: float, jahr: int) -> list[dict]:
+    import datetime as _dt
+    anfang = _dt.date(jahr, 1, 1)
+    dek = [(d, tageslicht.declination(anfang + _dt.timedelta(days=d - 1), lon))
+           for d in range(1, 366)]
+    nord = lat >= 0
+    marks: list[dict] = []
+    for (_, a), (d1, b) in zip(dek, dek[1:]):
+        if a < 0 <= b:
+            marks.append({"doy": d1, "label": "spring equinox" if nord else "autumn equinox"})
+        elif a > 0 >= b:
+            marks.append({"doy": d1, "label": "autumn equinox" if nord else "spring equinox"})
+    hoch = max(dek, key=lambda x: x[1])[0]
+    tief = min(dek, key=lambda x: x[1])[0]
+    marks.append({"doy": hoch, "label": "summer solstice" if nord else "winter solstice"})
+    marks.append({"doy": tief, "label": "winter solstice" if nord else "summer solstice"})
+    return sorted(marks, key=lambda m: m["doy"])
+
+
+SEASON_METHOD = ("Three readings of one year: the sun's own dates, the light at this latitude, "
+                 "and the mixing of the water column.")
+SEASON_CAVEAT = ("Sun and light are computed for the station's latitude in the reference year; "
+                 "the water marks are monthly means of the MEASURED mixed layer depth, no model.")
+
+
+def seasons(q: Runner, dataset_id: str) -> dict:
+    if time_axis(q, dataset_id) != TIME_AXIS_DATES:
+        return {"dataset_id": dataset_id, "available": False,
+                "absent_reason": ("No seasons: this dataset has no calendar dates, only an "
+                                  "order of samples."),
+                "astronomical": [], "light": [], "water": [], "water_note": "",
+                "method": SEASON_METHOD, "caveat": SEASON_CAVEAT}
+    ly = light_year(q, dataset_id)
+    out = {"dataset_id": dataset_id, "available": bool(ly.get("available")),
+           "absent_reason": ly.get("absent_reason"),
+           "astronomical": ly.get("solar_marks", []), "light": [], "water": [],
+           "water_note": "", "method": SEASON_METHOD, "caveat": SEASON_CAVEAT}
+    for b in ly.get("bands", []):
+        anfang = "polar night begins" if b["kind"] == "polar_night" else "midnight sun begins"
+        ende = "the sun returns" if b["kind"] == "polar_night" else "midnight sun ends"
+        if b["start_doy"] > 1:
+            out["light"].append({"doy": b["start_doy"], "label": anfang})
+        if b["end_doy"] < 365:
+            out["light"].append({"doy": b["end_doy"] + 1, "label": ende})
+    out["light"].sort(key=lambda m: m["doy"])
+
+    mld = next((v for v in environment(q, dataset_id).get("variables", []) if v["key"] == "mld"),
+               None)
+    monate = {m["month"]: m["mean"] for m in (mld or {}).get("monthly", [])}
+    if len(monate) < 6:
+        out["water_note"] = ("No water marks: mixed layer depth missing, or fewer than six "
+                             "months of the year carry one.")
+        return out
+    mittel = sum(monate.values()) / len(monate)
+    reihe = sorted(monate)
+    for a, b in zip(reihe, reihe[1:] + reihe[:1]):
+        va, vb = monate[a], monate[b]
+        if va > mittel >= vb:
+            out["water"].append({"doy": _CUM_DAYS[b - 1] + 1, "label": "stratification begins"})
+        elif va <= mittel < vb:
+            out["water"].append({"doy": _CUM_DAYS[b - 1] + 1, "label": "mixing begins"})
+    out["water"].sort(key=lambda m: m["doy"])
+    out["water_note"] = (f"Mixed layer depth crosses its annual mean of {mittel:.0f} m; "
+                         f"{len(monate)} of 12 months carry a measurement.")
+    return out
+
+
+def light_year(q: Runner, dataset_id: str) -> dict:
+    st = _station(q, dataset_id)
+    if not st or st.get("lat") is None:
+        return {"available": False, "absent_reason": LIGHT_ABSENT_NO_STATION, "bands": [],
+                "shortest_day_doy": None, "lat": None}
+    import datetime as _dt
+    jahr = 2019
+    b = tageslicht.bands(st["lat"], _dt.date(jahr, 1, 1), _dt.date(jahr, 12, 31), st.get("lon") or 0.0)
+    baender = [{"kind": x["kind"],
+                "start_doy": _dt.date.fromisoformat(x["start"]).timetuple().tm_yday,
+                "end_doy": _dt.date.fromisoformat(x["end"]).timetuple().tm_yday} for x in b]
+    kuerzester = 355 if st["lat"] >= 0 else 172
+    rueckkehr = None
+    for x in baender:
+        if x["kind"] == "polar_night" and x["start_doy"] == 1:
+            rueckkehr = x["end_doy"] + 1
+    lon = st.get("lon") or 0.0
+    laengen = [round(tageslicht.daylength_hours(st["lat"], _dt.date(jahr, 1, 1) + _dt.timedelta(days=i), lon), 2)
+               for i in range(365)]
+    return {"available": True, "bands": baender, "shortest_day_doy": kuerzester,
+            "sun_return_doy": rueckkehr, "lat": st["lat"], "reference_year": jahr,
+            "day_length_doy": laengen, "solar_marks": _solar_marks(st["lat"], lon, jahr),
+            "legend": LIGHT_LEGEND}
+
+
 def environment(q: Runner, dataset_id: str) -> dict:
     axis = time_axis(q, dataset_id)
     props = ", ".join(f"s.`{v['key']}` AS `{v['key']}`" for v in ENVIRONMENT_VARS)
-    rows = q(f"MATCH (s:Sample {{dataset_id:$d}}) RETURN s.sample_id AS sample, s.date AS date, "
-             f"{props} ORDER BY s.date, s.sample_id", d=dataset_id)
+    rows = q(f"MATCH (s:Sample {{dataset_id:$d}}) RETURN s.sample_id AS sample, toString(s.date) AS date, "
+             f"{props} ORDER BY date, sample", d=dataset_id)
     n_sample = len(rows)
 
     variables, absent = [], []
@@ -1334,22 +1523,34 @@ def environment(q: Runner, dataset_id: str) -> dict:
         }
         if axis == TIME_AXIS_DATES:
             per_month: dict[int, list[float]] = {}
+            per_year_month: dict[str, dict[int, list[float]]] = {}
             for r in rows:
-                _, month = ym(r["date"])
+                year, month = ym(r["date"])
                 if month is not None and r[key] is not None:
                     per_month.setdefault(month, []).append(r[key])
+                    if year:
+                        per_year_month.setdefault(year, {}).setdefault(month, []).append(r[key])
             item["monthly"] = [{"month": m, "label": MONTHS[m - 1],
                                 "mean": sum(per_month[m]) / len(per_month[m]),
                                 "n": len(per_month[m])}
                                for m in sorted(per_month)]
+            item["monthly_by_year"] = {
+                y: [{"month": m, "label": MONTHS[m - 1],
+                     "mean": sum(vals[m]) / len(vals[m]), "n": len(vals[m])}
+                    for m in sorted(vals)]
+                for y, vals in sorted(per_year_month.items())}
         variables.append(item)
 
+    sampler = sampler_position([{"sample": r["sample"],
+                                 "date": r["date"] if axis == TIME_AXIS_DATES else None,
+                                 "depth": r.get("depth"), "mld": r.get("mld")} for r in rows])
     return {
         "dataset_id": dataset_id,
         "time_axis": axis,
         "n_sample": n_sample,
         "variables": variables,
         "absent": absent,
+        "sampler": sampler,
         "provenance": ENVIRONMENT_PROVENANCE,
         "units_note": ENVIRONMENT_UNITS_NOTE,
         "absent_reason": (
@@ -1359,6 +1560,158 @@ def environment(q: Runner, dataset_id: str) -> dict:
             "show. Any temperature or salinity stated for this dataset would be invented."
         ),
     }
+
+
+
+LIGHT_LEGEND = ("polar night (day length 0 h) · polar day (24 h) — astronomical, "
+                "from latitude and date")
+
+LIGHT_ABSENT_NO_STATION = (
+    "No light bands: this dataset has no station, so there is no latitude to compute them from. "
+    "The synthetic test datasets are the case this is built for — a placeholder 0/0 is not a "
+    "place at the equator.")
+LIGHT_ABSENT_ORDINAL = (
+    "No light bands: this dataset's samples carry an order, not calendar dates. Day length needs "
+    "a real date; the placeholder dates would produce a band that means nothing.")
+
+
+def _station(q: Runner, dataset_id: str) -> "dict | None":
+    rows = q("MATCH (:Sample {dataset_id:$d})-[:AT_STATION]->(st:Station) "
+             "RETURN DISTINCT st.station_id AS station_id, st.location.latitude AS lat, "
+             "st.location.longitude AS lon ORDER BY lat, lon, station_id", d=dataset_id)
+    return rows[0] if rows else None
+
+
+def sample_light(q: Runner, dataset_id: str) -> dict:
+    import datetime as _dt
+
+    st = _station(q, dataset_id)
+    axis = time_axis(q, dataset_id)
+    if st is None:
+        return {"available": False, "absent_reason": LIGHT_ABSENT_NO_STATION, "samples": []}
+    if axis != TIME_AXIS_DATES:
+        return {"available": False, "absent_reason": LIGHT_ABSENT_ORDINAL, "samples": []}
+    rows = q("MATCH (s:Sample {dataset_id:$d}) WHERE s.date IS NOT NULL "
+             "RETURN s.sample_id AS sample, toString(s.date) AS date "
+             "ORDER BY date, sample", d=dataset_id)
+    aus = []
+    for r in rows:
+        d = _dt.date.fromisoformat(r["date"])
+        aus.append({"sample": r["sample"], "date": r["date"],
+                    **{k: v for k, v in
+                       tageslicht.light(st["lat"], d, st["lon"]).items()
+                       if k not in ("available", "absent_reason")}})
+    return {"available": True, "absent_reason": None, "station": st,
+            "method": tageslicht.METHOD, "reference": tageslicht.REFERENCE,
+            "caveat": tageslicht.NOT_ECOLOGY, "samples": aus}
+
+
+def light_bands(q: Runner, dataset_id: str) -> dict:
+    import datetime as _dt
+
+    st = _station(q, dataset_id)
+    axis = time_axis(q, dataset_id)
+    leer = {"available": False, "bands": [], "per_sample": [], "year": None, "station": None, "from": None, "to": None,
+            "legend": LIGHT_LEGEND, "method": tageslicht.METHOD,
+            "reference": tageslicht.REFERENCE, "caveat": tageslicht.NOT_ECOLOGY}
+    if st is None:
+        return {**leer, "absent_reason": LIGHT_ABSENT_NO_STATION}
+    if axis != TIME_AXIS_DATES:
+        return {**leer, "absent_reason": LIGHT_ABSENT_ORDINAL}
+    spanne = q("MATCH (s:Sample {dataset_id:$d}) WHERE s.date IS NOT NULL "
+               "RETURN toString(min(s.date)) AS von, toString(max(s.date)) AS bis", d=dataset_id)
+    if not spanne or not spanne[0]["von"]:
+        return {**leer, "absent_reason": LIGHT_ABSENT_ORDINAL}
+    von, bis = spanne[0]["von"], spanne[0]["bis"]
+    b = tageslicht.bands(st["lat"], _dt.date.fromisoformat(von), _dt.date.fromisoformat(bis),
+                         st["lon"])
+    proben = q("MATCH (s:Sample {dataset_id:$d}) WHERE s.date IS NOT NULL "
+               "RETURN s.sample_id AS sample, toString(s.date) AS date ORDER BY date, sample",
+               d=dataset_id)
+    per_sample = []
+    for r in proben:
+        l = tageslicht.light(st["lat"], _dt.date.fromisoformat(r["date"][:10]), st["lon"])
+        per_sample.append({"sample": r["sample"], "date": r["date"][:10],
+                           "day_length_h": l["day_length_h"], "polar_night": l["polar_night"],
+                           "polar_day": l["polar_day"]})
+    return {**leer, "available": True, "absent_reason": None, "station": st,
+            "from": von, "to": bis, "bands": b, "per_sample": per_sample,
+            "year": light_year(q, dataset_id)}
+
+
+
+CHAIN_NOT_RECORDED = "not recorded"
+CHAIN_NOTE = (
+    "Every link below is something already stored — from the graph or from the provenance "
+    "manifest of the answer. Nothing here was collected for this view, and a missing link says "
+    "so instead of being bridged.")
+
+
+def provenance_chain(q: Runner, dataset_id: str) -> dict:
+    st = _station(q, dataset_id)
+    ds = q("MATCH (d:Dataset {dataset_id:$d}) RETURN d.region AS region, d.marker AS marker, "
+           "d.dada2_provenance AS dada2, d.citation AS citation, d.source_doi AS doi, "
+           "d.value_kind AS value_kind, coalesce(d.time_axis,'ordinal') AS time_axis",
+           d=dataset_id)
+    d0 = ds[0] if ds else {}
+    smp = q("MATCH (s:Sample {dataset_id:$d}) RETURN count(s) AS n, "
+            "toString(min(s.date)) AS von, toString(max(s.date)) AS bis", d=dataset_id)
+    s0 = smp[0] if smp else {}
+    thr = thresholds(q, dataset_id)
+
+    LAUF_ABFRAGE = {
+        "TraitRun": ("MATCH (r:TraitRun {dataset_id:$d}) RETURN properties(r) AS p "
+                     "ORDER BY r.run_id LIMIT 1"),
+        "EnvLinkRun": ("MATCH (r:EnvLinkRun {dataset_id:$d}) RETURN properties(r) AS p "
+                       "ORDER BY r.run_id LIMIT 1"),
+        "ElaRun": ("MATCH (e:ElaRun {dataset_id:$d}) RETURN properties(e) AS p "
+                   "ORDER BY e.ela_run_id LIMIT 1"),
+    }
+
+    def lauf(label: str, schluessel: str) -> dict:
+        rows = q(LAUF_ABFRAGE[label], d=dataset_id)
+        if not rows:
+            return {"present": False, "detail": CHAIN_NOT_RECORDED, "params": {}}
+        p = {k: v for k, v in rows[0]["p"].items() if k != "dataset_id"}
+        return {"present": True, "detail": p.get(schluessel), "params": p}
+
+    glieder = [
+        {"step": "station", "label": "Station",
+         "present": st is not None,
+         "detail": (f"{st['station_id']} at {st['lat']:.4f}, {st['lon']:.4f}" if st
+                    else CHAIN_NOT_RECORDED),
+         "params": dict(st) if st else {}},
+        {"step": "samples", "label": "Samples",
+         "present": bool(s0.get("n")),
+         "detail": (f"{s0.get('n')} samples"
+                    + (f", {s0.get('von')} to {s0.get('bis')}" if s0.get("von") else
+                       " (order only, no calendar)")),
+         "params": {"n": s0.get("n"), "time_axis": d0.get("time_axis"),
+                    "value_kind": d0.get("value_kind")}},
+        {"step": "dada2", "label": "DADA2 provenance",
+         "present": bool(d0.get("dada2")) and d0.get("dada2") not in ("unknown", "absent"),
+         "detail": d0.get("dada2") or CHAIN_NOT_RECORDED, "params": {}},
+        {"step": "run", "label": "Network run (OTTER)",
+         "present": bool(thr.get("recorded")),
+         "detail": (f"{thr.get('run_id')}" + (f", computed {thr['computed_at']}"
+                                              if thr.get("computed_at") else "")
+                    if thr.get("run_id") else CHAIN_NOT_RECORDED),
+         "params": {k: thr.get(k) for k in THRESHOLD_KEYS if thr.get(k) is not None}},
+        {**lauf("TraitRun", "run_id"), "step": "traits", "label": "Literature annotation"},
+        {**lauf("EnvLinkRun", "run_id"), "step": "env_links", "label": "Environment links"},
+        {**lauf("ElaRun", "ela_run_id"), "step": "ela", "label": "Energy landscape"},
+        {"step": "source", "label": "Source publication",
+         "present": bool(d0.get("citation") or d0.get("doi")),
+         "detail": (d0.get("citation") or d0.get("doi") or CHAIN_NOT_RECORDED),
+         "params": {"doi": d0.get("doi")} if d0.get("doi") else {}},
+    ]
+    for g in glieder:
+        g.setdefault("params", {})
+        if not g["present"] and not g.get("detail"):
+            g["detail"] = CHAIN_NOT_RECORDED
+    return {"dataset_id": dataset_id, "note": CHAIN_NOTE,
+            "n_recorded": sum(1 for g in glieder if g["present"]),
+            "n_links": len(glieder), "chain": glieder}
 
 
 

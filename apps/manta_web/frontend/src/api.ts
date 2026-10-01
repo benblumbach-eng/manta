@@ -395,6 +395,7 @@ export type Capabilities = {
 export type Neighbor = {
   id: string; genus: string | null; cluster: number | null;
   corr?: number; nmi?: number; p_value: number | null;
+  direction?: "out" | "in" | "both" | null;
 };
 
 export type NetworkScope = {
@@ -461,6 +462,7 @@ export type AsvDetail = {
   network_scope: NetworkScope;
   spectrum?: Spectrum | null;
   frequency: Frequency;
+  pool?: PoolShare;
   capabilities: Capabilities;
   lineage: Record<string, string | null>;
   cluster: number;
@@ -527,13 +529,12 @@ export type ClusterDetail = {
   dataset_id: string;
   louvain_label: number;
   frequency: Frequency;
-  environment_profile: {
-    items: { key: string; label: string; unit: string | null; weighted_mean: number;
-             p10: number; p90: number; n_samples_used: number; n_samples_present: number }[];
-    method: string; caveat: string; series_definition: string; series_note: string;
-  };
+  environment_profile: EnvironmentProfile & { series_definition: string; series_note: string };
   cohesion: { innen: number; aussen: number; corr_innen: number | null; corr_aussen: number | null };
-  bridge_partners: { partner: number; kanten: number }[];
+  bridge_partners: {
+    partner: number; kanten: number;
+    gerichtet_raus?: number; gerichtet_rein?: number;
+  }[];
   bridge_edges: { mine: string; mine_genus: string | null; other: string;
                   other_genus: string | null; other_cluster: number; corr: number }[];
   activity: { axis: string; window: string[]; peak: string | null; n_min: number;
@@ -550,16 +551,23 @@ export type ClusterDetail = {
   starred: boolean;
 };
 
+export type PoolShare = {
+  share: number | null; n_asv: number;
+  basis?: string; caveat?: string; absent_reason?: string | null;
+};
+
 export type PeakEnvironment = {
   items: { key: string; label: string; unit: string | null; unit_note?: string | null;
            value: number }[];
   at_date: string | null;
+  at_sample?: string | null;
   caveat: string;
 };
 
 export type EnvironmentProfile = {
   items: { key: string; label: string; unit: string | null; unit_note?: string | null;
            weighted_mean: number;
+           weighted_sd?: number | null;
            p10: number; p90: number; n_samples_used: number; n_samples_present: number }[];
   method: string;
   caveat: string;
@@ -571,6 +579,7 @@ export type EnvVariable = {
   label: string;
   unit: string | null;
   unit_note: string | null;
+  scale?: "ratio" | "interval";
   n: number;
   total: number;
   min: number;
@@ -578,14 +587,22 @@ export type EnvVariable = {
   mean: number;
   points: { sample: string; date: string | null; value: number | null }[];
   monthly?: { month: number; label: string; mean: number; n: number }[];
+  monthly_by_year?: Record<string, { month: number; label: string; mean: number; n: number }[]>;
 };
 
+export type SamplerPosition = {
+  n_within: number; n_below: number; n_unknown: number; n_total: number;
+  statement: string; note: string;
+  samples: { sample: string; date: string | null; depth: number; mld: number | null;
+             position: "within" | "below" | "unknown" }[];
+};
 export type Environment = {
   dataset_id: string;
   time_axis: "dates" | "ordinal";
   n_sample: number;
   variables: EnvVariable[];
   absent: { key: string; label: string; source_column: string }[];
+  sampler: SamplerPosition | null;
   provenance: string;
   units_note: string;
   absent_reason: string;
@@ -619,7 +636,10 @@ export type AgentStatus = {
   remote?: { configured: boolean; models: string[] };
   local_error?: string;
 };
-export type AgentContext = { dataset_id?: string; asv_id?: string; cluster?: number | null };
+export type AgentContext = {
+  dataset_id?: string; asv_id?: string; cluster?: number | null;
+  concept?: string;
+};
 export type AgentEvidence = {
   tool: string;
   arguments: Record<string, unknown>;
@@ -641,6 +661,7 @@ export type OwnProvider = { base_url: string; model: string; key: string };
 
 export type ToolHelp = {
   name: string; usage: string; summary: string;
+  question: string | null; needs: "none" | "dataset" | "asv" | "cluster" | null;
   params: { name: string; type: string; required: boolean; description: string;
             enum?: string[] | null; default?: unknown }[];
 };
@@ -663,7 +684,10 @@ export const runTool = (name: string, args: Record<string, unknown>) =>
     }
     return r.json() as Promise<ToolRun>;
   });
-export type ChatTurn = { role: "user" | "assistant"; content: string };
+export type ChatTurn = {
+  role: "user" | "assistant"; content: string;
+  tools?: { name: string; arguments: Record<string, unknown> }[];
+};
 
 export const askAgent = (question: string, ctx: AgentContext, model?: string,
                          own?: OwnProvider, history?: ChatTurn[]) =>
@@ -675,6 +699,7 @@ export const askAgent = (question: string, ctx: AgentContext, model?: string,
                            provider_url: own ? own.base_url : undefined,
                            dataset_id: ctx.dataset_id,
                            asv_id: ctx.asv_id, cluster: ctx.cluster ?? null,
+                           concept: ctx.concept,
                            history: history?.length ? history : undefined }),
   }).then(async (r) => {
     if (!r.ok) {
@@ -794,6 +819,65 @@ export const getClusterTimeseries = (ds: string) =>
 export const getCapabilities = (ds: string) => get<Capabilities>(`/datasets/${ds}/capabilities`);
 export const getEnvironment = (ds: string) => get<Environment>(`/datasets/${ds}/environment`);
 
+export type LightBand = {
+  kind: "polar_night" | "polar_day";
+  start: string; end: string;
+  clipped_start: boolean; clipped_end: boolean;
+};
+export type Light = {
+  available: boolean;
+  absent_reason: string | null;
+  station: { station_id: string; lat: number; lon: number } | null;
+  from: string | null; to: string | null;
+  bands: LightBand[];
+  legend: string; method: string; reference: string; caveat: string;
+  per_sample: { sample: string; date: string; day_length_h: number; polar_night: boolean;
+                polar_day: boolean }[];
+  year: LightYear | null;
+};
+export const getLight = (ds: string) => get<Light>(`/datasets/${ds}/light`);
+
+export type Concept = {
+  key: string; label: string; kind: "klasse" | "beziehung" | "kennzahl" | "umweltgroesse";
+  definition: string; source: string | null; caveats: string[];
+  formula: string | null; unit: string | null; inputs: string[]; tools: string[];
+  note: string | null;
+  standard_term: { curie: string | null; uri: string; match: string; label?: string } | null;
+};
+export type Concepts = {
+  concepts_version: string; kinds: Concept["kind"][]; kind: string | null;
+  n: number; concepts: Concept[]; note?: string;
+};
+export const getConcepts = () => get<Concepts>("/concepts");
+
+export type Applicability = {
+  dataset_id: string;
+  tools: Record<string, {
+    applicable: "yes" | "no" | "subject";
+    reason: string | null; requires: string[]; subject_condition: string | null;
+  }>;
+  conditions: Record<string, { met: boolean; reason: string | null }>;
+  time_structure: {
+    time_axis: string; n_samples: number; first: string | null; last: string | null;
+    n_distinct_days?: number; median_gap_days: number | null; largest_gap_days: number | null;
+    years: { year: string; n_samples: number }[]; sample_dates: string[];
+    note: string | null;
+  };
+  states: Record<string, string>;
+};
+export const getApplicability = (ds: string) =>
+  get<Applicability>(`/datasets/${ds}/applicability`);
+
+export type ChainLink = {
+  step: string; label: string; present: boolean; detail: string | null;
+  params: Record<string, unknown>;
+};
+export type ProvenanceChain = {
+  dataset_id: string; note: string; n_recorded: number; n_links: number; chain: ChainLink[];
+};
+export const getProvenanceChain = (ds: string) =>
+  get<ProvenanceChain>(`/datasets/${ds}/provenance-chain`);
+
 export type WheelCluster = {
   louvain_label: number;
   n_members: number;
@@ -801,6 +885,7 @@ export type WheelCluster = {
   window_months: number[];
   peak: string | null;
   peak_month: number | null;
+  by_month?: { month: number; mean: number; n: number }[];
   n_min: number;
   statement: string | null;
 };
@@ -826,6 +911,22 @@ export type Wheel = {
   year?: WheelYear | null;
 };
 export type WheelYear = { year: string; n: number; months_covered: number; note: string | null };
+export type LightYear = {
+  available: boolean; absent_reason?: string; lat: number | null; reference_year?: number;
+  bands: { kind: "polar_night" | "polar_day"; start_doy: number; end_doy: number }[];
+  shortest_day_doy: number | null; sun_return_doy?: number | null; legend?: string;
+  day_length_doy?: number[];
+  solar_marks?: SeasonMark[];
+};
+
+export type SeasonMark = { doy: number; label: string };
+export type Seasons = {
+  dataset_id: string; available: boolean; absent_reason: string | null;
+  astronomical: SeasonMark[]; light: SeasonMark[]; water: SeasonMark[];
+  water_note: string; method: string; caveat: string;
+};
+export const getSeasons = (ds: string) => get<Seasons>(`/datasets/${ds}/seasons`);
+
 export const getWheel = (ds: string, year?: string | null) =>
   get<Wheel>(`/datasets/${ds}/wheel${year ? `?year=${encodeURIComponent(year)}` : ""}`);
 

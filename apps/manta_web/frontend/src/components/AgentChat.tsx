@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { askAgent, getAgentStatus, getAgentTools, getAsv, getEnvironment, getNetwork, runTool,
+import { askAgent, getAgentStatus, getAgentTools, getAsv, getConcepts, getEnvironment,
+         getNetwork, runTool, type Concept, type Concepts,
          type AgentAnswer, type AgentStatus, type Dataset, type EnvVariable, type Neighbor,
          type ChatTurn, type NetNode, type OwnProvider, type ToolHelp,
-         type ToolRun } from "../api";
+         type ToolRun , getApplicability, type Applicability } from "../api";
+import type { AskAssistant } from "./InfoTip";
 import { useModules } from "../modules";
 
 type Turn =
@@ -244,8 +246,9 @@ const CHIP_OFF = "border-slate-700 text-slate-400 hover:text-slate-200 hover:bor
 const FIELD = "w-full bg-slate-950 border rounded px-2 py-1 text-xs text-slate-100 outline-none " +
               "focus:border-cyan-600";
 
-export default function AgentChat({ datasets = [], datasetId, asvId, onClose }:
-  { datasets?: Dataset[]; datasetId?: string; asvId?: string; onClose: () => void }) {
+export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClose }:
+  { datasets?: Dataset[]; datasetId?: string; asvId?: string;
+    ask?: (AskAssistant & { tick: number }) | null; onClose: () => void }) {
   const modules = useModules();
   const [status, setStatus] = useState<AgentStatus | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
@@ -253,11 +256,17 @@ export default function AgentChat({ datasets = [], datasetId, asvId, onClose }:
   const [busy, setBusy] = useState(false);
   const [toolBusy, setToolBusy] = useState<string | null>(null);
   const [openEvidence, setOpenEvidence] = useState<number | null>(null);
+  const [caps, setCaps] = useState<{ ds: string; app: Applicability } | null>(null);
+  const [whyOpen, setWhyOpen] = useState<string | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
   const [model, setModel] = useState<string>(() => {
     try { return localStorage.getItem(MODEL_KEY) ?? ""; } catch { return ""; }
   });
   const endRef = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState<"chat" | "tools">("chat");
+  const [view, setView] = useState<"chat" | "tools" | "ontology">("chat");
+  const [concepts, setConcepts] = useState<Concepts | null>(null);
+  const [conceptsError, setConceptsError] = useState<string | null>(null);
+  const [conceptFilter, setConceptFilter] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const [own, setOwn] = useState<OwnProvider | null>(loadOwn);
@@ -313,9 +322,19 @@ export default function AgentChat({ datasets = [], datasetId, asvId, onClose }:
       setModel((cur) => (cur && names.includes(cur) ? cur : st.model));
     }).catch(() => setStatus(null));
     getAgentTools().then((r) => setTools(r.tools)).catch((e) => setToolsError(String(e)));
+    getConcepts().then(setConcepts).catch((e) => setConceptsError(String(e)));
   }, []);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); },
             [turns, busy, toolBusy]);
+  useEffect(() => {
+    if (!datasetId) return;
+    let alive = true;
+    setWhyOpen(null);
+    getApplicability(datasetId)
+      .then((app) => { if (alive) setCaps({ ds: datasetId, app }); })
+      .catch(() => { if (alive) setCaps(null); });
+    return () => { alive = false; };
+  }, [datasetId]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -360,7 +379,8 @@ export default function AgentChat({ datasets = [], datasetId, asvId, onClose }:
     modules: modules.all.map((m) => ({ value: String(m.louvain_label), label: m.display })),
   };
 
-  async function send(text?: string, tool?: { name: string; args: Record<string, unknown> }) {
+  async function send(text?: string, tool?: { name: string; args: Record<string, unknown> },
+                      concept?: string) {
     const q = (text ?? input).trim();
     if (!q || busy) return;
     setInput("");
@@ -374,10 +394,13 @@ export default function AgentChat({ datasets = [], datasetId, asvId, onClose }:
       for (const t of turns) {
         if (t.role === "user" && t.text.trim()) alle.push({ role: "user", content: t.text });
         else if (t.role === "agent" && t.text.trim())
-          alle.push({ role: "assistant", content: t.text });
+          alle.push({ role: "assistant", content: t.text,
+                      tools: (t.evidence ?? []).filter((e) => !e.error)
+                        .map((e) => ({ name: e.tool, arguments: e.arguments ?? {} })) });
       }
       const verlauf = alle.slice(-8);
-      const res = await askAgent(q, { dataset_id: datasetId, asv_id: asvId }, model || undefined,
+      const res = await askAgent(q, { dataset_id: datasetId, asv_id: asvId, concept },
+                                 model || undefined,
                                  viaOwn, verlauf);
       setTurns((t) => [...t, { role: "agent", text: res.answer, evidence: res.evidence,
                                model: res.model, steps: res.steps,
@@ -389,6 +412,15 @@ export default function AgentChat({ datasets = [], datasetId, asvId, onClose }:
       setBusy(false);
     }
   }
+  const sendRef = useRef(send);
+  sendRef.current = send;
+  const erledigterTick = useRef<number | null>(null);
+  useEffect(() => {
+    if (!ask?.question || erledigterTick.current === ask.tick) return;
+    erledigterTick.current = ask.tick;
+    void sendRef.current(ask.question, undefined, ask.concept);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ask?.tick]);
 
   function openToolForm(name: string, fill = false, preset?: Record<string, string>) {
     setView("tools");
@@ -437,9 +469,62 @@ export default function AgentChat({ datasets = [], datasetId, asvId, onClose }:
       ? `${model}${current?.parameter_size ? ` · ${current.parameter_size}` : ""}${current?.remote ? " · remote" : ""}`
       : status ? "no model reachable" : "…";
 
-  const quickTools = asvId ? ["asv_detail", "asv_seasonality", "neighbors"]
-    : datasetId ? ["dataset_summary", "taxa_composition", "cluster_year_overview"]
-    : ["list_datasets"];
+  const entry = useMemo(() => {
+    const passt = (n: ToolHelp["needs"]) =>
+      n === "none" || (n === "dataset" && !!datasetId) || (n === "asv" && !!asvId);
+    const rang = (n: ToolHelp["needs"]) => (n === "asv" ? 0 : n === "dataset" ? 1 : 2);
+    const alle = (tools ?? [])
+      .filter((t) => t.question && passt(t.needs))
+      .sort((a, b) => rang(a.needs) - rang(b.needs))
+      .map((t) => ({ t, a: caps && caps.ds === datasetId ? caps.app.tools[t.name] : undefined }));
+    const oben = alle.length ? rang(alle[0].t.needs) : 2;
+    return { main: alle.filter((x) => rang(x.t.needs) === oben),
+             more: alle.filter((x) => rang(x.t.needs) !== oben) };
+  }, [tools, datasetId, asvId, caps]);
+  type Zeile = { t: ToolHelp; a: Applicability["tools"][string] | undefined };
+  const frageZeile = ({ t, a }: Zeile) => a?.applicable === "no" ? (
+    <div key={t.name} data-testid="agent-question" data-tool={t.name} data-state="no"
+      className="text-xs text-slate-600 leading-snug">
+      {t.question}
+      <button data-testid="agent-question-why"
+        onClick={() => setWhyOpen(whyOpen === t.name ? null : t.name)}
+        className="ml-1.5 text-slate-500 hover:text-slate-300">
+        {whyOpen === t.name ? "not here ▾" : "not here — why?"}
+      </button>
+      {whyOpen === t.name && (
+        <div data-testid="agent-question-reason" className="mt-0.5 text-slate-400">{a.reason}</div>
+      )}
+    </div>
+  ) : (
+    <button key={t.name} data-testid="agent-question" data-tool={t.name}
+      data-state={a?.applicable ?? "yes"} disabled={busy}
+      title={a?.applicable === "subject" && a.subject_condition ? a.subject_condition : undefined}
+      onClick={() => send(t.question!)}
+      className="text-left text-xs text-slate-200 hover:text-cyan-300 hover:underline disabled:opacity-50">
+      {t.question}
+    </button>
+  );
+
+  const gruppen = useMemo(() => {
+    const alle = concepts?.concepts ?? [];
+    const f = conceptFilter.trim().toLowerCase();
+    const passt = (c: Concept) => !f || c.key.toLowerCase().includes(f)
+      || c.label.toLowerCase().includes(f) || c.definition.toLowerCase().includes(f)
+      || (c.standard_term?.curie ?? "").toLowerCase().includes(f);
+    const treffer = alle.filter(passt);
+    const titel: Record<Concept["kind"], string> = {
+      klasse: "Things in the graph", beziehung: "Links between them",
+      kennzahl: "Numbers MANTA reports", umweltgroesse: "Environmental variables",
+    };
+    const out: { title: string; items: Concept[] }[] = [
+      { title: "Mapped to a published term", items: treffer.filter((c) => c.standard_term) },
+      ...(Object.keys(titel) as Concept["kind"][]).map((k) => ({
+        title: titel[k],
+        items: treffer.filter((c) => !c.standard_term && c.kind === k),
+      })),
+    ];
+    return out.filter((g) => g.items.length > 0);
+  }, [concepts, conceptFilter]);
 
   const grouped = useMemo(() => {
     if (!tools) return [];
@@ -719,9 +804,72 @@ export default function AgentChat({ datasets = [], datasetId, asvId, onClose }:
           className={`${CHIP} ${view === "tools" ? CHIP_ON : CHIP_OFF}`}>
           Tools{tools ? ` · ${tools.length}` : ""}
         </button>
+        <button data-testid="agent-ontology-toggle"
+          onClick={() => setView(view === "ontology" ? "chat" : "ontology")}
+          className={`${CHIP} ${view === "ontology" ? CHIP_ON : CHIP_OFF}`}>
+          Ontology{concepts ? ` · ${concepts.n}` : ""}
+        </button>
       </div>
 
-      {view === "tools" ? (
+      {view === "ontology" ? (
+        <div data-testid="agent-ontology" className="flex-1 min-h-0 overflow-auto px-4 py-3 space-y-4">
+          <div className="flex items-center gap-2">
+            <input data-testid="ontology-search" value={conceptFilter} spellCheck={false}
+              onChange={(e) => setConceptFilter(e.target.value)} placeholder="Filter terms …"
+              className={`${FIELD} border-slate-700 flex-1`} />
+            <button data-testid="agent-ontology-close" onClick={() => setView("chat")}
+              className="text-xs text-slate-400 hover:text-white shrink-0">← chat</button>
+          </div>
+          <p className="text-xs text-slate-400 leading-snug">
+            What a word means here, and which published term it maps to.
+          </p>
+          {conceptsError && <div className="text-xs text-red-300">{conceptsError}</div>}
+          {concepts === null && !conceptsError && <div className="text-xs text-slate-500">loading …</div>}
+          {gruppen.map((g) => (
+            <section key={g.title}>
+              <h3 className="text-[11px] uppercase tracking-wide text-slate-500 mb-1.5">
+                {g.title} · {g.items.length}
+              </h3>
+              <div className="space-y-1.5">
+                {g.items.map((c) => (
+                  <div key={c.key} data-testid="ontology-term" data-key={c.key}
+                    className="rounded border border-slate-700 px-3 py-2">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className="text-slate-200">{c.label}</span>
+                      <code className="text-[11px] text-slate-500">{c.key}</code>
+                    </div>
+                    <div className="text-xs text-slate-400 mt-0.5 leading-snug">{c.definition}</div>
+                    {c.unit && <div className="text-[11px] text-slate-500 mt-0.5">unit: {c.unit}</div>}
+                    {c.standard_term ? (
+                      <div className="mt-1 text-[11px]" data-testid="ontology-standard-term">
+                        <span className={`px-1 rounded border mr-1 ${
+                          c.standard_term.match === "exakt" ? "border-emerald-700 text-emerald-300"
+                          : "border-slate-600 text-slate-400"}`}>{c.standard_term.match}</span>
+                        <a href={c.standard_term.uri} target="_blank" rel="noreferrer"
+                           className="text-cyan-400 hover:underline break-all">
+                          {c.standard_term.curie ?? c.standard_term.uri}
+                        </a>
+                      </div>
+                    ) : (
+                      <div className="mt-1 text-[11px] text-slate-500">
+                        no published term covers this — MANTA&rsquo;s own, defined above
+                      </div>
+                    )}
+                    {c.tools.length > 0 && (
+                      <div className="mt-0.5 text-[11px] text-slate-500">
+                        tools: {c.tools.join(", ")}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))}
+          {concepts && gruppen.length === 0 && (
+            <div className="text-xs text-slate-500">No term matches “{conceptFilter}”.</div>
+          )}
+        </div>
+      ) : view === "tools" ? (
         <div data-testid="agent-help" className="flex-1 min-h-0 overflow-auto px-4 py-3 space-y-4">
           <div className="flex items-center gap-2">
             <input data-testid="tool-search" value={toolFilter} spellCheck={false}
@@ -770,18 +918,27 @@ ollama pull ${status.configured_model ?? status.model}`}</pre>
                     {asvId ? `Ask about ${asvId}` : datasetId ? "Ask about this dataset" : "Ask about the datasets"}
                   </div>
                   <p className="text-xs text-slate-400 mt-0.5 leading-snug">
-                    Pick a tool or ask in your own words. Answers come only from audited tools.
+                    Pick a question or ask in your own words. Answers come only from audited tools.
                   </p>
                 </div>
               </div>
               <div>
-                <div className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">Start with a tool</div>
-                <div className="flex flex-wrap gap-1">
-                  {quickTools.map((n) => (
-                    <button key={n} data-testid="quick-tool" onClick={() => openToolForm(n, true)}
-                      className={`${CHIP} ${CHIP_OFF} font-mono`}>{n}</button>
-                  ))}
-                  <button onClick={() => setView("tools")} className={`${CHIP} border-transparent text-cyan-300 hover:underline`}>
+                <div data-testid="agent-entry-title"
+                  className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">
+                  {asvId ? `What I can tell you about ${asvId}`
+                    : datasetId ? "What I can tell you about this dataset" : "Where to start"}
+                </div>
+                <div className="flex flex-col gap-1" data-testid="agent-entry">
+                  {entry.main.map(frageZeile)}
+                  {entry.more.length > 0 && (
+                    <button data-testid="agent-entry-more" onClick={() => setMoreOpen((v) => !v)}
+                      className="text-left text-xs text-slate-500 hover:text-slate-300 mt-1">
+                      {moreOpen ? "▾" : "▸"} {asvId ? "about the dataset, and in general" : "in general"} ({entry.more.length})
+                    </button>
+                  )}
+                  {moreOpen && entry.more.map(frageZeile)}
+                  <button onClick={() => setView("tools")}
+                    className="text-left text-xs text-cyan-300 hover:underline mt-1">
                     all tools →
                   </button>
                 </div>

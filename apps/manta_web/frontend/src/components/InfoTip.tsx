@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
-export default function InfoTip({ title, children }: { title: string; children: React.ReactNode }) {
+export type AskAssistant = { question: string; concept: string };
+export const ASK_EVENT = "manta:ask";
+
+export default function InfoTip({ title, children, ask }:
+  { title: string; children: React.ReactNode; ask?: AskAssistant }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -70,6 +74,16 @@ export default function InfoTip({ title, children }: { title: string; children: 
               className="text-slate-500 hover:text-slate-200 leading-none">✕</button>
           </div>
           <div className="space-y-1.5">{children}</div>
+          {ask && (
+            <button data-testid="infotip-ask"
+              onClick={() => {
+                setOpen(false);
+                window.dispatchEvent(new CustomEvent<AskAssistant>(ASK_EVENT, { detail: ask }));
+              }}
+              className="mt-2 text-cyan-300 hover:underline text-left">
+              ask the assistant: “{ask.question}” →
+            </button>
+          )}
         </div>,
         document.body,
       )}

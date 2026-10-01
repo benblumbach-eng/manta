@@ -19,6 +19,7 @@ PRUNED = "PyTest_Hellinger_False_14_Pruned_CCM_CON_MAP_Network.csv"
 PV = "PyTest_Hellinger_False_14_PV_CCM_CON_MAP_Network.csv"
 FFT = "PyTest_Hellinger_False_14_FFT_Amplitudes.csv"
 ABUNDANCE = "abundance.csv"
+TAXA = "taxa_info.csv"
 ENVIRONMENT = "environment_info.csv"
 ID_MAP = "id_map.csv"
 
@@ -240,6 +241,27 @@ def read_abundance():
     return sample_ids, asv_ids, cells
 
 
+def read_taxa():
+    pfad = OTTER_TESTS / TAXA
+    if not pfad.exists():
+        return []
+    rows = []
+    with open(pfad, newline="", encoding="utf-8") as fh:
+        for r in csv.DictReader(fh, delimiter=";"):
+            aid = (r.get("ASV") or "").strip()
+            if not aid:
+                continue
+            rows.append({"id": aid,
+                         "kingdom": (r.get("Kingdom") or "").strip() or None,
+                         "phylum": (r.get("Phylum") or "").strip() or None,
+                         "class": (r.get("Class") or "").strip() or None,
+                         "order": (r.get("Order") or "").strip() or None,
+                         "family": (r.get("Family") or "").strip() or None,
+                         "genus": (r.get("Genus") or "").strip() or None,
+                         "species": (r.get("Species") or "").strip() or None})
+    return rows
+
+
 import schema_decl
 
 CONSTRAINTS = schema_decl.constraint_statements()
@@ -268,7 +290,7 @@ Q_MAX_MONTH_SET = (
     "MATCH (smp:Sample {dataset_id:$d})-[r:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) "
     "WITH a, smp, r ORDER BY r.count DESC, smp.date ASC "
     "WITH a, collect(smp.date)[0] AS peak_date "
-    "SET a.max_abundance_month = toInteger(substring(peak_date, 5, 2))")
+    "SET a.max_abundance_month = peak_date.month")
 Q_MAX_MONTH_CLEAR = (
     "MATCH (a:ASV {dataset_id:$d}) WHERE a.max_abundance_month IS NOT NULL "
     "REMOVE a.max_abundance_month")
@@ -299,10 +321,73 @@ Q_RUN_FFT = ("MATCH (r:Run {dataset_id:$d, run_id:$run}) SET r.fft_harmonics = $
 Q_SAMPLE = ("UNWIND $rows AS row MERGE (s:Sample {sample_id: row.sample_id, dataset_id:$d}) SET s += row.props "
             "WITH s MATCH (ds:Dataset {dataset_id:$d}) MERGE (s)-[:IN_DATASET]->(ds)")
 Q_ASV_LIGHT = "UNWIND $ids AS aid MERGE (a:ASV {id: aid, dataset_id:$d})"
+Q_ASV_TAXA = ("UNWIND $rows AS row MATCH (a:ASV {id: row.id, dataset_id:$d}) "
+              "SET a.kingdom = coalesce(a.kingdom, row.kingdom), "
+              "    a.phylum  = coalesce(a.phylum,  row.phylum), "
+              "    a.class   = coalesce(a.class,   row.class), "
+              "    a.order   = coalesce(a.order,   row.order), "
+              "    a.family  = coalesce(a.family,  row.family), "
+              "    a.genus   = coalesce(a.genus,   row.genus), "
+              "    a.species = coalesce(a.species, row.species)")
 Q_ASV_SEQ = ("UNWIND $rows AS row MATCH (a:ASV {id: row.id, dataset_id:$d}) "
              "SET a.sequence = row.sequence, a.seq_hash = row.seq_hash")
 Q_HAS_AB = ("UNWIND $rows AS row MATCH (s:Sample {sample_id: row.sample, dataset_id:$d}) "
             "MATCH (a:ASV {id: row.asv, dataset_id:$d}) MERGE (s)-[r:HAS_ABUNDANCE]->(a) SET r.count=row.count")
+
+Q_STATION = (
+    "MERGE (st:Station {station_id:$sid}) "
+    "SET st.name=$name, st.location=point({latitude:$lat, longitude:$lon, crs:'WGS-84'})")
+Q_AT_STATION = (
+    "MATCH (st:Station {station_id:$sid}) MATCH (s:Sample {dataset_id:$d}) "
+    "MERGE (s)-[:AT_STATION]->(st)")
+Q_AT_STATION_CLEAR = (
+    "MATCH (:Sample {dataset_id:$d})-[r:AT_STATION]->() DELETE r")
+
+
+def ingest_station(session, dataset_id, station, lat, lon) -> "str | None":
+    if not station or lat is None or lon is None:
+        session.run(Q_AT_STATION_CLEAR, d=dataset_id)
+        return None
+    sid = str(station).strip()
+    session.run(Q_STATION, sid=sid, name=sid, lat=float(lat), lon=float(lon))
+    session.run(Q_AT_STATION, sid=sid, d=dataset_id)
+    return sid
+
+
+
+def _kalendertag(sample_id: str) -> "str | None":
+    kopf = (sample_id or "")[:10]
+    try:
+        import datetime
+        datetime.date.fromisoformat(kopf)
+    except ValueError:
+        return None
+    return kopf
+
+
+def sample_zeit_props(sample_ids: list[str], time_axis: str) -> dict[str, dict]:
+    import datetime
+    aus: dict[str, dict] = {}
+    if time_axis != "dates":
+        for i, sid in enumerate(sample_ids, start=1):
+            aus[sid] = {"ordinal_index": i, "nominal_date_label": sid,
+                        "date": None, "same_day_index": None}
+        return aus
+    je_tag: dict[str, list[str]] = {}
+    for sid in sample_ids:
+        tag = _kalendertag(sid)
+        if tag is None:
+            raise SystemExit(f"ABBRUCH: time_axis='dates', aber {sid!r} ist kein ISO-Datum. "
+                             f"Entweder die Achse ist ordinal, oder die Spaltennamen sind es "
+                             f"nicht — geraten wird hier nicht.")
+        je_tag.setdefault(tag, []).append(sid)
+    for tag, sids in je_tag.items():
+        mehrfach = len(sids) > 1
+        for n, sid in enumerate(sorted(sids), start=1):
+            aus[sid] = {"date": datetime.date.fromisoformat(tag),
+                        "same_day_index": n if mehrfach else None,
+                        "ordinal_index": None, "nominal_date_label": None}
+    return aus
 
 
 def ensure_constraints(driver):
@@ -410,12 +495,15 @@ def ingest_samples(driver, dataset_id, marker=None, region=None, station=None,
     if env_ignored:
         print(f"  environment: Spalten NICHT uebernommen (MANTA kennt sie nicht): "
               f"{', '.join(env_ignored)}", flush=True)
+    zeit = sample_zeit_props(sample_ids, time_axis)
     sample_rows = []
     for sid in sample_ids:
-        props = {"date": sid}
+        props = dict(zeit[sid])
         if station is not None:
             props["station"] = station
-        props.update({k: v for k, v in env.get(sid, {}).items() if v is not None})
+        umwelt = {k: v for k, v in env.get(sid, {}).items() if v is not None}
+        props.update(umwelt)
+        props["depth_m"] = umwelt.get("depth")
         sample_rows.append({"sample_id": sid, "props": props})
     with driver.session() as s:
         s.run(Q_DATASET, d=dataset_id, marker=marker, region=region,
@@ -424,11 +512,17 @@ def ingest_samples(driver, dataset_id, marker=None, region=None, station=None,
         s.run("MATCH (d:Dataset {dataset_id:$d}) SET d.env_ignored_columns=$cols",
               d=dataset_id, cols=env_ignored)
         s.run(Q_ASV_LIGHT, ids=asv_ids, d=dataset_id)
+        taxa = [t for t in read_taxa() if t["id"] in set(asv_ids)]
+        if taxa:
+            s.run(Q_ASV_TAXA, rows=taxa, d=dataset_id)
+        print(f"  taxonomie: {len(taxa)} von {len(asv_ids)} ASVs aus {TAXA}", flush=True)
         id_map = read_id_map()
         if id_map:
             s.run(Q_ASV_SEQ, d=dataset_id,
                   rows=[{"id": k, **v} for k, v in id_map.items() if k in set(asv_ids)])
         s.run(Q_SAMPLE, rows=sample_rows, d=dataset_id)
+        st = ingest_station(s, dataset_id, station, lat, lon)
+        print(f"  station: {st if st else 'keine (ohne Namen oder ohne Koordinate)'}", flush=True)
         for i in range(0, len(cells), HAS_ABUNDANCE_BATCH):
             s.run(Q_HAS_AB, rows=cells[i:i + HAS_ABUNDANCE_BATCH], d=dataset_id)
         s.run(Q_VALUE_KIND, d=dataset_id)

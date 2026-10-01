@@ -42,8 +42,8 @@ def main() -> int:
     env_props = ", ".join(f"s.`{k}` AS `{k}`" for k in ENV_KEYS)
     samples = q(
         f"MATCH (s:Sample {{dataset_id:$dataset}}) "
-        f"RETURN s.sample_id AS sample, s.date AS date, {env_props} "
-        f"ORDER BY s.date, s.sample_id"
+        f"RETURN s.sample_id AS sample, toString(s.date) AS date, {env_props} "
+        f"ORDER BY date, sample"
     )
     if level == "asv":
         asvs = [r["asv"] for r in q(

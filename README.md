@@ -21,6 +21,7 @@ Explore Marine Amplicon Time-series locally in your browser.
 [Features](#features) ·
 [Workflow](#workflow) ·
 [Installation](#installation) ·
+[Updating](#updating) ·
 [Importing data](#importing-data) ·
 [Troubleshooting](#troubleshooting) ·
 [Sources and licenses](#sources-and-licenses)
@@ -251,22 +252,6 @@ set -a && . ./.env && set +a &&
 Both addresses read the same graph: what you import on :5173 appears on :8080 as well. Only the
 import needs :5173, because the analysis chain runs on your machine, not in the container.
 
-To bring in a newer version later:
-
-```bash
-cd ~/manta &&
-git pull &&
-git submodule update --init &&
-uv pip install -p apps/manta_web/backend/.venv/bin/python -r apps/manta_web/backend/requirements.txt &&
-(cd apps/manta_web/frontend && npm ci) &&
-bash apps/manta_web/dev.sh stop &&
-bash apps/manta_web/dev.sh start
-```
-
-The two install steps are there because a new version may bring new dependencies; both do nothing
-when nothing changed. If step 1 runs as well, `cd ~/manta/deploy && docker compose up -d --build`
-rebuilds it.
-
 To start and stop it again later, from the repository root:
 
 ```bash
@@ -304,6 +289,30 @@ Rscript tools/ela/setup_r.R
 > Taxonomic names need a [PR2 file](https://github.com/pr2database/pr2database/releases) in DADA2
 > format, passed as `MANTA_PR2=<file>`; without it the ASVs stay `unassigned`. On macOS, run
 > `xcode-select --install` if an R package fails to compile.
+
+## Updating
+
+One command, from the repository root:
+
+```bash
+cd ~/manta && bash update.sh
+```
+
+It fetches, fast-forwards, updates the submodule, reinstalls **only** what changed, and restarts
+whatever is running — the container stack, the local one, or both. With uncommitted changes in
+the clone it stops and says so instead of overwriting them.
+
+To let a machine look by itself, once a week:
+
+```bash
+(crontab -l 2>/dev/null; echo "0 4 * * 1 cd ~/manta && bash update.sh >> ~/manta-update.log 2>&1") | crontab -
+```
+
+`bash update.sh --check` only looks: it says whether a newer version exists and returns `10` if
+one does, `0` if you are up to date — enough for a monitor or a CI job to act on.
+
+Your data stay where they are. The update touches the code, never the database: both the
+container volume and a local Neo4j keep every dataset you imported.
 
 ## Importing data
 
@@ -425,6 +434,7 @@ is the key — search this table for the text you see.
 ## Project structure
 
 ```
+update.sh           fetch a newer version and restart what is running
 apps/manta_web/      FastAPI backend and React interface
 apps/manta_mcp/      assistant tools, also as an MCP server
 tools/              converter, ingest, OTTER runner, energy landscape, bathymetry, functions

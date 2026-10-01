@@ -505,7 +505,8 @@ export default function NetworkSidebar(p: SidebarProps) {
             {net?.traits?.available ? (
               [...p.functionClasses.map((c) => ({ ...c, key: c.label })),
                 { label: "not annotated", key: "", color: "#94a3b8",
-                  n: net.nodes.filter((n) => !n.trait_group).length }].map((c) => {
+                  n: net.nodes.filter((n) => !n.trait_group).length }]
+                .filter((c) => c.key !== "" || c.n > 0).map((c) => {
                 const on = filters.fn === c.key;
                 return (
                   <button key={c.key || "__none"} data-testid="filter-function" data-label={c.key}

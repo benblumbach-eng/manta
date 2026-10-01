@@ -13,11 +13,13 @@ from neo4j import GraphDatabase
 from neo4j.exceptions import Neo4jError
 
 import access
+import anwendbarkeit
+import begriffe
 import semantics
 import statistik
 
 SCHEMA_VERSION = "manta-graph-1"
-TOOLS_VERSION = "0.8.0"
+TOOLS_VERSION = "0.12.0"
 MAX_LIMIT = 500
 MAX_LIMIT_TAXA = 100
 
@@ -183,7 +185,7 @@ def dataset_summary(dataset_id: str) -> dict:
     q = """
     MATCH (d:Dataset {dataset_id:$d})
     OPTIONAL MATCH (s:Sample {dataset_id:$d})
-    WITH d, count(s) AS n_samples, min(s.date) AS first_date, max(s.date) AS last_date
+    WITH d, count(s) AS n_samples, toString(min(s.date)) AS first_date, toString(max(s.date)) AS last_date
     RETURN d.dataset_id AS dataset_id, d.region AS region, d.marker AS marker,
            n_samples, first_date, last_date,
            d.source_doi AS source_doi, d.citation AS citation,
@@ -302,8 +304,8 @@ def asv_abundance_series(dataset_id: str, asv_id: str) -> dict:
     _require_dataset(dataset_id)
     q = """
     MATCH (s:Sample {dataset_id:$d})-[r:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d, id:$id})
-    RETURN s.sample_id AS sample_id, s.date AS date, r.count AS count
-    ORDER BY s.date, s.sample_id
+    RETURN s.sample_id AS sample_id, toString(s.date) AS date, r.count AS count
+    ORDER BY date, sample_id
     """
     rows = _run(q, d=dataset_id, id=asv_id)
     axis = semantics.time_axis(_q, dataset_id)
@@ -553,7 +555,7 @@ def cluster_interannual_variability(dataset_id: str, metric: str = "jaccard") ->
     data = semantics.interannual_variability(_run, dataset_id, metric)
     q = ("MATCH (s:Sample {dataset_id:$d})-[r:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) "
          "WHERE a.louvain_label IS NOT NULL AND r.count > 0 "
-         "RETURN s.sample_id AS sample, s.date AS date, a.louvain_label AS cluster, a.id AS asv, "
+         "RETURN s.sample_id AS sample, toString(s.date) AS date, a.louvain_label AS cluster, a.id AS asv, "
          "r.count AS count ORDER BY a.louvain_label, s.sample_id, a.id")
     data["value_declaration"] = semantics.value_declaration(
         _q, dataset_id, "pairwise between samples of different years, computed within samples")
@@ -782,12 +784,14 @@ def summarize_by_taxon(dataset_id: str, rank: str = "genus", name: str | None = 
     if unassigned_row is not None:
         benannt.append(unassigned_row)
 
+    n_asv_total = sum(r["n_asv"] for r in benannt)
     out = {
+        "statement": semantics.taxon_statement(rank, name, group, benannt, n_asv_total),
+        "n_asv_total": n_asv_total,
         "rank": rank,
         "name": name,
         "grouped_by": group,
         "rows": benannt,
-        "n_asv_total": sum(r["n_asv"] for r in benannt),
         "n_samples_total": n_samples_total,
         "value_declaration": {
             **semantics.value_declaration(_q, dataset_id, semantics.frame_summed(_q, dataset_id)),
@@ -849,6 +853,10 @@ def environment(dataset_id: str) -> dict:
         ],
         "not_measured": [a["label"] for a in env["absent"]],
     }
+    if env.get("sampler"):
+        sp = env["sampler"]
+        out["sampler"] = {k: sp[k] for k in ("statement", "n_within", "n_below", "n_unknown",
+                                             "n_total", "note")}
     if env["time_axis"] != semantics.TIME_AXIS_DATES:
         out["time_axis_note"] = ("No real sampling dates — no monthly or seasonal statement is "
                                  "possible for this dataset.")
@@ -1027,17 +1035,29 @@ def _stat_caveats(dataset_id: str) -> list[str]:
     return c
 
 
-_NO_DATES = ("This dataset has NO real time axis (sample order only) — calendar months and "
-             "years do not exist here, so this test cannot be run.")
+_NO_DATES = semantics.NO_DATES
+
+
+_REQUIRES: dict[str, list[str]] = {
+    "seasonality_test": ["time_axis=dates"],
+    "trend_test": ["time_axis=dates"],
+    "group_comparison_test": ["time_axis=dates"],
+    "pair_proportionality": ["value_kind=reads"],
+}
+
+
+def _requires(name: str) -> list[str]:
+    return _REQUIRES.get(name, [])
 
 
 def seasonality_test(dataset_id: str, asv_id: str | None = None, cluster: int | None = None) -> dict:
     _require_dataset(dataset_id)
     rows, subject = _stat_subject(dataset_id, asv_id, cluster)
     params = {"dataset_id": dataset_id, **subject}
-    if semantics.time_axis(_q, dataset_id) != semantics.TIME_AXIS_DATES:
+    ok, grund = anwendbarkeit.pruefen(_q, dataset_id, _requires("seasonality_test"))
+    if not ok:
         return _envelope("seasonality_test", "semantics.series (ordinal)", params,
-                         {**subject, "result": None, "note": _NO_DATES}, len(rows))
+                         {**subject, "result": None, "note": grund}, len(rows))
     data = {**subject, "quantity": "share", "result": statistik.seasonality_test(rows, "share"),
             "caveats": _stat_caveats(dataset_id)}
     return _envelope("seasonality_test", "semantics.series + statistik.seasonality_test",
@@ -1048,9 +1068,10 @@ def trend_test(dataset_id: str, asv_id: str | None = None, cluster: int | None =
     _require_dataset(dataset_id)
     rows, subject = _stat_subject(dataset_id, asv_id, cluster)
     params = {"dataset_id": dataset_id, **subject}
-    if semantics.time_axis(_q, dataset_id) != semantics.TIME_AXIS_DATES:
+    ok, grund = anwendbarkeit.pruefen(_q, dataset_id, _requires("trend_test"))
+    if not ok:
         return _envelope("trend_test", "semantics.series (ordinal)", params,
-                         {**subject, "result": None, "note": _NO_DATES}, len(rows))
+                         {**subject, "result": None, "note": grund}, len(rows))
     data = {**subject, "quantity": "share", "result": statistik.trend_test(rows, "share"),
             "caveats": _stat_caveats(dataset_id)}
     return _envelope("trend_test", "semantics.series + statistik.trend_test", params, data, len(rows))
@@ -1069,9 +1090,10 @@ def pair_proportionality(dataset_id: str, asv_a: str, asv_b: str) -> dict:
                         "whether their RATIO stays constant across samples. Different "
                         "questions — agreement is not required."}
 
-    if semantics.value_kind(_q, dataset_id) == "transformed":
+    ok, grund = anwendbarkeit.pruefen(_q, dataset_id, _requires("pair_proportionality"))
+    if not ok:
         data = {"asv_a": asv_a, "asv_b": asv_b, "result": None,
-                "absent_reason": statistik.REFUSE_PROPORTIONALITY_TRANSFORMED,
+                "absent_reason": grund,
                 "con_link": con_link, "caveats": _stat_caveats(dataset_id)}
         return _envelope("pair_proportionality", "semantics.series x2 (verweigert: transformed)",
                          {"dataset_id": dataset_id, "asv_a": asv_a, "asv_b": asv_b},
@@ -1098,9 +1120,10 @@ def group_comparison_test(dataset_id: str, by: str, group_a: list[int], group_b:
     _require_dataset(dataset_id)
     rows, subject = _stat_subject(dataset_id, asv_id, cluster)
     params = {"dataset_id": dataset_id, **subject, "by": by, "group_a": list(group_a), "group_b": list(group_b)}
-    if semantics.time_axis(_q, dataset_id) != semantics.TIME_AXIS_DATES:
+    ok, grund = anwendbarkeit.pruefen(_q, dataset_id, _requires("group_comparison_test"))
+    if not ok:
         return _envelope("group_comparison_test", "semantics.series (ordinal)", params,
-                         {**subject, "result": None, "note": _NO_DATES}, len(rows))
+                         {**subject, "result": None, "note": grund}, len(rows))
     try:
         result = statistik.group_comparison(rows, "share", by, [int(g) for g in group_a],
                                             [int(g) for g in group_b])
@@ -1150,6 +1173,8 @@ def cluster_env_links(dataset_id: str, cluster: int) -> dict:
          "WHERE a.louvain_label = $l RETURN v.name, count(a), avg(c.r), collect(a.id) ORDER BY count(a) DESC, v.name")
     data = {"cluster": cluster, "cluster_display": semantics.module_label(_q, dataset_id, cluster)["display"],
             **ce, "caveats": _stat_caveats(dataset_id) + [semantics.ENV_LINK_NOTE]}
+    if not ce.get("run", {}).get("available", True):
+        data["absent_reason"] = ce["run"]["absent_reason"]
     return _envelope("cluster_env_links", q, {"dataset_id": dataset_id, "cluster": cluster}, data, len(ce["links"]))
 
 
@@ -1176,3 +1201,47 @@ def environment_correlation(dataset_id: str, asv_id: str, variable: str) -> dict
     return _envelope("environment_correlation", "semantics.series + Sample env + statistik.rank_correlation",
                      {"dataset_id": dataset_id, "asv_id": asv_id, "variable": variable}, data,
                      result.get("n_samples") or 0)
+
+
+
+def describe_concepts(kind: str | None = None) -> dict:
+    try:
+        eintraege = begriffe.alle(kind)
+    except ValueError as e:
+        raise ToolError(str(e)) from e
+    data = {"concepts_version": begriffe.VERSION, "kind": kind, "kinds": list(begriffe.KINDS),
+            "n": len(eintraege), "concepts": eintraege}
+    if begriffe.TERMS_NOTE:
+        data["note"] = begriffe.TERMS_NOTE
+    return _envelope("describe_concepts", "begriffe.alle (no database query)",
+                     {"kind": kind}, data, len(eintraege))
+
+
+def describe_metric(key: str) -> dict:
+    b = begriffe.eines(key)
+    if b is None:
+        raise ToolError(f"unknown concept {key!r}. Use describe_concepts to see all "
+                        f"{len(begriffe.BEGRIFFE)} of them.")
+    data = {"concepts_version": begriffe.VERSION, **b}
+    if b["kind"] != "kennzahl":
+        data["note"] = (f"This is a {b['kind']}, not a metric — it has no formula and no unit. "
+                        f"The definition below is the whole answer.")
+    return _envelope("describe_metric", "begriffe.eines (no database query)", {"key": key},
+                     data, 1)
+
+
+def dataset_capabilities(dataset_id: str) -> dict:
+    _require_dataset(dataset_id)
+    import registry as _registry
+    app = anwendbarkeit.applicability(_q, dataset_id, _registry.TOOL_SPECS)
+    zeit = anwendbarkeit.zeitstruktur(_q, dataset_id)
+    bedingungen = {}
+    for name, pruefer in sorted(anwendbarkeit.BEDINGUNGEN.items()):
+        ok, grund = pruefer(_q, dataset_id)
+        bedingungen[name] = {"met": ok, "reason": grund}
+    data = {"dataset_id": dataset_id, "conditions": bedingungen, "time_structure": zeit,
+            "tools": app,
+            "n_applicable": sum(1 for v in app.values() if v["applicable"] != anwendbarkeit.NEIN),
+            "n_tools": len(app)}
+    return _envelope("dataset_capabilities", "anwendbarkeit.applicability + zeitstruktur",
+                     {"dataset_id": dataset_id}, data, len(app))

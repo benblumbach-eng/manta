@@ -14,6 +14,7 @@ import ElaPanel from "./components/ElaPanel";
 import ComparePanel from "./components/ComparePanel";
 import TaxonPanel from "./components/TaxonPanel";
 import AgentChat from "./components/AgentChat";
+import { ASK_EVENT, type AskAssistant } from "./components/InfoTip";
 import AssistantCharacter from "./components/AssistantCharacter";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { ModulesProvider } from "./modules";
@@ -25,7 +26,7 @@ export type EdgeRef = { source: string; target: string; type: "con" | "ccm" };
 type RightPanel =
   | { kind: "asv"; id: string }
   | { kind: "edge"; edge: EdgeRef }
-  | { kind: "environment" }
+  | { kind: "environment"; focus?: string }
   | { kind: "starred" }
   | { kind: "taxon"; asvId: string }
   | { kind: "wheel" }
@@ -52,6 +53,17 @@ export default function App() {
     offen.find((x) => x.kind === kind) as Extract<RightPanel, { kind: K }> | undefined;
   const [error, setError] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
+  const [pendingAsk, setPendingAsk] = useState<(AskAssistant & { tick: number }) | null>(null);
+  useEffect(() => {
+    const auf = (e: Event) => {
+      const d = (e as CustomEvent<AskAssistant>).detail;
+      if (!d?.question) return;
+      setChatOpen(true);
+      setPendingAsk({ ...d, tick: Date.now() });
+    };
+    window.addEventListener(ASK_EVENT, auf);
+    return () => window.removeEventListener(ASK_EVENT, auf);
+  }, []);
   const [me, setMe] = useState<Me | null>(null);
   const [theme, setTheme] = useState<Theme>(() => {
     try { return localStorage.getItem("manta-theme") === "light" ? "light" : "dark"; }
@@ -225,19 +237,19 @@ export default function App() {
         )}
 
         {me.username && !chatOpen && (
-          <AssistantCharacter offset={Math.max(0, ...offen.map((o) => PANEL_WIDTH[o.kind] ?? 0))}
-            onClick={() => setChatOpen(true)} />
+          <AssistantCharacter onClick={() => setChatOpen(true)} />
         )}
 
         <PanelFrame id="agent" defaultWidth={PANEL_WIDTH.agent} hidden={!chatOpen} testid="agent-frame">
           <ErrorBoundary label="the assistant"><AgentChat datasets={datasets} datasetId={selected?.dataset_id}
-            asvId={asvId} onClose={() => setChatOpen(false)} /></ErrorBoundary>
+            asvId={asvId} ask={pendingAsk} onClose={() => setChatOpen(false)} /></ErrorBoundary>
         </PanelFrame>
 
         {selected && finde("asv") && (
           <PanelFrame id="asv" defaultWidth={PANEL_WIDTH.asv}><ErrorBoundary label="the ASV detail"><AsvDrawer datasetId={selected.dataset_id} asvId={finde("asv")!.id} onClose={() => schliesse("asv")}
             onOpenAsv={openAsv} onOpenEdge={openEdge}
             onOpenTaxon={(id) => setRight({ kind: "taxon", asvId: id })}
+            onOpenCluster={wishCluster}
             onCompare={(id) => setRight({ kind: "compare", seed: id })} /></ErrorBoundary></PanelFrame>
         )}
         {selected && finde("edge") && (
@@ -246,11 +258,11 @@ export default function App() {
             onOpenAsv={openAsv} /></ErrorBoundary></PanelFrame>
         )}
         {selected && istOffen("environment") && (
-          <PanelFrame id="environment" defaultWidth={PANEL_WIDTH.environment}><ErrorBoundary label="the environment panel"><EnvironmentPanel datasetId={selected.dataset_id} onClose={() => schliesse("environment")} /></ErrorBoundary></PanelFrame>
+          <PanelFrame id="environment" defaultWidth={PANEL_WIDTH.environment}><ErrorBoundary label="the environment panel"><EnvironmentPanel datasetId={selected.dataset_id} focus={finde("environment")?.focus} onClose={() => schliesse("environment")} /></ErrorBoundary></PanelFrame>
         )}
         {selected && istOffen("wheel") && (
           <PanelFrame id="wheel" defaultWidth={PANEL_WIDTH.wheel}><ErrorBoundary label="the year wheel">
-            <WheelPanel datasetId={selected.dataset_id} onClose={() => schliesse("wheel")}
+            <WheelPanel onOpenEnvironment={(key) => setRight({ kind: "environment", focus: key })} datasetId={selected.dataset_id} onClose={() => schliesse("wheel")}
               onOpenCluster={wishCluster} />
           </ErrorBoundary></PanelFrame>
         )}

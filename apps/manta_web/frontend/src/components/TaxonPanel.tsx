@@ -19,10 +19,6 @@ export default function TaxonPanel({ datasetId, asvId, onClose, onOpenAsv }: {
     getTaxon(datasetId, asvId).then(setD).catch((e) => setErr(String(e.message ?? e)));
   }, [datasetId, asvId]);
 
-  const reihe = d?.series ?? [];
-  const werte = reihe.map((r) => (d?.series_absent_reason ? r.n_members_present : (r.share ?? 0)));
-  const max = Math.max(...werte, 1e-12);
-
   return (
     <div className="h-full overflow-auto"
       data-testid="taxon-panel">
@@ -58,33 +54,6 @@ export default function TaxonPanel({ datasetId, asvId, onClose, onOpenAsv }: {
             {["kingdom", "phylum", "class", "order", "family", "genus", "species"]
               .map((r) => d.path[r]).filter(Boolean).join(" › ")}
           </div>
-
-          <section data-testid="taxon-series">
-            {d.series_absent_reason ? (
-              <p className="text-xs text-amber-400" data-testid="taxon-series-absent">
-                {d.series_absent_reason}
-              </p>
-            ) : (
-              <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                Summed share per sample
-              </div>
-            )}
-            <svg width="460" height="90" role="img" className="mt-1"
-              aria-label="the summed series of this taxon">
-              {reihe.map((r, i) => {
-                const h = (werte[i] / max) * 74;
-                const x = reihe.length > 1 ? (i / (reihe.length - 1)) * 452 : 0;
-                return <rect key={r.sample} x={x} y={80 - h} width={Math.max(1, 452 / Math.max(1, reihe.length) - 1)}
-                  height={Math.max(0, h)} fill={d.series_absent_reason ? "#94a3b8" : "#22d3ee"} />;
-              })}
-            </svg>
-            <div className="text-[10px] text-slate-500">
-              {d.series_absent_reason
-                ? "members with a detection per sample"
-                : `${(100 * max).toFixed(2)} % at the largest sample`}
-              {d.time_axis !== "dates" && " · sample order only — no sampling dates"}
-            </div>
-          </section>
 
           <section>
             <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">Members</div>

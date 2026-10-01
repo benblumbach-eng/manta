@@ -10,6 +10,7 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "manta_mcp"))
 
+import begriffe
 import grounding
 import registry
 
@@ -138,6 +139,10 @@ The difference, in one example:
 7. {registry.RULE_NO_DIVERSITY}
 8. Interpretation must FOLLOW from what the tools returned: no comparison value of your own, and
    no cause, mechanism or ecological role. Rules 4 and 5 outrank the answer form above.
+9. Before you explain or interpret a metric by name, call describe_metric(key) and use the
+   definition as returned. What the open dataset cannot do is already listed at the end of this
+   prompt — that list IS the result of dataset_capabilities, so do not call it for that dataset;
+   call it only for a DIFFERENT dataset. Its reasons are the answer: give them as they stand.
 </hard_rules>
 
 <restrictions>
@@ -301,7 +306,9 @@ def tool_help() -> list[dict]:
                                         for p in params])
         desc = f.get("description") or ""
         summary = desc.split(" RULES for using this result", 1)[0].strip()
-        out.append({"name": f["name"], "usage": usage, "summary": summary, "params": params})
+        needs, question = registry.QUESTIONS.get(f["name"]) or (None, None)
+        out.append({"name": f["name"], "usage": usage, "summary": summary, "params": params,
+                    "question": question, "needs": needs})
     return out
 
 
@@ -354,7 +361,8 @@ def _safe_label(text) -> str:
     return s or "(ohne Bezeichnung)"
 
 
-def _context_block(dataset_id: str | None, asv_id: str | None, cluster: int | None) -> str:
+def _context_block(dataset_id: str | None, asv_id: str | None, cluster: int | None,
+                   concept: str | None = None) -> str:
     lines = []
     if dataset_id:
         lines.append(f"- dataset: '{dataset_id}' (use it unless the question asks for another one)")
@@ -363,9 +371,69 @@ def _context_block(dataset_id: str | None, asv_id: str | None, cluster: int | No
                      f"\"the organism\" refer to this one.")
     if cluster is not None:
         lines.append(f"- open cluster: {cluster}. \"this cluster\" refers to it.")
+    b = begriffe.eines(concept) if isinstance(concept, str) and concept else None
+    if b:
+        lines.append(f"- the question is about the concept '{b['key']}' ({b['label']}). Call "
+                     f"describe_metric('{b['key']}') and answer from its definition, formula "
+                     f"and caveats — in plain words, for someone who does not know the term.")
     if not lines:
         return ""
     return "\n\nWHAT THE USER IS CURRENTLY LOOKING AT:\n" + "\n".join(lines)
+
+
+def meaning_block() -> str:
+    def zeilen(kind: str) -> str:
+        return "\n".join(f"- {b['label']}: {b['definition']}" for b in begriffe.alle(kind))
+    umwelt = "\n".join(
+        f"- {b['key']} ({b['label']}{', ' + b['unit'] if b.get('unit') else ''}): {b['definition']}"
+        for b in begriffe.alle("umweltgroesse"))
+    kennzahlen = ", ".join(begriffe.schluessel("kennzahl"))
+    return (
+        "\n\n<meaning>\n"
+        "How this data is to be read. These are the definitions every tool uses; they are not "
+        "yours to widen.\n\n"
+        f"What the nodes are:\n{zeilen('klasse')}\n\n"
+        f"How they relate:\n{zeilen('beziehung')}\n\n"
+        f"Environmental variables (measured alongside the samples, never derived from the "
+        f"sequences):\n{umwelt}\n\n"
+        f"Metrics — before you explain or interpret one of these by name, call "
+        f"describe_metric(key) and use its definition as returned: {kennzahlen}\n"
+        "</meaning>")
+
+
+def _capabilities_block(dataset_id: str | None) -> str:
+    if not dataset_id:
+        return ""
+    try:
+        caps = registry.call("dataset_capabilities", {"dataset_id": dataset_id})
+    except Exception:
+        return ""
+    if caps.get("error") or not caps.get("data"):
+        return ""
+    d = caps["data"]
+    z = d.get("time_structure") or {}
+    lines = []
+    if z.get("time_axis") == "dates" and z.get("first"):
+        jahre = len(z.get("years") or [])
+        lines.append(f"- time: {z.get('n_samples')} dated samples from {z['first']} to "
+                     f"{z['last']} ({jahre} calendar years), median gap "
+                     f"{z.get('median_gap_days')} days, largest {z.get('largest_gap_days')} days")
+    elif z.get("n_samples") is not None:
+        lines.append(f"- time: {z['n_samples']} samples in sampling order only — no dates, "
+                     f"no seasons, no years")
+    nein = [(n, v) for n, v in d["tools"].items() if v["applicable"] == "no"]
+    subj = [(n, v) for n, v in d["tools"].items() if v["applicable"] == "subject"]
+    if nein:
+        lines.append("- not available here (the tool will refuse with exactly this reason):")
+        lines += [f"  - {n}: {v['reason']}" for n, v in nein]
+    if subj:
+        lines.append("- available, but only for a subject that meets the condition:")
+        lines += [f"  - {n}: {v['subject_condition']}" for n, v in subj]
+    if not lines:
+        return ""
+    return ("\n\nWHAT THIS DATASET CANNOT DO — this is the result of dataset_capabilities for "
+            f"'{dataset_id}', already retrieved; do not call dataset_capabilities for it again:\n"
+            + "\n".join(lines))
 
 
 def _known_datasets() -> str:
@@ -400,17 +468,62 @@ def _verlauf(history: list[dict] | None) -> list[dict]:
     return out
 
 
+MAX_RECAP_QUESTIONS = 40
+MAX_RECAP_ANSWER_CHARS = 6000
+
+
+def _recap(history: list[dict] | None) -> str:
+    if not history:
+        return ""
+    fragen: list[str] = []
+    werkzeuge: list[str] = []
+    letzte = ""
+    for zug in history:
+        if not isinstance(zug, dict):
+            continue
+        rolle, text = zug.get("role"), (zug.get("content") or "").strip()
+        if rolle == "user" and text:
+            fragen.append(text)
+        elif rolle == "assistant":
+            if text:
+                letzte = text
+            tools = zug.get("tools")
+            for t in (tools if isinstance(tools, list) else []):
+                if not isinstance(t, dict) or not isinstance(t.get("name"), str):
+                    continue
+                args = t.get("arguments") if isinstance(t.get("arguments"), dict) else {}
+                werkzeuge.append(f"{t['name']}(" + ", ".join(
+                    f"{k}={v!r}" for k, v in args.items()) + ")")
+    if not fragen and not letzte:
+        return ""
+    teile = ["Recap of this conversation so far (internal note, not evidence: nothing below "
+             "came from a tool in THIS turn, so no number here may be repeated as a result):"]
+    if fragen:
+        teile.append("Questions asked, in order:\n" + "\n".join(
+            f"{i}. {q}" for i, q in enumerate(fragen[-MAX_RECAP_QUESTIONS:], 1)))
+    if werkzeuge:
+        seen: dict[str, None] = dict.fromkeys(werkzeuge)
+        teile.append("Tools already called: " + "; ".join(seen))
+    if letzte:
+        teile.append("Last finding stated: " + letzte[:MAX_RECAP_ANSWER_CHARS])
+    return "\n\n".join(teile)
+
+
 def run(question: str, dataset_id: str | None = None, model: str | None = None,
         asv_id: str | None = None, cluster: int | None = None,
         provider: SessionProvider | None = None,
-        history: list[dict] | None = None) -> dict:
+        history: list[dict] | None = None, concept: str | None = None) -> dict:
     model = provider.model if provider is not None else (model or default_model())
-    system = SYSTEM_PROMPT + _known_datasets() + _context_block(dataset_id, asv_id, cluster)
+    system = (SYSTEM_PROMPT + meaning_block() + _known_datasets()
+              + _context_block(dataset_id, asv_id, cluster, concept)
+              + _capabilities_block(dataset_id))
 
+    recap = _recap(history)
+    frage = f"{recap}\n\n---\n\nThe question now: {question}" if recap else question
     messages: list[dict] = [
         {"role": "system", "content": system},
         *_verlauf(history),
-        {"role": "user", "content": question},
+        {"role": "user", "content": frage},
     ]
     evidence: list[dict] = []
     tool_texts: list[str] = []

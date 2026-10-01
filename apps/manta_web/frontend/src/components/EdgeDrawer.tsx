@@ -44,7 +44,8 @@ export default function EdgeDrawer({ datasetId, source, target, type, onClose, o
             </span>
           )}
           {d && (
-            <InfoTip title="Definitions of this run">
+            <InfoTip title="Definitions of this run"
+              ask={{ concept: "CO_OCCURS_WITH", question: "What does a co-occurrence link mean here, and what does it not?" }}>
               {d.decision_note && <p data-testid="edge-decision-note">{d.decision_note}</p>}
               <p>Thresholds of this run: {d.thresholds.recorded
                 ? <>Pearson ≥ {d.thresholds.con_tr} · p &lt; {d.thresholds.con_alpha}{" "}
