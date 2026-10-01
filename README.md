@@ -127,7 +127,9 @@ Requirements:
 
 - [Docker](https://docs.docker.com/get-started/get-docker/) with Compose
 - [Git](https://git-scm.com/downloads)
-- Windows: virtualisation enabled in the BIOS/UEFI and WSL 2 (`wsl --install`)
+- Windows: virtualisation enabled in the BIOS/UEFI, and WSL 2 — `wsl --install` in PowerShell,
+  **then restart the PC**. The installation only finishes after that reboot; before it, there is
+  no Ubuntu and Docker Desktop will not start.
 
 ```bash
 git clone https://github.com/benblumbach-eng/manta.git
@@ -205,8 +207,13 @@ Step 2 needs Linux. Windows has it built in. In **PowerShell**, once:
 wsl --install
 ```
 
-Restart, then open **Ubuntu** from the start menu. The prompt reads `you@machine:~$` — everything
-from here on happens in that window, never in PowerShell. Install the tools and get MANTA:
+**Restart the PC.** `wsl --install` does not finish on its own: before the reboot there is no
+Ubuntu to open, and the command looks as if it had done nothing.
+
+Then open **Ubuntu** from the start menu. The first start asks for a user name and a password of
+its own — they belong to Linux, not to your Windows account. The prompt reads `you@machine:~$` —
+everything from here on happens in that window, never in PowerShell. Install the tools and get
+MANTA:
 
 ```bash
 sudo apt update && sudo apt install -y curl git unzip
@@ -455,6 +462,7 @@ is the key — search this table for the text you see.
 |---|---|---|
 | `invalid path 'lutra/con.py'` | OTTER holds a file named `con.py`, and `CON` is a reserved device name on Windows. Also hits a clone under `/mnt/c`. | Clone into the Linux file system: `~/manta` |
 | `Das Token "&&" ist … kein gültiges Anweisungstrennzeichen` | The commands are running in PowerShell | Use the Ubuntu shell of WSL 2 |
+| `wsl --install` ran, but there is no Ubuntu in the start menu | WSL finishes installing only after a restart | Restart the PC, then open Ubuntu once |
 | `uv: command not found` right after installing uv | New `PATH` not in the open shell — or uv was installed on Windows, not inside WSL | `export PATH="$HOME/.local/bin:$PATH"`, or install inside Ubuntu |
 | `detected dubious ownership in repository` | The clone lies on the Windows disk and belongs to the Windows user | Clone into `~/manta` instead |
 | `EACCES: permission denied, mkdir … node_modules` | `npm install` was run with `sudo` once; the directory now belongs to root | `sudo chown -R $USER:$USER ~/manta` and never use sudo with npm |
