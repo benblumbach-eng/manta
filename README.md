@@ -24,6 +24,7 @@ Explore Marine Amplicon Time-series locally in your browser.
 [Updating](#updating) ·
 [Importing data](#importing-data) ·
 [Troubleshooting](#troubleshooting) ·
+[Citing MANTA](#citing-manta) ·
 [Sources and licenses](#sources-and-licenses)
 
 <br>
@@ -123,13 +124,52 @@ flowchart LR
 
 ### Step 1 — Run MANTA
 
-Requirements:
+**Requirements** — each with the command that proves it is there:
 
-- [Docker](https://docs.docker.com/get-started/get-docker/) with Compose
-- [Git](https://git-scm.com/downloads)
-- Windows: virtualisation enabled in the BIOS/UEFI, and WSL 2 — `wsl --install` in PowerShell,
-  **then restart the PC**. The installation only finishes after that reboot; before it, there is
-  no Ubuntu and Docker Desktop will not start.
+| | Check |
+|---|---|
+| [Docker](https://docs.docker.com/get-started/get-docker/) with Compose | `docker compose version` |
+| [Git](https://git-scm.com/downloads) | `git --version` |
+| 8 GB RAM, 10 GB free disk | 4 GB is enough without the assistant |
+| **Windows only:** WSL 2 and hardware virtualisation | see the box below — do it first |
+
+<details>
+<summary><b>Windows: two things to do once, before anything else</b></summary>
+
+<br>
+
+**1 · Hardware virtualisation has to be on.** Docker and WSL 2 both run a small virtual machine;
+without that CPU feature neither starts, and the errors name neither cause — you get
+`WSL 2 is not installed` or a Docker Desktop that refuses to come up.
+
+Check it first, it takes ten seconds: **Task Manager** (Ctrl+Shift+Esc) → **Performance** →
+**CPU**. There is a line **Virtualization**, and it says *Enabled* or *Disabled*.
+
+If it says *Disabled*, the switch is in the firmware, not in Windows:
+
+**Settings → System → Recovery → Advanced startup → Restart now → Troubleshoot → Advanced
+options → UEFI Firmware Settings → Restart**
+
+In the firmware the setting is called **Intel Virtualization Technology** (or *VT-x*) on Intel and
+**SVM Mode** (or *AMD-V*) on AMD — usually under *Advanced*, *CPU Configuration* or *Security*.
+Turn it on, save, exit, and look at the Task Manager again. Microsoft keeps
+[instructions per manufacturer](https://support.microsoft.com/en-gb/windows/enable-virtualization-on-windows-c5578302-6e43-4b4b-a449-8ced115f58e1)
+for Acer, Asus, Dell, HP and Lenovo; on a Surface it is on already.
+
+**2 · Install WSL 2.** Open **PowerShell as administrator** (right-click → *Run as administrator*;
+without that the command fails) and run:
+
+```powershell
+wsl --install
+```
+
+Then **restart the PC**. The installation finishes only after that reboot — before it there is no
+Ubuntu to open and the command looks as if it had done nothing. On its first start Ubuntu asks for
+a user name and a password of its own; they belong to Linux, not to your Windows account.
+
+Step 1 needs both of these. Step 2 further down then runs inside that Ubuntu.
+
+</details>
 
 ```bash
 git clone https://github.com/benblumbach-eng/manta.git
@@ -155,36 +195,40 @@ already running, `docker compose up` fails with a bind error; the ports are sett
 > [!NOTE]
 > Step 1 shows datasets but cannot import them. For your own data, continue with step 2.
 
-#### The assistant is optional
+#### The assistant
 
-MANTA runs without a language model. The map, the networks, the ASV pages, the typed tools and the
-vocabulary behind them all work; only the **chat** needs a model, and without one it says so.
-Three ways to have it — including not at all:
+MANTA runs without a language model: the map, the networks, the ASV pages, the typed tools and the
+vocabulary behind them all work. Only the **chat** needs one — and without a model it says so.
 
-| | What to do | What it costs |
-|---|---|---|
-| **No model** (default) | nothing | nothing |
-| **A local model** | `COMPOSE_PROFILES=assistant` in `deploy/.env`, then `docker compose up -d` and once `docker compose exec ollama ollama pull qwen2.5:7b` | ~5 GB on disk and several GB of memory while answering — this is the reason the machine wants 8 GB |
-| **Your own key** | `MANTA_OPENAI_BASE_URL`, `MANTA_OPENAI_API_KEY` and `MANTA_OPENAI_MODELS` in `deploy/.env` | every question of every signed-in user is billed to that key |
-
-The two can be combined: local and remote models then share one switch in the interface, and the
-model name decides which way a question takes.
-
-**Any of them can be added — or dropped — later.** Nothing else depends on a model, so you can
-start without one and change your mind:
+One command adds it, at install time or any time later:
 
 ```bash
-cd ~/manta/deploy
-echo "COMPOSE_PROFILES=assistant" >> .env      # or edit the line that is already there
-docker compose up -d
-docker compose exec ollama ollama pull qwen2.5:7b
+cd ~/manta && bash assistant.sh on
 ```
 
-Your datasets, accounts and certificates are untouched by this; only one more container starts.
-The way back is the same in reverse — remove the line, then
-`docker compose stop ollama && docker compose rm -f ollama`. The downloaded models stay in their
-own volume until you remove that too (`docker volume rm deploy_ollama_models`), so turning the
-assistant off and on again costs no download.
+It writes the two lines into `deploy/.env`, starts the model service and pulls the model. The same
+command takes a name, so a different model is one word away:
+
+```bash
+cd ~/manta && bash assistant.sh on qwen2.5:1.5b
+```
+
+| Model | Size | Licence | |
+|---|---|---|---|
+| `qwen2.5:7b` | 4.7 GB | Apache 2.0 | the default |
+| `qwen2.5:1.5b` | 1.0 GB | Apache 2.0 | fits an 8 GB machine beside the database |
+| `llama3.1:8b` | 4.9 GB | Llama 3.1 | a second opinion from another family |
+
+Any other [Ollama model with tool support](https://ollama.com/search?c=tools) works the same way;
+a model without it cannot call MANTA's tools and is refused by the model switch. `bash
+assistant.sh status` says what is running, `bash assistant.sh off` takes it out again — the pulled
+models stay in their volume, so switching back on costs no second download.
+
+Instead of a local model, MANTA can use an OpenAI-compatible endpoint: `MANTA_OPENAI_BASE_URL`,
+`MANTA_OPENAI_API_KEY` and `MANTA_OPENAI_MODELS` in `deploy/.env`. Both ways can be configured at
+once — local and remote models then share one switch, and the model name decides which way a
+question takes. The key belongs to the operator: every question of every signed-in user is billed
+to it.
 
 ### Step 2 — Import your own data
 
@@ -201,19 +245,12 @@ Requirements:
 
 <br>
 
-Step 2 needs Linux. Windows has it built in. In **PowerShell**, once:
+Step 2 needs Linux, and Windows has it built in: the WSL 2 from step 1. Open **Ubuntu** from the
+start menu — the prompt reads `you@machine:~$`, and everything from here on happens in that
+window, never in PowerShell. (No Ubuntu in the start menu? Then step 1's box is still open:
+virtualisation, `wsl --install` as administrator, restart.)
 
-```powershell
-wsl --install
-```
-
-**Restart the PC.** `wsl --install` does not finish on its own: before the reboot there is no
-Ubuntu to open, and the command looks as if it had done nothing.
-
-Then open **Ubuntu** from the start menu. The first start asks for a user name and a password of
-its own — they belong to Linux, not to your Windows account. The prompt reads `you@machine:~$` —
-everything from here on happens in that window, never in PowerShell. Install the tools and get
-MANTA:
+Install the tools and get MANTA:
 
 ```bash
 sudo apt update && sudo apt install -y curl git unzip
@@ -350,8 +387,7 @@ To let a machine look by itself, once a week:
 one does, `0` if you are up to date — enough for a monitor or a CI job to act on.
 
 Cloned before this file existed? `git pull` once; from then on the command is there. Were you
-running the local model? The model service is opt-in since this release — put
-`COMPOSE_PROFILES=assistant` in `deploy/.env`, or `docker compose up -d` will leave it out.
+running the local model? It is opt-in since this release — `bash assistant.sh on` puts it back.
 
 Your data stay where they are. The update touches the code, never the database: both the
 container volume and a local Neo4j keep every dataset you imported.
@@ -477,7 +513,9 @@ is the key — search this table for the text you see.
 ## Project structure
 
 ```
+CITATION.cff        how to cite MANTA
 update.sh           fetch a newer version and restart what is running
+assistant.sh        add the language model, choose it, or take it out again
 apps/manta_web/      FastAPI backend and React interface
 apps/manta_mcp/      assistant tools, also as an MCP server
 tools/              converter, ingest, OTTER runner, energy landscape, bathymetry, functions
@@ -486,6 +524,26 @@ examples/           two synthetic datasets for a first import
 submodules/otter/   OTTER (third-party, changed only by patch)
 docs/images/        images for this README
 ```
+
+## Questions and problems
+
+Open an [issue](https://github.com/benblumbach-eng/manta/issues) — including for a sentence in the
+interface that reads wrong. Three things make a report answerable: what you did, what you saw, and
+the first lines of `bash apps/manta_web/dev.sh logs` (step 2) or `docker compose logs api` (step 1).
+The [troubleshooting table](#troubleshooting) above covers everything that has gone wrong on a real
+first installation so far.
+
+A security problem belongs in a private report through the repository's **Security** tab, not in a
+public issue.
+
+## Citing MANTA
+
+GitHub builds a citation from [`CITATION.cff`](CITATION.cff) — the *Cite this repository* button in
+the sidebar.
+
+MANTA calls the methods rather than reimplementing them, so a result rests on their papers as much
+as on this software: **OTTER**, **DADA2**, **rELA**, **cutadapt** and the annotation sources are
+listed with their DOIs below.
 
 ## Sources and licenses
 

@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+title: "MANTA — Marine Amplicon Network Time-series Analysis"
+message: "If you use MANTA in your work, please cite it, and cite the methods it calls."
+type: software
+authors:
+  - family-names: Blumbach
+    given-names: Ben
+repository-code: "https://github.com/benblumbach-eng/manta"
+license: MIT
+abstract: >-
+  MANTA is a web platform for marine amplicon time series. Sequencing data run through a fixed
+  analysis chain (DADA2, OTTER, Neo4j) and become searchable, visual and reproducible in a
+  browser: a world map, co-occurrence and directed networks, Louvain modules, ASV detail pages,
+  and an assistant that answers with typed tools which look values up in the graph. MANTA does
+  not reimplement methods; it calls them and connects their results.
+keywords:
+  - amplicon sequencing
+  - marine microbial ecology
+  - time series
+  - co-occurrence network
+  - convergent cross mapping
+  - Neo4j
+  - DADA2
