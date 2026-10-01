@@ -311,6 +311,8 @@ To let a machine look by itself, once a week:
 `bash update.sh --check` only looks: it says whether a newer version exists and returns `10` if
 one does, `0` if you are up to date — enough for a monitor or a CI job to act on.
 
+Cloned before this file existed? `git pull` once; from then on the command is there.
+
 Your data stay where they are. The update touches the code, never the database: both the
 container volume and a local Neo4j keep every dataset you imported.
 
