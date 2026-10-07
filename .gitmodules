@@ -1,0 +1,4 @@
+[submodule "submodules/otter"]
+	path = submodules/otter
+	url = https://gitlab.com/qtb-hhu/marine/otter.git
+	ignore = untracked

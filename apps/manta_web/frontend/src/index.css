@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+html, body, #root { height: 100%; margin: 0; }
+body { background: #0b1220; color: #e5e7eb; font-family: ui-sans-serif, system-ui, sans-serif; }
+
+html.light body { background: #f6f8fb; color: #111827; }
+html.light {
+  --color-slate-950: #ffffff;
+  --color-slate-900: #f6f8fb;
+  --color-slate-800: #e9edf3;
+  --color-slate-700: #cbd5e1;
+  --color-slate-600: #9aa8bd;
+  --color-slate-500: #64748b;
+  --color-slate-400: #47556b;
+  --color-slate-300: #24303f;
+  --color-slate-200: #16202c;
+  --color-slate-100: #0b1220;
+  --color-slate-50: #030712;
+  --color-cyan-300: #0e7490;
+  --color-cyan-400: #0891b2;
+  --color-amber-300: #92400e;
+  --color-amber-400: #b45309;
+  --color-violet-300: #6d28d9;
+  --color-red-300: #b91c1c;
+  --color-red-200: #991b1b;
+}
+
+@keyframes manta-float {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-4px) rotate(-2deg); }
+}
+.manta-float { animation: manta-float 4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .manta-float { animation: none; }
+}
+
+.manta-popup .maplibregl-popup-content { background: #0f172a; color: #e5e7eb; border: 1px solid #334155;
+  border-radius: 6px; padding: 8px 10px; box-shadow: 0 4px 16px rgba(0,0,0,.45); }
+.manta-popup .maplibregl-popup-tip { border-top-color: #334155; border-bottom-color: #334155; }
+html.light .manta-popup .maplibregl-popup-content { background: #ffffff; color: #111827; border-color: #cbd5e1; }
+html.light .manta-popup .maplibregl-popup-tip { border-top-color: #cbd5e1; border-bottom-color: #cbd5e1; }

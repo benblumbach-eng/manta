@@ -1,0 +1,5 @@
+# MANTA is an access-controlled research tool, not meant for search engines.
+# Caddy also sends X-Robots-Tag: noindex, nofollow. This file is the second barrier, because
+# crawlers read robots.txt before fetching a page and only see the header afterwards.
+User-agent: *
+Disallow: /
