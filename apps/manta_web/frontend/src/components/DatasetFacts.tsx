@@ -14,14 +14,12 @@ export default function DatasetFacts({ dataset, caps }: {
   }, [dataset.dataset_id]);
   const t = app?.ds === dataset.dataset_id ? app.t : null;
 
-  const wert = caps?.items.find((c) => c.key === "value_kind") ?? null;
-  const reads = caps?.value_kind === "reads";
+  const netz = caps?.items.find((c) => c.key === "network") ?? null;
   const datiert = (t?.time_axis ?? caps?.time_axis) === "dates";
   const nZeit = t?.n_samples ?? dataset.n_sample;
 
   return (
-    <dl data-testid="dataset-facts"
-      className="rounded-md border border-line bg-raised px-3 py-2 text-xs leading-relaxed">
+    <dl data-testid="dataset-facts" className="text-xs leading-relaxed">
       <div className="flex flex-wrap items-baseline gap-x-2">
         <dt className="sr-only">ASVs</dt>
         <dd data-testid="facts-asvs">
@@ -30,7 +28,7 @@ export default function DatasetFacts({ dataset, caps }: {
         </dd>
         <dd aria-hidden className="text-fg-muted">·</dd>
         <dt className="sr-only">in the network</dt>
-        <dd data-testid="facts-network">
+        <dd data-testid="facts-network" title={netz?.detail}>
           <span className="font-semibold text-fg tabular-nums">{dataset.n_network}</span>
           <span className="text-fg-muted"> in the network</span>
         </dd>
@@ -41,7 +39,6 @@ export default function DatasetFacts({ dataset, caps }: {
         <dd>
           <span className="font-semibold text-fg tabular-nums">{nZeit}</span>
           <span className="text-fg-muted"> time points</span>
-          {!datiert && <span className="text-fg-muted"> · sample order only</span>}
         </dd>
         {datiert && (
           <dd className="text-fg-muted tabular-nums" data-testid="facts-period">
@@ -62,19 +59,6 @@ export default function DatasetFacts({ dataset, caps }: {
         )}
       </div>
 
-      <div data-testid="facts-values" className="mt-1 border-t border-line-subtle pt-1">
-        <dt className="inline text-fg-muted">Values: </dt>
-        <dd className={`inline ${wert && !wert.available ? "text-warn" : "text-fg"}`}>
-          {wert?.value ?? "…"}
-        </dd>
-        {caps && (
-          <dd className="text-fg-muted leading-snug" data-testid="facts-share">
-            {reads
-              ? "A share is an ASV's reads divided by all reads of its sample, i.e. normalized for sequencing depth."
-              : "A share is an ASV's value divided by its sample's total, comparable within a sample, not raw reads."}
-          </dd>
-        )}
-      </div>
     </dl>
   );
 }

@@ -253,7 +253,7 @@ export function legendRows(o: {
   ccmVisible: boolean;
   rejectedVisible: boolean;
   widthText: string | null;
-  c2Mark: string | null; c2Visible?: boolean;
+  c2Glow: string | null; c2Visible?: boolean;
   highlightActive: boolean;
 }): LegendRow[] {
   const rows: LegendRow[] = [
@@ -275,8 +275,8 @@ export function legendRows(o: {
       : []),
     { key: "width", icon: "▬", term: "Width", desc: "strength", dim: o.widthText == null },
   ];
-  if (o.c2Mark != null) {
-    rows.push({ key: "c2", icon: "◎", term: "Glow", desc: o.c2Mark, dim: o.c2Visible === false });
+  if (o.c2Glow != null) {
+    rows.push({ key: "c2", icon: "◎", term: "Glow", desc: o.c2Glow, dim: o.c2Visible === false });
   }
   rows.push({ key: "highlight", icon: "◌", term: "Ring", desc: "same taxon",
     dim: !o.highlightActive });

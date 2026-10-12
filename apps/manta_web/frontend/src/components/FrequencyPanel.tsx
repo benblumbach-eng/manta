@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import type { EnvVariable, Environment, Frequency, SeasonalYear } from "../api";
-import InfoTip from "./InfoTip";
 import { esc } from "../format";
 import { Chooser, ChooserRow, Segmented } from "./controls";
 import { chartTooltip, FONT, useTokens } from "../design/tokens";
@@ -10,17 +9,16 @@ import { primarySeries, seriesColour, yearColour, SERIES_SIZE } from "../design/
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 const overlayColour = (i: number, light: boolean) => seriesColour(1 + (i % (SERIES_SIZE - 1)), light);
-const MEAN = "Average year";
+const MEAN = "Average of all years";
 const BAND = "Spread between years";
 
 const pct = (v: number | null | undefined, d = 2) => (v == null ? "—" : `${(100 * v).toFixed(d)}%`);
 
 type View = "measured" | "season";
 
-export default function FrequencyPanel({ freq, subject, env, color: colorProp,
+export default function FrequencyPanel({ freq, env, color: colorProp,
                                         testid = "frequency", compact = false, onPointClick }: {
   freq: Frequency;
-  subject: string;
   env?: Environment | null;
   color?: string;
   testid?: string;
@@ -40,15 +38,14 @@ export default function FrequencyPanel({ freq, subject, env, color: colorProp,
   const ovFarbe = (k: string) => overlayColour(ovKeys.indexOf(k), tok.light);
   const ovEinzeln = ovKeys.length === 1 ? (env?.variables ?? []).find((v) => v.key === ovKeys[0]) ?? null : null;
 
-  const s = freq.summary;
   const dated = freq.time_axis === "dates";
 
   const views: [View, string, boolean, string][] = [
-    ["measured", "Each sample", true, ""],
-    ["season", "Average year", hasSeason,
-      "This dataset has no sampling dates — only the order of the samples. Pooling them by "
-      + "calendar month would produce a season nobody measured."],
+    ["measured", "Whole period", true, ""],
+    ["season", "By year", hasSeason, "No sampling dates in this dataset"],
   ] as [View, string, boolean, string][];
+  const teilweise = (y: SeasonalYear) =>
+    y.months_covered < 12 ? ` (${y.months_covered} of 12 months)` : "";
   const active = views.find(([v, , ok]) => v === view && ok) ? view : "measured";
 
   const option = useMemo(() => {
@@ -248,28 +245,28 @@ export default function FrequencyPanel({ freq, subject, env, color: colorProp,
           onChange={(v) => setView(v)}
           testid={`${testid}-view-switch`}
           options={views.map(([v, label, ok, reason]) => ({
-            value: v, label, disabled: !ok, reason, testid: `freq-view-${v}`,
+            value: v, label, disabled: !ok, title: ok ? undefined : reason, testid: `freq-view-${v}`,
           }))} />
 
         {active === "season" && freq.seasonal && (
-          <Chooser label="year" summary={selectedYear ?? "average"} closeOnPick
-            testid={`${testid}-year-select`}>
+          <Chooser label="year" closeOnPick testid={`${testid}-year-select`}
+            summary={selYear ? `${selYear.year}${teilweise(selYear)}` : "average of all years"}>
             <ChooserRow radio checked={selectedYear == null} testid="year-select-avg"
               onToggle={() => setSelectedYear(null)}
-              label="average year"
-              hint={`all ${freq.points.length} samples folded onto the calendar`} />
+              label={MEAN}
+              hint={`all ${freq.points.length} samples`} />
             {freq.seasonal.years.map((y) => (
               <ChooserRow key={y.year} radio checked={selectedYear === y.year}
                 testid={`year-select-${y.year}`}
                 onToggle={() => setSelectedYear(y.year)}
                 label={y.year}
-                hint={y.note ?? `${y.n} samples · all 12 months`} />
+                hint={`${y.n} samples${teilweise(y)}`} />
             ))}
           </Chooser>
         )}
 
         {active === "season" && !selectedYear && freq.seasonal && (
-          <Chooser label="overlay years" testid={`${testid}-years`} count={shownYears.length}
+          <Chooser label="add years" testid={`${testid}-years`} count={shownYears.length}
             summary={shownYears.length ? undefined : "none"}>
             {freq.seasonal.years.map((y, i) => (
               <ChooserRow key={y.year} testid={`year-${y.year}`}
@@ -279,7 +276,7 @@ export default function FrequencyPanel({ freq, subject, env, color: colorProp,
                 colour={shownYears.includes(y.year)
                   ? yearColour(i, freq.seasonal!.years.length, tok.light) : undefined}
                 label={y.year}
-                hint={y.note ?? `${y.n} samples · all 12 months`} />
+                hint={`${y.n} samples${teilweise(y)}`} />
             ))}
             {shownYears.length > 0 && (
               <button data-testid="years-none" onClick={() => setShownYears(() => [])}
@@ -314,56 +311,6 @@ export default function FrequencyPanel({ freq, subject, env, color: colorProp,
         )}
       </div>
 
-      {active === "season" && !selYear && (
-        <p data-testid={`${testid}-what`} className="mb-1 text-xs text-fg">
-          Mean share per calendar month, over all years — 12 points from{" "}
-          {freq.points.length} samples.
-        </p>
-      )}
-      {selYear && (
-        <p data-testid={`${testid}-what`} className="mb-1 text-xs text-fg">
-          Mean share per calendar month in {selYear.year} — the same computation as the
-          average year, restricted to this year&rsquo;s {selYear.n} samples.
-          {selYear.note && (
-            <span className="text-warn" data-testid={`${testid}-year-note`}>
-              {" "}({selYear.note})
-            </span>
-          )}
-        </p>
-      )}
-
-      <div data-testid={`${testid}-quantity`}
-        className={`mb-1 text-xs text-fg-muted ${compact ? "hidden" : ""}`}>
-        {(
-          <>Share of {subject} in {freq.quantity.basis}.
-            <InfoTip title="How this percentage is formed"
-                  ask={{ concept: "share", question: "What does the share mean here, and what does it not show?" }}>
-              <p><strong>Numerator:</strong> {freq.quantity.numerator}</p>
-              <p><strong>Denominator:</strong> {freq.quantity.denominator}</p>
-              <p>It is {freq.quantity.not}.</p>
-              {dated && (
-                <p>The x-axis is real time: points sit at their real sampling date; the gaps
-                are real gaps.</p>
-              )}
-            </InfoTip>
-            {freq.quantity.value_kind === "transformed" && (
-              <span className="text-warn" data-testid={`${testid}-transformed`}>
-                {" "}· not raw reads
-                <InfoTip title="Preprocessing unknown">
-                  <p>Not one value in this dataset is a whole number
-                  {freq.quantity.min_value != null && <> (smallest {freq.quantity.min_value.toExponential(1)})</>}.
-                  Something converted them before we received them, and nothing we received says what.</p>
-                  <p>One thing is ruled out: it is <strong>not</strong> the Hellinger transformation
-                  that the source publication names for this analysis. Hellinger would leave every
-                  sample with a length of exactly 1; here the sample lengths run from about 43 to
-                  100,000, and the pipeline itself is configured with Hellinger switched off.</p>
-                  <p>Calling these &ldquo;reads&rdquo; would be a guess, so the axis does not.</p>
-                </InfoTip>
-              </span>
-            )}
-          </>
-        )}
-      </div>
 
       <div data-testid={`${testid}-chart`}
         data-ov-min={ovEinzeln?.min ?? ""} data-ov-max={ovEinzeln?.max ?? ""}>
@@ -376,22 +323,6 @@ export default function FrequencyPanel({ freq, subject, env, color: colorProp,
         } : undefined} />
       </div>
 
-      {s.statement != null && (() => {
-        const absagen = s.statement.split(" · ").filter((t) => t.startsWith("no "));
-        return absagen.length === 0 ? null : (
-          <div className="mt-2 text-xs space-y-1" data-testid={`${testid}-trio`}>
-            {absagen.map((teil, i) => (
-              <div key={i} className="tabular-nums"
-                data-testid={`${testid}-trio-${teil.startsWith("no relative abundance") ? "share" : i}`}>
-                {teil.startsWith("no relative abundance")
-                  ? <span className="text-warn">{teil}</span>
-                  : <span className="text-fg-muted">{teil}</span>}
-              </div>
-            ))}
-          </div>
-        );
-      })()}
-
       {overlays.length > 0 && (
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs"
              data-testid={`${testid}-overlay-legend`}>
@@ -402,101 +333,11 @@ export default function FrequencyPanel({ freq, subject, env, color: colorProp,
               {v.label}{v.unit ? ` (${v.unit})` : ""}
             </span>
           ))}
+          <span className="text-fg-muted" data-testid={`${testid}-overlay-note`}>
+            {overlays.length > 1 ? "· each on its own range · " : "· "}no correlation computed
+          </span>
         </div>
       )}
-      {overlays.length > 0 && (
-        <p className="mt-1 text-2xs text-fg-muted" data-testid={`${testid}-overlay-note`}>
-          Measured, not derived from the sequences. Drawn over the curve on the right-hand axis
-          (the dataset&rsquo;s range) — no correlation is computed.
-          {overlays.length > 1 && " Each is laid over its own range: shapes comparable, sizes not."}
-        </p>
-      )}
-
-      {active === "measured" && !dated && (
-        <div className="mt-1 text-2xs text-fg-muted" data-testid={`${testid}-ordinal-note`}>
-          The x-axis is the <strong>order</strong> of the samples, not a date — this dataset has
-          no sampling dates, so there are no month, year or season statements.
-        </div>
-      )}
-
-      {active === "season" && !selYear && (
-        <SeasonExtras seasonal={freq.seasonal!} testid={testid} />
-      )}
-
-
-      <p data-testid="composition-caveat" data-caveat=""
-        className="mt-2 border-l-2 border-line-strong pl-2 text-xs text-fg leading-snug">
-        {freq.quantity.share_caveat}
-        <InfoTip title="What a rising share can and cannot mean">
-          <p>Shares always add up to 100%. If one goes up, everything else may simply have gone
-          down — that says nothing about how much was in the water.</p>
-          <p>These are not cell counts, and how many rare organisms show up at all depends on
-          sequencing depth. The <em>timing</em> of a maximum survives this; its height does not.</p>
-        </InfoTip>
-      </p>
     </div>
-  );
-}
-
-function SeasonExtras({ seasonal, testid }: {
-  seasonal: NonNullable<Frequency["seasonal"]>;
-  testid: string;
-}) {
-  const partial = new Set(seasonal.partial_years);
-  const years: SeasonalYear[] = seasonal.years;
-  return (
-    <>
-      <table className="mt-2 w-full text-xs text-fg-muted" data-testid={`${testid}-year-table`}>
-        <thead><tr className="text-fg-muted">
-          <th className="text-left font-normal">Year</th>
-          <th className="text-right font-normal">mean share</th>
-          <th className="text-right font-normal">
-            within-year spread
-            <InfoTip title="Two different spreads">
-              <p>This column is how much the share moved <em>during</em> that year — a large
-              number means a pronounced annual cycle.</p>
-              <p>The grey band in the chart is a different thing: how much the same calendar
-              month differed <em>between</em> years.</p>
-            </InfoTip>
-          </th>
-          <th className="text-right font-normal">
-            vs. typical year (pp)
-            <InfoTip title="Comparison with the typical year">
-              <p>For each year: how far above or below it sat, compared with what its <em>own</em>
-              months usually show. In percentage points.</p>
-              <p>Without that correction a year that happens to contain many winter months would
-              look higher for that reason alone. Years marked * do not cover all 12 months.</p>
-            </InfoTip>
-          </th>
-          <th className="text-right font-normal">samples</th>
-        </tr></thead>
-        <tbody>
-          {years.map((y) => (
-            <tr key={y.year} className={partial.has(y.year) ? "text-fg-muted" : ""}>
-              <td>{y.year}{partial.has(y.year) ? "*" : ""}</td>
-              <td className="text-right tabular-nums">{pct(y.mean)}</td>
-              <td className="text-right tabular-nums">± {pct(y.std)}</td>
-              <td className={`text-right tabular-nums ${y.anomaly >= 0 ? "text-ok" : "text-warn"}`}>
-                {y.anomaly >= 0 ? "+" : "−"}{Math.abs(100 * y.anomaly).toFixed(2)}
-              </td>
-              <td className="text-right tabular-nums">{y.n} · {y.months_covered}/12</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <div className="mt-1 text-xs text-fg tabular-nums" data-testid={`${testid}-trend`}>
-        Trend {seasonal.trend_per_year == null ? "—"
-          : `${seasonal.trend_per_year >= 0 ? "+" : "−"}${Math.abs(100 * seasonal.trend_per_year).toFixed(3)} pp/year`}
-        <InfoTip title="Trend per year"
-                  ask={{ concept: "trend_per_year", question: "How is the trend per year computed, and what does it not tell me?" }}>
-          <p data-testid={`${testid}-trend-method`}>Least-squares slope across the yearly means,
-          season-adjusted: each value has the mean of <em>its own</em> calendar month subtracted
-          first. Not robust — one unusual year can tilt it.</p>
-          <p>Necessary because the years cover different months. Resting on {years.length} yearly
-          points, this is a hint, not evidence.</p>
-        </InfoTip>
-      </div>
-    </>
   );
 }

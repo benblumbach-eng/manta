@@ -3,7 +3,7 @@ import { useModules } from "../modules";
 import { FUNCTION_NONE } from "../clusterPalette";
 import { SectionHeading } from "./ui";
 import { PanelHeader } from "./PanelFrame";
-import Criterion2Declaration from "./Criterion2";
+import { Criterion2Details } from "./Criterion2";
 
 export default function LegendPanel({ thr, c2, labelMax, functionClasses = [], colorMode = "module", onClose }: {
   datasetId: string;
@@ -82,7 +82,16 @@ export default function LegendPanel({ thr, c2, labelMax, functionClasses = [], c
             : `module ${modules.label(0)}, ${modules.label(1)}, …: a group with more links among themselves than chance would give`} />
           <Row sample={size} term="Size" desc="circle area relative to the largest circle in view = stored value summed over all samples" />
           {c2 && (
-            <Row sample={glowS} term="Glow" testid="legend-c2" desc={c2.mark} />
+            <div className="flex items-start gap-2 py-1">
+              {glowS}
+              <div className="min-w-0 space-y-1">
+                <div data-testid="legend-c2">
+                  <span className="text-fg">Glow</span>
+                  <span className="text-fg-muted"> — {c2.glow}</span>
+                </div>
+                <Criterion2Details c2={c2} testid="legend-c2-declaration" />
+              </div>
+            </div>
           )}
           <Row sample={open} term="Open" desc="the ASV whose page is open" />
           <Row sample={marked} term="Marked" desc="found by search, or member of the marked taxon or module" />
@@ -113,12 +122,6 @@ export default function LegendPanel({ thr, c2, labelMax, functionClasses = [], c
               <Row sample={grey} term="not annotated" desc="no entry for this name in the literature tables — in the taxa view also a taxon whose members carry different classes" />
             </div>
             <p className="text-fg-muted leading-snug">Looked up by taxon name — a property of the name, not a result of this dataset.</p>
-          </Section>
-        )}
-
-        {c2 && (
-          <Section title={c2.title}>
-            <Criterion2Declaration c2={c2} verdict={c2.statement} testid="legend-c2-declaration" open />
           </Section>
         )}
 

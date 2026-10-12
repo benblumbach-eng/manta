@@ -401,6 +401,7 @@ export type Criterion2Texts = {
   label: string;
   title: string;
   mark: string;
+  glow: string;
   method: string;
   formula: string;
   not_keystone: string;

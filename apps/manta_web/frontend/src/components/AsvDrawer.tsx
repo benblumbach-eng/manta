@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from "react";
 import { getAsv, getEnvironment, getTaxon, setAsvNote, setAsvStar,
          type AsvDetail, type Environment } from "../api";
 import type { EdgeRef } from "../App";
-import InfoTip from "./InfoTip";
 import { useModules } from "../modules";
 import ProvenanceFooter from "./ProvenanceFooter";
 import FrequencyPanel from "./FrequencyPanel";
@@ -14,7 +13,7 @@ import ErrorNotice from "./ErrorNotice";
 import { findCap } from "./DataAvailability";
 import StarButton from "./StarButton";
 import { PanelHeader } from "./PanelFrame";
-import Criterion2Declaration from "./Criterion2";
+import { Criterion2AsvLine } from "./Criterion2";
 
 const RANKS: [string, string][] = [
   ["kingdom", "Kingdom"], ["phylum", "Phylum"], ["class", "Class"], ["order", "Order"],
@@ -87,12 +86,7 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
             }} />
         ) : undefined}
         title={<span className="font-mono font-normal text-accent select-text cursor-text"
-          data-no-drag="" data-testid="drawer-asv-id">{asvId}</span>}>
-        {d?.criterion2?.passes && (
-          <span data-testid="drawer-c2" title={d.criterion2.mark}
-            className="text-sm text-warn whitespace-nowrap">✦ criterion 2</span>
-        )}
-      </PanelHeader>
+          data-no-drag="" data-testid="drawer-asv-id">{asvId}</span>} />
 
       {err != null && <ErrorNotice error={err} what="Could not load this ASV."
         onRetry={() => setNochmal((n) => n + 1)} />}
@@ -111,6 +105,9 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
                     className="text-accent hover:underline">{modules.label(d.cluster)} ↗</button>
                 ) : modules.label(d.cluster)} · dataset {d.dataset_id}
             </div>
+            {d.criterion2 && d.criterion2.reason !== "not_in_network" && (
+              <Criterion2AsvLine c2={d.criterion2} testid="asv-c2" />
+            )}
             <div className="text-xs text-fg-muted tabular-nums" data-testid="asv-presence"
                  data-n={d.frequency.summary.n_detected} data-total={d.frequency.summary.n_samples}>
               found in {d.frequency.summary.n_detected} of {d.frequency.summary.n_samples} samples
@@ -184,28 +181,26 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
           )}
 
           <section data-testid="asv-frequency-section">
-            <h3 className="text-fg font-medium mb-2 flex items-baseline gap-1"
+            <h3 className="text-fg font-medium mb-2 flex items-baseline gap-2"
                 data-testid="asv-frequency-title">
-              Share of sample total
-              <span className="text-xs font-normal text-fg-muted">(normalized for sequencing depth)</span>
+              Relative abundance (%)
+              {d.frequency.quantity.value_kind === "transformed" && (
+                <span className="text-xs font-normal text-warn" data-testid="asv-frequency-transformed">
+                  transformed values
+                </span>
+              )}
               {onCompare && (
                 <Button data-testid="asv-compare" onClick={() => onCompare(asvId)} className="ml-auto">
                   Compare ↗
                 </Button>
               )}
             </h3>
-            <FrequencyPanel freq={d.frequency} subject="this ASV" env={env} testid="asv-frequency" />
+            <FrequencyPanel freq={d.frequency} env={env} testid="asv-frequency" />
           </section>
 
           {findCap(caps, "environment")?.available && (
           <section data-testid="asv-env-section">
-            <h3 className="text-fg font-medium mb-1 flex items-center">
-              Environment where it was found
-              <InfoTip title="Method and caveat">
-                <p>{d.environment_profile.method}</p>
-                <p>{d.environment_profile.caveat}</p>
-              </InfoTip>
-            </h3>
+            <h3 className="text-fg font-medium mb-1">Environment where it was found</h3>
             {d.environment_profile.items.length === 0 ? (
               <p className="text-xs text-fg-muted" data-testid="asv-env-missing">
                 No measured conditions for the samples where this ASV was found.
@@ -214,14 +209,6 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
               <EnvironmentBars profile={d.environment_profile} />
             )}
           </section>
-          )}
-
-          {d.criterion2 && d.criterion2.reason !== "not_in_network" && (
-            <section data-testid="asv-c2-section">
-              <h3 className="text-fg font-medium mb-1">{d.criterion2.title}</h3>
-              <Criterion2Declaration c2={d.criterion2} verdict={d.criterion2.verdict}
-                testid="asv-c2" />
-            </section>
           )}
 
           <section>
@@ -241,19 +228,7 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
           <section data-testid="function-section" data-annotated={d.trait?.annotated ? "1" : "0"}>
             {d.trait?.annotated && (
               <div className="mb-1" data-testid="function-literature">
-                <div className="text-xs font-semibold text-fg-muted flex items-center">
-                  annotated function (literature)
-                  <InfoTip title="Where this comes from">
-                    <p>{d.trait.note}</p>
-                    {d.trait_run?.statement && <p data-testid="function-coverage">{d.trait_run.statement}</p>}
-                    {d.trait_run?.source_citations?.map((c) => <p key={c} className="text-fg-muted">{c}</p>)}
-                    {d.trait.functions.some((f) => f.startsWith("mixoplankton (")) && d.trait_run?.mdb_categories && (
-                      <p className="text-fg-muted">
-                        {Object.entries(d.trait_run.mdb_categories).map(([k, v]) => `${k} = ${v}`).join(" · ")}
-                      </p>
-                    )}
-                  </InfoTip>
-                </div>
+                <div className="text-xs font-semibold text-fg-muted">annotated function (literature)</div>
                 <ul className="text-xs mt-1">
                   {d.trait.functions.map((f, i) => (
                     <li key={`${f}|${d.trait!.sources[i]}`} data-testid="function-entry" data-function={f}

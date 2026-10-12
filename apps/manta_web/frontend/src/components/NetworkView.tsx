@@ -644,8 +644,9 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
             ? `<br/><span style="opacity:.75">${(100 * p.data.share).toFixed(2)} % of the summed abundance of the ${p.data.nPool} network ASVs</span>`
             : "")
           + (p.data.c2 && c2
-            ? `<br/><span style="color:${tok.mark}">✦ ${esc(c2.mark)}</span>`
-              + (p.data.c2q != null ? `<br/><span style="opacity:.75">q = ${fmtP(p.data.c2q)} ≤ ${c2.alpha}</span>` : "")
+            ? `<br/><span style="color:${tok.mark};display:inline-block;max-width:260px;`
+              + `white-space:normal">◎ ${esc(c2.glow)}</span>`
+              + (p.data.c2q != null ? `<br/><span style="opacity:.75">q = ${fmtP(p.data.c2q)}</span>` : "")
             : "");
         const e: NetEdge | undefined = p.data?.manta;
         if (!e) return "";
@@ -820,7 +821,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     ccmVisible: filters.layers.ccm && ccmCount > 0,
     rejectedVisible: filters.layers.rejected && rejectedCount > 0,
     widthText,
-    c2Mark: c2 ? c2.mark : null, c2Visible: !taxaMode && c2Visible > 0,
+    c2Glow: c2 ? c2.glow : null, c2Visible: !taxaMode && c2Visible > 0,
     highlightActive: sel != null,
   }), [net, clusters.length, sizePresent, thr, ccmCount, rejectedCount, filters.layers,
        widthText, c2, c2Visible, sel, colorMode, functionClasses.length, taxaMode, drawnCounts.cross]);

@@ -258,13 +258,18 @@ export default function NetworkSidebar(p: SidebarProps) {
             Marker {dataset.marker ?? "?"}{timeWord ? ` · ${timeWord}` : ""}
           </div>
         </div>
-        <DatasetFacts dataset={dataset} caps={caps} />
         {infoOpen && (
           <div data-testid="dataset-info"
-            className="rounded-md border border-line bg-raised p-2 space-y-2">
-            {caps && <DataAvailability caps={caps} />}
+            className="rounded-md border border-line bg-raised px-3 py-2 space-y-2">
+            <DatasetFacts dataset={dataset} caps={caps} />
+            {caps && (
+              <div className="border-t border-line-subtle pt-2">
+                <DataAvailability caps={caps} omit={["time_axis", "value_kind", "network"]} />
+              </div>
+            )}
             {thr && (
-              <div className="text-2xs text-fg-muted tabular-nums" data-testid="dataset-info-run">
+              <div className="border-t border-line-subtle pt-2 text-2xs text-fg-muted tabular-nums"
+                data-testid="dataset-info-run">
                 {thr.recorded
                   ? <><span title={thr.run_id ? `run id: ${thr.run_id}` : undefined}>{fmtRun(thr.run_id)}</span>
                       {" "}· computed <span className="whitespace-nowrap">{thr.computed_at ? fmtUtc(thr.computed_at) : "—"}</span></>
@@ -845,7 +850,7 @@ export default function NetworkSidebar(p: SidebarProps) {
               </button>
               <button data-testid="filter-add-c2" disabled={!c2}
                 onClick={() => { p.onFilters({ c2Only: !filters.c2Only }); setAddOpen(false); }}
-                title={c2?.mark}
+                title={c2?.glow}
                 className="w-full text-left px-2 py-1 hover:bg-control text-fg disabled:text-fg-muted">
                 {filters.c2Only ? "✓ " : ""}only criterion 2
                 {c2 && <span className="text-fg-muted"> ({c2.n_pass} of {c2.n_testable})</span>}
@@ -912,9 +917,6 @@ export default function NetworkSidebar(p: SidebarProps) {
                   <span className={`${row.dim ? "text-fg-muted italic" : "text-fg"}${row.struck ? " line-through" : ""}`}>{row.desc}</span>
                 </div>
               ))}
-              {c2 && !p.taxaMode && c2.n_network > 0 && (
-                <p data-testid="c2-selection" className="mt-1 text-fg-muted leading-snug">{c2.selection_note}</p>
-              )}
               {p.widthText && (
                 <p data-testid="edge-width-text" className="mt-1 text-fg-muted">{p.widthText}</p>
               )}

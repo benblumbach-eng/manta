@@ -4,7 +4,8 @@ import InfoTip from "./InfoTip";
 
 export function Segmented<T extends string>({ value, options, onChange, testid, label, full = false }: {
   value: T;
-  options: { value: T; label: string; disabled?: boolean; reason?: string; testid?: string }[];
+  options: { value: T; label: string; disabled?: boolean; reason?: string; title?: string;
+             testid?: string }[];
   onChange: (v: T) => void;
   testid?: string;
   label?: string;
@@ -19,7 +20,7 @@ export function Segmented<T extends string>({ value, options, onChange, testid, 
           const aktiv = o.value === value;
           return (
             <span key={o.value} className={`${full ? "flex flex-1" : "inline-flex"} items-center`}>
-              <button data-testid={o.testid} disabled={o.disabled}
+              <button data-testid={o.testid} disabled={o.disabled} title={o.title}
                 aria-pressed={aktiv}
                 onClick={() => !o.disabled && onChange(o.value)}
                 className={`${full ? "flex-1 " : ""}px-3 py-1 text-xs rounded transition-colors ${

@@ -2042,6 +2042,9 @@ CRITERION2_NOT_KEYSTONE = (
 CRITERION2_TITLE = "Criterion 2 of the keystone definition (Oldenburg et al. 2024)"
 CRITERION2_MARK = ("meets criterion 2 of the keystone definition (Oldenburg et al. 2024) — "
                    "not a keystone on its own")
+CRITERION2_GLOW = ("central in its module: closeness significantly above the module mean "
+                   f"(one-sided t-test, Benjamini–Hochberg q ≤ {CRITERION2_ALPHA:g}; "
+                   "Oldenburg et al. 2024)")
 CRITERION2_SELECTION = (
     "A selection step: about half of the nodes pass. The t-test compares c_i with the standard "
     "error of the module mean, not with the spread of the members — it marks the upper part of "
@@ -2166,6 +2169,7 @@ def _criterion2_texts(res: dict) -> dict:
         "label": CRITERION2_LABEL,
         "title": CRITERION2_TITLE,
         "mark": CRITERION2_MARK,
+        "glow": CRITERION2_GLOW,
         "paper_wording": CRITERION2_PAPER_WORDING,
         "method": CRITERION2_METHOD,
         "formula": CRITERION2_FORMULA,
@@ -2197,8 +2201,9 @@ def criterion2_summary(c2: dict) -> dict:
 
 
 def _criterion2_shared(c2: dict) -> dict:
-    return {k: c2[k] for k in ("label", "title", "mark", "method", "formula", "not_keystone",
-                               "selection_note", "source", "source_doi", "source_location")}
+    return {k: c2[k] for k in ("label", "title", "mark", "glow", "method", "formula",
+                               "not_keystone", "selection_note", "source", "source_doi",
+                               "source_location")}
 
 
 def criterion2_asv(c2: dict, asv_id: str) -> dict:

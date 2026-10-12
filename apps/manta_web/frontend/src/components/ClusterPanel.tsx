@@ -13,7 +13,7 @@ import FrequencyPanel from "./FrequencyPanel";
 import NoteBox from "./NoteBox";
 import ErrorNotice from "./ErrorNotice";
 import { PanelHeader } from "./PanelFrame";
-import Criterion2Declaration from "./Criterion2";
+import { Criterion2ModuleLine } from "./Criterion2";
 import StarButton from "./StarButton";
 
 export default function ClusterPanel({ datasetId, label, color, onClose, onOpenAsv, onOpenEdge,
@@ -167,7 +167,7 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
               </p>
             )}
             <div data-testid="cluster-collective" className="mt-2">
-              <FrequencyPanel freq={c.frequency} subject="this cluster" color={color}
+              <FrequencyPanel freq={c.frequency} color={color}
                 env={env} testid="cluster-frequency" compact
                 onPointClick={(sample) => {
                   setAtBusy(true); setAtSample(null); setAtErr(null);
@@ -317,8 +317,8 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
                                hover:bg-control disabled:hover:bg-transparent">
                     <span className="font-mono text-accent">{m.id}</span>
                     {m.criterion2?.passes && (
-                      <span data-testid="member-c2" title={c.criterion2?.mark}
-                        className="ml-1 text-warn">✦</span>
+                      <span data-testid="member-c2" title={c.criterion2?.glow}
+                        className="ml-1 text-mark">◎</span>
                     )}
                     {m.genus && <span className="text-fg-muted truncate ml-2">({m.genus})</span>}
                   </button>
@@ -336,11 +336,7 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
 
           {c.criterion2 && (
             <section data-testid="cluster-c2-section">
-              <SectionHeading as="div">{c.criterion2.title}</SectionHeading>
-              <div className="mt-1">
-                <Criterion2Declaration c2={c.criterion2} verdict={c.criterion2.verdict}
-                  testid="cluster-c2" />
-              </div>
+              <Criterion2ModuleLine c2={c.criterion2} testid="cluster-c2" />
             </section>
           )}
 
