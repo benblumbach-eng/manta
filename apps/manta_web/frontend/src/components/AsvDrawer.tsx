@@ -13,7 +13,7 @@ import ErrorNotice from "./ErrorNotice";
 import { findCap } from "./DataAvailability";
 import StarButton from "./StarButton";
 import { PanelHeader } from "./PanelFrame";
-import { Criterion2AsvLine } from "./Criterion2";
+import { HubAsvDetails, HubInfoButton, HubMark } from "./Criterion2";
 
 const RANKS: [string, string][] = [
   ["kingdom", "Kingdom"], ["phylum", "Phylum"], ["class", "Class"], ["order", "Order"],
@@ -42,6 +42,8 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
   const [nochmal, setNochmal] = useState(0);
   const [env, setEnv] = useState<Environment | null>(null);
   const [showSeq, setShowSeq] = useState(false);
+  const [hubInfo, setHubInfo] = useState(false);
+  useEffect(() => { setHubInfo(false); }, [asvId]);
 
   useEffect(() => {
     setD(null); setErr(null);
@@ -86,7 +88,15 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
             }} />
         ) : undefined}
         title={<span className="font-mono font-normal text-accent select-text cursor-text"
-          data-no-drag="" data-testid="drawer-asv-id">{asvId}</span>} />
+          data-no-drag="" data-testid="drawer-asv-id">{asvId}</span>}>
+        {d?.criterion2?.passes && (
+          <>
+            <HubMark />
+            <HubInfoButton open={hubInfo} onToggle={() => setHubInfo((v) => !v)}
+              testid="drawer-hub-info" label="what a hub is" />
+          </>
+        )}
+      </PanelHeader>
 
       {err != null && <ErrorNotice error={err} what="Could not load this ASV."
         onRetry={() => setNochmal((n) => n + 1)} />}
@@ -94,6 +104,10 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
 
       {d && caps && (
         <div className="p-6 space-y-6 text-sm">
+          {hubInfo && d.criterion2?.passes && (
+            <HubAsvDetails c2={d.criterion2} testid="drawer-hub-details"
+              moduleLabel={d.criterion2.module != null ? modules.label(d.criterion2.module) : null} />
+          )}
           <section>
             <div className="text-xl text-fg" data-testid="drawer-genus">
               {named(d.lineage.genus) ?? <span className="text-fg-muted">no genus assigned</span>}
@@ -105,9 +119,6 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
                     className="text-accent hover:underline">{modules.label(d.cluster)} ↗</button>
                 ) : modules.label(d.cluster)} · dataset {d.dataset_id}
             </div>
-            {d.criterion2 && d.criterion2.reason !== "not_in_network" && (
-              <Criterion2AsvLine c2={d.criterion2} testid="asv-c2" />
-            )}
             <div className="text-xs text-fg-muted tabular-nums" data-testid="asv-presence"
                  data-n={d.frequency.summary.n_detected} data-total={d.frequency.summary.n_samples}>
               found in {d.frequency.summary.n_detected} of {d.frequency.summary.n_samples} samples

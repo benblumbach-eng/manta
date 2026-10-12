@@ -2220,9 +2220,11 @@ def criterion2_asv(c2: dict, asv_id: str) -> dict:
                f'{"≤" if node["passes"] else ">"} {c2["alpha"]:g}')
         verdict = (f'{"Meets" if node["passes"] else "Does not meet"} '
                    f'"{CRITERION2_LABEL}": {wie}.')
+        mean = mod["mean_closeness"]
     else:
         verdict = f'Not testable for "{CRITERION2_LABEL}": {node["reason_text"]}.'
-    return {**node, "verdict": verdict, **_criterion2_shared(c2)}
+        mean = None
+    return {**node, "module_mean_closeness": mean, "verdict": verdict, **_criterion2_shared(c2)}
 
 
 def criterion2_module(c2: dict, label: int) -> dict:

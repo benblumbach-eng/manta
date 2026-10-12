@@ -86,7 +86,7 @@ export default function LegendPanel({ thr, c2, labelMax, functionClasses = [], c
               {glowS}
               <div className="min-w-0 space-y-1">
                 <div data-testid="legend-c2">
-                  <span className="text-fg">Glow</span>
+                  <span className="text-fg">✦ Hub</span>
                   <span className="text-fg-muted"> — {c2.glow}</span>
                 </div>
                 <Criterion2Details c2={c2} testid="legend-c2-declaration" />

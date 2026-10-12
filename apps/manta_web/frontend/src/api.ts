@@ -418,7 +418,10 @@ export type Criterion2Summary = Criterion2Texts & {
   statement: string;
 };
 
-export type Criterion2Asv = Criterion2Node & Criterion2Texts & { verdict: string };
+export type Criterion2Asv = Criterion2Node & Criterion2Texts & {
+  verdict: string;
+  module_mean_closeness?: number | null;
+};
 
 export type Criterion2Module = Criterion2Texts & {
   module: number; module_size: number; testable: boolean; reason: string | null;

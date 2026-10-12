@@ -317,8 +317,8 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
                                hover:bg-control disabled:hover:bg-transparent">
                     <span className="font-mono text-accent">{m.id}</span>
                     {m.criterion2?.passes && (
-                      <span data-testid="member-c2" title={c.criterion2?.glow}
-                        className="ml-1 text-mark">◎</span>
+                      <span data-testid="member-c2" title="hub"
+                        className="ml-1 text-mark">✦</span>
                     )}
                     {m.genus && <span className="text-fg-muted truncate ml-2">({m.genus})</span>}
                   </button>

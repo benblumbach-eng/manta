@@ -276,7 +276,7 @@ export function legendRows(o: {
     { key: "width", icon: "▬", term: "Width", desc: "strength", dim: o.widthText == null },
   ];
   if (o.c2Glow != null) {
-    rows.push({ key: "c2", icon: "◎", term: "Glow", desc: o.c2Glow, dim: o.c2Visible === false });
+    rows.push({ key: "c2", icon: "✦", term: "Hub", desc: o.c2Glow, dim: o.c2Visible === false });
   }
   rows.push({ key: "highlight", icon: "◌", term: "Ring", desc: "same taxon",
     dim: !o.highlightActive });

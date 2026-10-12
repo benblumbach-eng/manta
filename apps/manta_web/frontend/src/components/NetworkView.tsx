@@ -204,11 +204,6 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
 
   const c2: Criterion2Summary | null = net?.criterion2 ?? null;
   const c2Ids = useMemo(() => new Set(c2?.ids ?? []), [c2]);
-  const c2Q = useMemo(() => {
-    const m = new Map<string, number | null>();
-    net?.nodes.forEach((n) => { if (n.criterion2?.passes) m.set(n.id, n.criterion2.q); });
-    return m;
-  }, [net]);
 
   const vis = useMemo(
     () => (net ? computeVisible(net, filters, c2Ids) : null),
@@ -357,7 +352,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     const label = (k: FilterKind): string => {
       switch (k) {
         case "modules": return `${modules.label(n.cluster)} hidden`;
-        case "c2": return "only criterion 2";
+        case "c2": return "only hubs";
         case "taxon": return filters.taxon ? `${filters.taxon.value} (${filters.taxon.rank})` : "taxon";
         case "asvs": return "ASV selection";
         case "presence": return `present in ≥ ${filters.presence ?? 1} samples`;
@@ -643,11 +638,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
           + (p.data.share != null
             ? `<br/><span style="opacity:.75">${(100 * p.data.share).toFixed(2)} % of the summed abundance of the ${p.data.nPool} network ASVs</span>`
             : "")
-          + (p.data.c2 && c2
-            ? `<br/><span style="color:${tok.mark};display:inline-block;max-width:260px;`
-              + `white-space:normal">◎ ${esc(c2.glow)}</span>`
-              + (p.data.c2q != null ? `<br/><span style="opacity:.75">q = ${fmtP(p.data.c2q)}</span>` : "")
-            : "");
+          + (p.data.c2 && c2 ? `<br/><span style="color:${tok.mark}">✦ hub</span>` : "");
         const e: NetEdge | undefined = p.data?.manta;
         if (!e) return "";
         const dir = e.ccm_forward && e.ccm_backward ? "↔"
@@ -695,7 +686,6 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
           const tp = taxaById.get(n.id);
           return {
             id: n.id, name: n.id, value: n.genus ?? "", genus: n.genus ?? "", c2: glows,
-            c2q: glows ? (c2Q.get(n.id) ?? null) : null,
             module: n.cluster >= 0 ? modules.label(n.cluster) : null,
             ...(tp ? { taxon: { label: tp.label, n: tp.members.length,
                                 nModules: new Set(tp.members.map((m) => m.cluster)).size } } : {}),
@@ -778,7 +768,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
       },
     ],
   }), [drawNodes, drawEdges, taxaMode, offenerTaxon, maxSize, totalSize, net, nodeCluster, showLabels, frozen,
-       c2, c2Ids, c2Q, seedXY, sel, selMarked, markedDrawn, gezeichnet, markColor, edgeWidth, openAsvId, dense, ring,
+       c2, c2Ids, seedXY, sel, selMarked, markedDrawn, gezeichnet, markColor, edgeWidth, openAsvId, dense, ring,
        scale, edgeStrength, ewMin, ewMax, filters.layers, light, nodeOutline, selRing,
        labelColor, labelBorder, glowColours, tok, modules, colorMode, functionColor,
        linkLen, revolver, scheibe, zeichenfolge, nUnterScheibe, imRevolver, nSamples]);
@@ -836,7 +826,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         }
         case "layer": return layerLabel(filters.layers);
         case "cross": return "crossing only";
-        case "c2": return "criterion 2 only";
+        case "c2": return "hubs only";
         case "function": return `function ${functionLabel(filters.fn ?? "")}`;
         case "taxon": return filters.taxon ? `${filters.taxon.value} (${filters.taxon.rank})` : "taxon";
         case "asvs": return `${(filters.asvs?.ids.length ?? 0) - unknownAsvIds.length} selected ASVs`
@@ -874,10 +864,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
           recorded: thr?.recorded ?? false })}`,
         ...(widthText ? [`  ${widthText}`] : []),
         ...(c2 && !taxaMode ? [
-          `  Glow: ${c2.statement}`,
-          `  ${c2.selection_note}`,
-          `  ${c2.not_keystone}`,
-          `  Computed: ${c2.formula}`,
+          `  Hubs computed: ${c2.formula}`,
           `  Source: ${c2.source}`,
         ] : []),
         ...(colorMode === "function" ? [
@@ -889,7 +876,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         ] : []),
         `${drawnCounts.nodes} ${taxaMode ? "taxa" : "ASVs"} · ${drawnCounts.edges} edges · ${drawnCounts.ccm} with CCM · `
           + (!taxaMode && net.layers?.ccm_tested_recorded ? `${rejectedCount} with a rejected direction · ` : "")
-          + `${drawnCounts.cross} crossing modules${c2 && !taxaMode ? ` · ${c2Visible} meet criterion 2${c2Of}` : ""}`,
+          + `${drawnCounts.cross} crossing modules${c2 && !taxaMode ? ` · ${c2Visible} hubs${c2Of}` : ""}`,
       ];
       const pad = 24, lineH = 30;
       const c = document.createElement("canvas");

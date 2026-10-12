@@ -206,7 +206,7 @@ export default function NetworkSidebar(p: SidebarProps) {
           : `${visibleClusters.length} of ${p.clusters.length}`);
       case "layer": return layerLabel(filters.layers);
       case "cross": return "crossing only";
-      case "c2": return "Criterion 2 only";
+      case "c2": return "Hubs only";
       case "function": return `Function: ${functionLabel(filters.fn ?? "")}`;
       case "taxon": return filters.taxon ? `${filters.taxon.value} (${filters.taxon.rank})` : "Taxon";
       case "asvs": {
@@ -852,7 +852,7 @@ export default function NetworkSidebar(p: SidebarProps) {
                 onClick={() => { p.onFilters({ c2Only: !filters.c2Only }); setAddOpen(false); }}
                 title={c2?.glow}
                 className="w-full text-left px-2 py-1 hover:bg-control text-fg disabled:text-fg-muted">
-                {filters.c2Only ? "✓ " : ""}only criterion 2
+                {filters.c2Only ? "✓ " : ""}only hubs
                 {c2 && <span className="text-fg-muted"> ({c2.n_pass} of {c2.n_testable})</span>}
               </button>
               <button data-testid="filter-add-function"
@@ -964,7 +964,7 @@ export default function NetworkSidebar(p: SidebarProps) {
             <span data-testid="cross-count" className="text-warn">{p.counts.cross}</span> crossing modules
             {c2 && !p.taxaMode && (() => {
               const n = p.counts.c2 ?? c2.n_pass;
-              return <> · <span data-testid="c2-count">{n}</span> meet criterion 2
+              return <> · <span data-testid="c2-count">{n}</span> hubs
                 {n !== c2.n_pass && <span data-testid="c2-count-total"> (of {c2.n_pass} in the network)</span>}</>;
             })()}
           </div>
