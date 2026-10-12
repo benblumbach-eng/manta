@@ -10,9 +10,6 @@ dist/
 apps/manta_web/backend/manta_auth.db
 apps/manta_web/backend/import_fixture/
 deploy/backups/
-tools/ela/rlib/
-tools/ela/vendor/
-tools/ela/out/
 tools/traits/vendor/*
 !tools/traits/vendor/SHA256SUMS
 logs/

@@ -226,7 +226,7 @@ export const adminDeleteUser = (username: string) =>
 export type ImportJob = {
   job_id: string; status: string; stage: string; stages?: string[];
   dataset_id?: string; progress?: number; error?: string;
-  started_at?: number; stage_detail?: string;
+  started_at?: number; stage_detail?: string; notes?: string[];
 };
 export const importJobs = (): Promise<{ jobs: ImportJob[]; hinweis: string }> =>
   F(`${BASE}/imports`).then(okJson<{ jobs: ImportJob[]; hinweis: string }>);
@@ -818,6 +818,7 @@ export type ImportStatus = {
   progress?: number; stage_detail?: string;
   kind?: "import" | "recompute"; source_dataset_id?: string; label?: string;
   estimate?: OtterEstimate | null;
+  notes?: string[];
 };
 
 export type OtterEstimate = {
@@ -829,6 +830,11 @@ export type OtterEstimate = {
 export const fmtMinutes = (e: Pick<OtterEstimate, "minutes_low" | "minutes_high">) =>
   e.minutes_high <= 1 ? "about a minute"
     : `${e.minutes_low}–${e.minutes_high} min`;
+
+export const pastEstimate = (e: Pick<OtterEstimate, "minutes_high"> | null | undefined,
+                             startedAt: number | undefined, nowSeconds: number) =>
+  !!e && !!startedAt && nowSeconds - startedAt > e.minutes_high * 60;
+export const STILL_RUNNING = "still running — this can take longer";
 
 export const getImports = () =>
   get<{ jobs: ImportStatus[]; hinweis: string }>("/imports");
@@ -1203,36 +1209,6 @@ export const getSeasons = (ds: string) => get<Seasons>(`/datasets/${ds}/seasons`
 export const getWheel = (ds: string, year?: string | null) =>
   get<Wheel>(`/datasets/${ds}/wheel${year ? `?year=${encodeURIComponent(year)}` : ""}`);
 
-export type ElaState = {
-  state_id: string; energy: number; recurrence: number | null; n_active: number;
-  barrier: number | null;
-  majority_cluster: number | null;
-  cluster_counts: Record<string, number>;
-  active: { id: string; genus: string | null; cluster: number | null }[];
-};
-export type ElaObserved = {
-  samples: { sample: string; date: string | null; energy: number; basin: string }[];
-  method: string; reference: string; absent_reason: string | null;
-};
-export type ElaTree =
-  | { state_id: string; energy?: never; children?: never }
-  | { state_id?: never; energy: number; children: ElaTree[] };
-export type Ela = {
-  dataset_id: string;
-  run: {
-    ela_run_id: string; seed: number; ath: number; minoc: number; maxoc: number;
-    nmax: number; rep: number; totalit: number; boot: number;
-    n_species_model: number; tool: string; reference: string; model: string;
-  } | null;
-  states: ElaState[];
-  tipping_points: { ss1: string; ss2: string; energy: number }[];
-  disconnectivity: ElaTree | null;
-  observed: ElaObserved | null;
-  value_declaration: { value_kind: string; unit: string; frame: string; applies_to: string };
-  caveats: string[];
-  absent_reason: string | null;
-};
-export const getEla = (ds: string) => get<Ela>(`/datasets/${ds}/ela`);
 
 export type Params = {
   dataset_id: string; thresholds: Thresholds; defaults: Record<string, number | string>;

@@ -135,6 +135,9 @@ own_services() {
 }
 
 WEB_PORT="$( { sed -n 's/^HTTP_PORT=//p' deploy/.env 2>/dev/null || true; } | tail -1)"
+if [ -f deploy/.env ] && ! docker info >/dev/null 2>&1; then
+  warn "Docker not reachable; afterwards run: cd deploy && docker compose up -d --build"
+fi
 services="$(own_services || true)"
 if [ -n "$services" ]; then
   services="$(echo $services)"

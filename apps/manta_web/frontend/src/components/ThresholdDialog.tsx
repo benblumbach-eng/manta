@@ -1,6 +1,7 @@
 import { Button, Dialog } from "./ui";
 import { useEffect, useRef, useState } from "react";
-import { getImportStatus, getRecomputeEstimate, recompute, fmtMinutes, PRODUCTION_THRESHOLDS,
+import { getImportStatus, getRecomputeEstimate, recompute, fmtMinutes, pastEstimate, STILL_RUNNING,
+         PRODUCTION_THRESHOLDS,
          type ImportStatus, type RecomputeAck, type RecomputePreview, type ThresholdInput,
          type Thresholds } from "../api";
 import InfoTip from "./InfoTip";
@@ -185,7 +186,11 @@ export default function ThresholdDialog({ datasetId, current, onClose, onDone, o
               ? <span className="text-danger">failed: {job.error}</span>
               : done
                 ? <span className="text-ok">done — the new dataset is in the list.</span>
-                : <>running · stage {job?.stage ?? "queued"} — closing this window does not stop it.</>}
+                : <>running · stage {job?.stage ?? "queued"} — closing this window does not stop it.
+                    {pastEstimate(est, job?.started_at, Date.now() / 1000) && <> {STILL_RUNNING}.</>}</>}
+            {done && (job?.notes ?? []).map((n) => (
+              <p key={n} className="mt-1 text-warn break-words" data-testid="threshold-note">{n}</p>
+            ))}
           </div>
         )}
 

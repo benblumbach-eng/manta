@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -139,10 +140,16 @@ def tool_status() -> dict:
         entries[entry] = {"ok": not missing, "missing": missing}
     return {"tools": have, "entries": entries}
 
-STAGES = ("convert", "otter", "ingest")
+POST_STAGE = "annotate"
+STAGES = ("convert", "otter", "ingest", POST_STAGE)
 STAGES_FASTQ = ("dada2",) + STAGES
-STAGES_TABLES = ("otter", "ingest")
-STAGES_INGEST = ("ingest",)
+STAGES_TABLES = ("otter", "ingest", POST_STAGE)
+STAGES_INGEST = ("ingest", POST_STAGE)
+TRAITS_SCRIPT = REPO / "tools" / "traits" / "annotate.py"
+ENV_LINKS_SCRIPT = REPO / "tools" / "env_links" / "compute.py"
+POST_STAGE_AT = 0.98
+NOTE_TRAITS_MISSING = ("No function annotation: run bash tools/traits/fetch_sources.sh — "
+                       "imports after that are annotated.")
 DADA2_SCRIPT = CONVERT_DIR / "run_dada2.R"
 
 _jobs: dict[str, dict] = {}
@@ -287,10 +294,11 @@ def _run(job_id: str, rdata_dir: Path, dataset_id: str, run_id: str,
     alt_geloescht = False
     csv_dir, otter_out = work / "csv", work / "otter"
     stages_list = (get_status(job_id) or {}).get("stages") or list(STAGES)
-    n_stages = max(1, len(stages_list))
+    stages_main = [s for s in stages_list if s != POST_STAGE]
+    n_stages = max(1, len(stages_main))
 
     def _stage_base(name: str) -> float:
-        return stages_list.index(name) / n_stages if name in stages_list else 0.0
+        return stages_main.index(name) / n_stages if name in stages_main else 0.0
 
     entry_point = ("otter_output" if otter_out_dir is not None else
                    "otter_input" if tables_dir is not None else
@@ -358,7 +366,8 @@ def _run(job_id: str, rdata_dir: Path, dataset_id: str, run_id: str,
         if zurueck is not None:
             zurueck()
 
-        _set(job_id, status="done", stage="done", progress=1.0)
+        notes = _post_stage(job_id, dataset_id)
+        _set(job_id, status="done", stage="done", progress=1.0, notes=notes)
     except Exception as e:
         fehler = str(e)
         if alt_geloescht:
@@ -395,6 +404,27 @@ def _otter_check(job_id: str, csv_dir: Path, thresholds: dict | None) -> dict | 
     return est
 
 
+def _tail(e: Exception, limit: int = 160) -> str:
+    zeilen = [z.strip() for z in str(e).splitlines() if z.strip()]
+    return (zeilen[-1] if zeilen else str(e))[-limit:]
+
+
+def _post_stage(job_id: str, dataset_id: str) -> list[str]:
+    notes: list[str] = []
+    _set(job_id, stage=POST_STAGE, progress=POST_STAGE_AT, stage_detail="function annotation")
+    try:
+        _run_sub("traits", [str(INGEST_DIR / ".venv/bin/python"), str(TRAITS_SCRIPT), dataset_id])
+    except Exception as e:
+        notes.append(NOTE_TRAITS_MISSING if "fetch_sources.sh" in str(e)
+                     else f"Function annotation failed: {_tail(e)}")
+    _set(job_id, stage_detail="environment links")
+    try:
+        _run_sub("envlinks", [sys.executable, str(ENV_LINKS_SCRIPT), dataset_id])
+    except Exception as e:
+        notes.append(f"Environment links failed: {_tail(e)}")
+    return notes
+
+
 def _ingest_env(otter_out: Path, csv_dir: Path) -> dict:
     return dict(os.environ, OTTER_OUT_DIR=str(otter_out), OTTER_INPUT_DIR=str(csv_dir))
 
@@ -408,7 +438,7 @@ def _is_own_upload_dir(d: Path) -> bool:
         return False
 
 
-RECOMPUTE_STAGES = ("export", "otter", "copy", "ingest")
+RECOMPUTE_STAGES = ("export", "otter", "copy", "ingest", POST_STAGE)
 COPY_SCRIPT = INGEST_DIR / "copy_dataset.py"
 
 THRESHOLD_ARGS = ("con_tr", "con_alpha", "ccmn_tr", "louvain_res", "fft_coeffs",
@@ -456,7 +486,8 @@ def _recompute(job_id: str, dataset_id: str, new_dataset_id: str, label: str, at
                       "--time-axis", time_axis or "ordinal", "--network-only"]
         _run_sub("ingest", ingest_cmd, env=env)
 
-        _set(job_id, status="done", stage="done", progress=1.0)
+        notes = _post_stage(job_id, new_dataset_id)
+        _set(job_id, status="done", stage="done", progress=1.0, notes=notes)
     except Exception as e:
         fehler = str(e)
         if kopiert and discard_new is not None:

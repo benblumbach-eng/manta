@@ -1008,8 +1008,8 @@ _LIMIT_RE = re.compile(r"\bLIMIT\s+(\d+)", re.IGNORECASE)
 
 NICHT_ABFRAGBAR = {"Star", "Reference"}
 
-FREI_ABFRAGBAR = {"ASV", "Sample", "Dataset", "Cluster", "Run", "EnvVariable", "StableState",
-                  "ElaRun", "TraitRun", "EnvLinkRun", "Dada2Run"}
+FREI_ABFRAGBAR = {"ASV", "Sample", "Dataset", "Cluster", "Run", "EnvVariable",
+                  "TraitRun", "EnvLinkRun", "Dada2Run"}
 
 _NODE_RE = re.compile(
     r"(?<![A-Za-z0-9_.])\(\s*([A-Za-z_][A-Za-z0-9_]*)?\s*"

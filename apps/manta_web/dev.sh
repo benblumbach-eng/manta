@@ -7,6 +7,7 @@ PY="$BACK/.venv/bin/python"
 VITE="$FRONT/node_modules/.bin/vite"
 BACKEND_PORT="${MANTA_BACKEND_PORT:-8000}"
 FRONTEND_PORT="${MANTA_FRONTEND_PORT:-5173}"
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
 TMP="${TMPDIR:-/tmp}"
 LOGDIR="${TMP%/}/manta-dev.$(printf '%s' "$HERE" | cksum | cut -d' ' -f1)"
 BACKLOG="$LOGDIR/backend.log"

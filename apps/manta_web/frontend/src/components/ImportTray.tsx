@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { fmtMinutes, getImports, type ImportStatus } from "../api";
+import { fmtMinutes, getImports, pastEstimate, STILL_RUNNING, type ImportStatus } from "../api";
 
 export default function ImportTray({ isAdmin, onJobDone }:
   { isAdmin: boolean; onJobDone: () => void }) {
@@ -87,7 +87,8 @@ export default function ImportTray({ isAdmin, onJobDone }:
               {j.estimate && (
                 <div className="text-fg-muted" data-testid={`import-tray-estimate-${j.dataset_id}`}
                   title={j.estimate.basis}>
-                  {j.estimate.n_asv} ASVs · expected {fmtMinutes(j.estimate)} in total
+                  {j.estimate.n_asv} ASVs · {pastEstimate(j.estimate, j.started_at, now)
+                    ? STILL_RUNNING : `expected ${fmtMinutes(j.estimate)} in total`}
                 </div>
               )}
               <div className="text-fg-muted">
@@ -102,6 +103,10 @@ export default function ImportTray({ isAdmin, onJobDone }:
               {j.kind === "recompute" && <> — new dataset in the list</>}
             </div>
           )}
+          {j.status === "done" && (j.notes ?? []).map((n) => (
+            <div key={n} className="mt-1 text-warn break-words"
+              data-testid={`import-tray-note-${j.dataset_id}`}>{n}</div>
+          ))}
           {j.status === "error" && (
             <div className="mt-1 text-danger break-words">✗ {j.error ?? "unknown error"}</div>
           )}

@@ -79,11 +79,11 @@ measured variable.
   organisms with a high closeness centrality within their module are marked (criterion 2 of the
   keystone definition of Oldenburg et al. 2024, see Methods) — not keystones on their own
 - Filters by module, taxon, function and criterion 2; the dataset and filters are kept in the link
-- Energy landscape: stable community states and the transitions between them
 - Comparison over the year of ASVs, modules and environmental variables within a dataset
 - Import in the browser, from raw reads or from finished results
 - An optional assistant that answers from the stored results and marks any number it cannot back
   up with `[no evidence]`
+- The assistant's read-only tools for any MCP client: `apps/manta_mcp/start_mcp.sh`
 
 </td>
 </tr>
@@ -104,20 +104,20 @@ flowchart LR
 
 | Step | Tool | Installation |
 |---|---|---|
-| Reads → ASVs and taxonomy | [DADA2](https://benjjneb.github.io/dada2/) | R, installed separately |
+| Reads → ASVs and taxonomy | [DADA2](https://benjjneb.github.io/dada2/) | optional, one script (step 2) |
 | ASVs → networks and modules | [OTTER](https://gitlab.com/qtb-hhu/marine/otter) | fetched with MANTA |
-| Energy landscape (optional) | [rELA](https://github.com/kecosz/rELA) | downloaded on request |
 | Storage | [Neo4j](https://neo4j.com/) | runs in Docker |
 
 ## Installation
 
 MANTA is installed in two steps. **Step 1** starts the platform. **Step 2** adds the analysis
-tools; every import needs it, including the example datasets.
+tools; every import needs it, including the example dataset.
 
 **Requirements:** [Docker](https://docs.docker.com/get-started/get-docker/) with Compose and
 [Git](https://git-scm.com/downloads). 4 GB RAM and 10 GB free disk space without the assistant;
 with it, 8 GB RAM for the small model (more for the default one) and 20 GB disk. macOS and Linux
-work directly; Windows needs WSL 2.
+work directly; Windows needs WSL 2, which gets only half of the RAM by default — there, plan 8 GB
+RAM, or 16 GB with the assistant.
 
 <details>
 <summary><b>Windows: set up WSL 2 first</b></summary>
@@ -128,12 +128,25 @@ work directly; Windows needs WSL 2.
    Enabled*. If it says *Disabled*, turn it on in the firmware settings (Intel VT-x or AMD SVM);
    Microsoft has [instructions per manufacturer](https://support.microsoft.com/en-us/windows/enable-virtualization-on-windows-c5578302-6e43-4b4b-a449-8ced115f58e1).
 2. **Install WSL 2:** open PowerShell **as administrator**, run `wsl --install`, then **restart
-   the PC**. On first start, Ubuntu asks for a new Linux user name and password.
-3. **Install Docker Desktop** and keep its WSL integration switched on (the default).
+   the PC**. Open **Ubuntu** from the Start menu; it asks for a new Linux user name and password
+   (the password stays invisible while you type).
+3. **Give WSL enough memory:** in PowerShell, run `notepad "$env:USERPROFILE\.wslconfig"`, answer
+   *Yes* and write:
+   ```
+   [wsl2]
+   memory=5GB
+   ```
+   That is for an 8 GB PC; on 16 GB with the assistant, write `memory=12GB` (without the
+   assistant, 16 GB need no file). Save, then run `wsl --shutdown` in PowerShell.
+4. **Install Docker Desktop**, start it and accept the terms (signing in is not needed). Under
+   *Settings → Resources → WSL integration*, switch on **Ubuntu** and click *Apply & restart*. In
+   Ubuntu, `docker compose version` must print a version.
 
-From here on, run every command in the **Ubuntu** window, not in PowerShell, and keep the clone
-in the Linux home directory (`~/manta`). A clone on the Windows drive (`C:\`, `/mnt/c`) does not
-work: OTTER contains a file named `con.py`, which Windows does not allow.
+From here on, run every command in the **Ubuntu** window; Git is already installed there. Do not
+use Git for Windows or PowerShell for MANTA. Keep the clone in the Linux home directory
+(`~/manta`): a clone on the Windows drive (`C:\`, `/mnt/c`) does not work, because OTTER contains
+a file named `con.py`, which Windows does not allow. When you paste several lines, Windows
+Terminal asks first; choose *Paste anyway*.
 
 </details>
 
@@ -143,10 +156,13 @@ work: OTTER contains a file named `con.py`, which Windows does not allow.
 git clone https://github.com/benblumbach-eng/manta.git ~/manta
 cd ~/manta/deploy
 cp .env.example .env
+nano .env
 ```
 
-Choose a password of at least 8 characters and set it as `NEO4J_PASSWORD` in `deploy/.env`
-**before** the first start — the database keeps the password it starts with. Then:
+In `.env`, replace `change-me` in `NEO4J_PASSWORD=change-me` with a password of at least 8
+characters, **using only letters, digits, `-` and `_`**. Save with Ctrl+O and Enter, quit with
+Ctrl+X. Do this **before** the first start — the database keeps the password it starts with.
+Then:
 
 ```bash
 docker compose up -d --build
@@ -200,30 +216,36 @@ curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt in
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-On Windows, install them inside Ubuntu; a Windows installation is not visible there.
+`sudo` asks for your Linux password. On Windows, install these inside Ubuntu; a Windows
+installation is not visible there.
 
 </details>
 
 Install the analysis tools. The lines are joined with `&&`, so the block stops at the first
-error. Do not run it with `sudo`.
+error; running it again is safe. Do not run it with `sudo`.
 
 ```bash
 cd ~/manta &&
 git submodule update --init &&
-uv venv --python 3.12 apps/manta_web/backend/.venv &&
+uv venv --clear --python 3.12 apps/manta_web/backend/.venv &&
 uv pip install -p apps/manta_web/backend/.venv/bin/python -r apps/manta_web/backend/requirements.txt &&
-cp .env.example apps/manta_web/backend/.env &&
+([ -f apps/manta_web/backend/.env ] || cp .env.example apps/manta_web/backend/.env) &&
 (cd apps/manta_web/frontend && npm ci) &&
-uv venv --python 3.10 tools/neo4j_ingest/.venv &&
+uv venv --clear --python 3.10 tools/neo4j_ingest/.venv &&
 uv pip install -p tools/neo4j_ingest/.venv/bin/python -r tools/neo4j_ingest/requirements.txt &&
-uv venv --python 3.14 tools/dada2_to_otter/.venv &&
+uv venv --clear --python 3.14 tools/dada2_to_otter/.venv &&
 uv pip install -p tools/dada2_to_otter/.venv/bin/python -r tools/dada2_to_otter/requirements.txt &&
-uv venv --python 3.10 submodules/otter/.venv &&
-uv pip install -p submodules/otter/.venv/bin/python -r tools/otter_runner/requirements-otter.txt
+uv venv --clear --python 3.10 submodules/otter/.venv &&
+uv pip install -p submodules/otter/.venv/bin/python -r tools/otter_runner/requirements-otter.txt &&
+bash tools/traits/fetch_sources.sh
 ```
 
-Set the same `NEO4J_PASSWORD` as in step 1 in `apps/manta_web/backend/.env` (if you changed the
-database port in `deploy/.env`, adjust `NEO4J_URI` there too), then start:
+The last line downloads the literature tables for the function filter (about 4 MB, checked
+against fixed checksums).
+
+Set the same `NEO4J_PASSWORD` as in step 1 in `apps/manta_web/backend/.env`
+(`nano apps/manta_web/backend/.env`; if you changed the database port in `deploy/.env`, adjust
+`NEO4J_URI` there too), then start:
 
 ```bash
 cd ~/manta &&
@@ -242,27 +264,50 @@ set -a && . ./.env && set +a &&
 Both addresses show the same data: what you import on port 5173 also appears on port 8080.
 From `~/manta`, `bash apps/manta_web/dev.sh` with `start`, `stop`, `restart`, `status` or `logs`
 controls this setup; `stop --db` also stops the database, so the site on port 8080 then shows no
-data.
-Step 2 uses ports 8000 and 5173; `MANTA_BACKEND_PORT` and `MANTA_FRONTEND_PORT` change them.
+data. Step 2 uses ports 8000 and 5173; `MANTA_BACKEND_PORT` and `MANTA_FRONTEND_PORT` change them.
+After a restart of the computer, run `cd ~/manta && bash apps/manta_web/dev.sh start` again (on
+Windows, start Docker Desktop first).
 
 **Optional components**
 
 | For | Install |
 |---|---|
-| Raw FASTQ files | R 4.4 (for example with [rig](https://github.com/r-lib/rig): `rig add 4.4`), then `uv tool install cutadapt==5.2` and<br>`Rscript -e 'install.packages("BiocManager", repos = "https://cloud.r-project.org"); BiocManager::install(version = "3.20"); BiocManager::install(c("dada2", "Biostrings", "ShortRead"))'` |
+| Raw FASTQ files | `cd ~/manta && bash tools/dada2_to_otter/install_dada2.sh` installs R 4.4 (with [rig](https://github.com/r-lib/rig)), Bioconductor 3.20 with dada2, Biostrings and ShortRead, and cutadapt 5.2; whatever is already there is skipped. It asks for your password before installing R (on Ubuntu also system libraries); on Ubuntu it takes 10–30 minutes. `--check` only reports. |
 | Taxonomic names | a [PR2 file](https://github.com/pr2database/pr2database/releases) in DADA2 format; set `MANTA_PR2=<file>` in `apps/manta_web/backend/.env` and run `bash apps/manta_web/dev.sh restart`. Without it, ASVs stay `unassigned`. |
-| Energy landscape | R 4.4, then `cd ~/manta && bash tools/ela/fetch_rela.sh && Rscript tools/ela/setup_r.R` |
-| Function filter | `cd ~/manta && bash tools/traits/fetch_sources.sh` |
 
 The DADA2 and cutadapt versions are fixed on purpose: different versions can turn the same reads
-into different ASVs. Bioconductor 3.20 requires R 4.4 exactly. If an R package fails to compile,
-install the build tools first (`xcode-select --install` on macOS; on Ubuntu `sudo apt install -y
-build-essential libcurl4-openssl-dev libssl-dev libxml2-dev zlib1g-dev`).
+into different ASVs.
+
+**Next:** [import the example dataset](#try-it-the-example-dataset).
 
 ## Importing data
 
-Open **Import a dataset** at <http://localhost:5173> and choose what you have. A dataset needs at
-least 8 samples.
+### Try it: the example dataset
+
+`examples/synthetic_12_samples` is synthetic DADA2 output: the four files DADA2 writes (abundance
+matrix, taxonomy and read tracking as `.Rdata`, the ASV sequences as FASTA) and a `metadata.csv`
+with sampling dates and environmental values. It has 50 ASVs and 12 samples, all numbers made
+up, and tests the chain from DADA2 output through OTTER into the database — no R needed.
+`examples/synthetic_96_samples` is the same with 96 samples.
+
+1. Open <http://localhost:5173>, sign in and click **Import a dataset**.
+2. Choose **DADA2 output (ASVs)** and select all five files in
+   `~/manta/examples/synthetic_12_samples` (on Windows:
+   `\\wsl.localhost\Ubuntu\home\<you>\manta\examples\synthetic_12_samples`).
+3. Enter a name such as `example_12` and choose the marker **18S**: the made-up taxonomy is
+   eukaryotic; `_prok` is only part of the file names the DADA2 script writes. Under *Origin*, a
+   latitude and longitude (for example 79.0 and 4.17) put the dataset on the map.
+4. Click **Start import**.
+
+The import takes **15–40 minutes depending on the machine**, almost all of it OTTER's
+permutation test. A card shows the progress; the import keeps running when you click elsewhere.
+Afterwards the dataset is in the list: its network with modules, a page per ASV and the year
+wheel with the measured variables. The function filter stays empty, because the taxon names are
+made up.
+
+### Your own data
+
+Open **Import a dataset** and choose what you have. A dataset needs at least 8 samples.
 
 | In the dialog | Files | MANTA then runs |
 |---|---|---|
@@ -275,89 +320,11 @@ columns are read as environmental variables. Without real dates, samples only ha
 there is no year wheel. DADA2 can take hours and needs a lot of memory; on an 8 GB machine, run it
 beforehand and import its output.
 
-**To try it out**, select all five files of one example dataset under **DADA2 output (ASVs)**.
-Both are synthetic, with made-up numbers and 50 ASVs; each import takes about 15 minutes on an
-otherwise idle laptop, almost all of it OTTER's permutation test:
-
-| Folder | Samples |
-|---|---|
-| `examples/synthetic_12_samples` | 12, August 2016 to January 2017 |
-| `examples/synthetic_96_samples` | 96, August 2016 to July 2020 |
-
-On Windows, the folder is at `\\wsl.localhost\Ubuntu\home\<you>\manta\examples\`.
-
-**After an import.** The browser import computes the networks. Three further analyses run from the
-command line, once per dataset (`<name>` is the dataset name given at import):
-
-```bash
-cd ~/manta && set -a && . tools/neo4j_ingest/.env && set +a
-# energy landscape
-tools/neo4j_ingest/.venv/bin/python tools/ela/export_matrix.py <name>
-Rscript tools/ela/run_ela.R tools/ela/out/<name>.input.json tools/ela/out/<name>.result.json
-tools/neo4j_ingest/.venv/bin/python tools/ela/ingest_ela.py tools/ela/out/<name>.result.json
-# function filter (looks up each ASV's taxonomic name in published trait databases)
-tools/neo4j_ingest/.venv/bin/python tools/traits/annotate.py <name>
-# links between ASVs and environmental variables (datasets with real dates)
-apps/manta_web/backend/.venv/bin/python tools/env_links/compute.py <name>
-```
-
-The function annotation describes a taxonomic name, not a measurement from your data; for the
-synthetic examples it stays empty, because their taxon names are made up. Recomputing a network in
-the interface creates a new dataset next to the original and leaves the original as it is. The new
-dataset carries a copy of the samples, the function annotation and the environmental links; its
-energy landscape is not copied (it can depend on the modules of the old network), so compute it as
-above if you need it. Every ASV goes into the network; when the memory of the machine will not
-suffice, MANTA says so before the run starts instead of dropping ASVs.
-
-<details>
-<summary><b>The whole chain on the command line</b></summary>
-
-<br>
-
-```bash
-cd ~/manta
-
-# Raw reads → OTTER input. MANTA_METADATA: metadata.csv with the real sampling dates.
-MANTA_METADATA=<metadata.csv> Rscript tools/dada2_to_otter/run_dada2.R <fastq_dir> <out_dir>
-tools/dada2_to_otter/.venv/bin/python tools/dada2_to_otter/convert.py --in <out_dir> --out <csv_dir>
-
-# OTTER. The browser import uses 999 permutations; OTTER's own default is 2.
-submodules/otter/.venv/bin/python tools/otter_runner/run_otter.py \
-  --otter-root submodules/otter --abundance <csv_dir>/abundance.csv \
-  --taxa <csv_dir>/taxa_info.csv --environment <csv_dir>/environment_info.csv \
-  --num-permutations 999 --out <otter_out>
-
-# Load into the database. --time-axis dates only with real sampling dates, otherwise ordinal.
-# --station, --lat and --lon together place the dataset on the world map.
-set -a; . tools/neo4j_ingest/.env; set +a
-OTTER_OUT_DIR=<otter_out> OTTER_INPUT_DIR=<csv_dir> \
-  tools/neo4j_ingest/.venv/bin/python tools/neo4j_ingest/ingest.py \
-  --dataset-id <name> --marker 18S --region "<region>" --time-axis dates \
-  --station "<station>" --lat <degrees> --lon <degrees>
-
-# Network as PNG, PDF and GraphML
-submodules/otter/.venv/bin/python tools/otter_figures/render_network.py --in <otter_out> --out <images>
-```
-
-`Rscript tools/dada2_to_otter/run_dada2.R --help` lists all options. Without `MANTA_METADATA`,
-`run_dada2.R` writes placeholder dates that only encode the sample order and marks them;
-`ingest.py` then refuses `--time-axis dates`. OTTER runs as a separate program on a single core,
-which keeps results reproducible.
-
-</details>
-
-<details>
-<summary><b>Using MANTA's tools from an MCP client</b></summary>
-
-<br>
-
-The assistant's 33 read-only tools are also available to any client that speaks the Model
-Context Protocol. After step 2, configure the client with the command
-`<path to manta>/apps/manta_mcp/start_mcp.sh`; it reads the database settings from
-`apps/manta_web/backend/.env`. By default it sees all datasets; `MANTA_MCP_SCOPE=public` limits it
-to public ones.
-
-</details>
+Every import ends with two short steps: each ASV's taxon name is looked up in published trait
+tables (the function filter — a property of the name, not a measurement), and, with real dates,
+the measured variables are linked to the ASVs. Every ASV goes into the network; if the memory will
+not suffice, MANTA says so before the run starts. Recomputing a network in the interface creates
+a new dataset and leaves the original as it is.
 
 ## Updating
 
@@ -366,7 +333,9 @@ cd ~/manta && bash update.sh
 ```
 
 This fetches the latest version, installs only what changed and restarts what this clone runs.
-Imported data are kept. Local changes in the clone stop the update instead of being overwritten.
+Docker must be running (on Windows, start Docker Desktop first); if it is not, `update.sh` says
+so. Imported data are kept. Local changes in the clone stop the update instead of being
+overwritten.
 `bash update.sh --check` only reports whether an update exists (exit code `10` if so, `0` if
 not, `1` on an error).
 
@@ -397,6 +366,9 @@ If you use step 2, run its install block, then copy `apps/manta_web/backend/.env
 |---|---|
 | `invalid path 'lutra/con.py'` or `dubious ownership` | The clone is on the Windows drive. Clone into `~/manta` inside Ubuntu. |
 | `Token "&&" … not a valid statement separator` | The commands run in PowerShell. Use the Ubuntu window. |
+| `The command 'docker' could not be found in this WSL 2 distro` or `Cannot connect to the Docker daemon` | Docker Desktop is not running, or its WSL integration for Ubuntu is off (*Settings → Resources → WSL integration*). |
+| `ports are not available` … `forbidden by its access permissions` | Windows has reserved the port. In PowerShell, `netsh interface ipv4 show excludedportrange protocol=tcp` lists the reserved ranges; set a free port in `deploy/.env` (for `NEO4J_PORT_BOLT`, also change `NEO4J_URI` in step 2). |
+| `localhost` does not answer after the PC slept (Windows) | In PowerShell, run `wsl --shutdown`, restart Docker Desktop, then in Ubuntu `cd ~/manta && bash apps/manta_web/dev.sh start`. |
 | `uv: command not found` | Run `export PATH="$HOME/.local/bin:$PATH"`, or install uv inside Ubuntu. |
 | `EACCES: permission denied … node_modules` | npm once ran with `sudo`. Run `sudo chown -R $USER:$USER ~/manta`. |
 | `permission denied … docker.sock` | Run `sudo usermod -aG docker $USER`, then log out and back in (or run `newgrp docker`). On WSL, run `wsl --shutdown` in PowerShell and reopen Ubuntu. |
@@ -418,7 +390,7 @@ issue instead.
 
 Use **Cite this repository** in the GitHub sidebar (from [`CITATION.cff`](CITATION.cff)). Since
 MANTA runs existing methods, please also cite the tools and data your results rely on: DADA2,
-OTTER, cutadapt, rELA, PR2 and the annotation sources listed below.
+OTTER, cutadapt, PR2 and the annotation sources listed below.
 
 ## Sources and licenses
 
@@ -436,7 +408,6 @@ repository; MANTA downloads them from their original sources.
   filter and primer defaults follow QTB's [fastq2abundance](https://gitlab.com/qtb-hhu/marine/publications/fastq2abundance)
   (Ellen Oldenburg), which is linked, not included.
 - **cutadapt** — Martin 2011, *EMBnet.journal* 17:10, [doi:10.14806/ej.17.1.200](https://doi.org/10.14806/ej.17.1.200); MIT License.
-- **rELA** — Suzuki et al. 2021, *Ecol Monogr* 91:e01469, [doi:10.1002/ecm.1469](https://doi.org/10.1002/ecm.1469); BSD-3-Clause. <https://github.com/kecosz/rELA>
 - **Neo4j** Community Edition 5.26 (GPL v3), run unchanged as a separate Docker container.
 - **Docker images** — Caddy (Apache-2.0) serves the web interface and Ollama (MIT) runs the
   language models; both are pulled unchanged from Docker Hub.

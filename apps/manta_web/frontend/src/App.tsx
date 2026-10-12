@@ -12,8 +12,8 @@ import EdgeDrawer from "./components/EdgeDrawer";
 import EnvironmentPanel from "./components/EnvironmentPanel";
 import StarredPanel from "./components/StarredPanel";
 import WheelPanel from "./components/WheelPanel";
-import ElaPanel from "./components/ElaPanel";
 import ComparePanel from "./components/ComparePanel";
+import { EXTRA_VIEWS, extraKind } from "./extraViews";
 import TaxonPanel from "./components/TaxonPanel";
 import AgentChat from "./components/AgentChat";
 import { ASK_EVENT, type AskAssistant } from "./components/InfoTip";
@@ -35,10 +35,10 @@ type RightPanel =
   | { kind: "starred" }
   | { kind: "taxon"; asvId: string }
   | { kind: "wheel" }
-  | { kind: "ela" }
+  | { kind: `view:${string}` }
   | { kind: "compare"; seed?: string };
 
-const PANEL_WIDTH: Record<string, number> = { asv: 560, edge: 560, environment: 480, starred: 480, wheel: 520, ela: 560, compare: 560, taxon: 520, agent: 460 };
+const PANEL_WIDTH: Record<string, number> = { asv: 560, edge: 560, environment: 480, starred: 480, wheel: 520, compare: 560, taxon: 520, agent: 460 };
 
 export default function App() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
@@ -304,8 +304,9 @@ export default function App() {
             environmentOpen={istOffen("environment")}
             onOpenWheel={() => setRight({ kind: "wheel" })}
             wheelOpen={istOffen("wheel")}
-            onOpenEla={() => setRight({ kind: "ela" })}
-            elaOpen={istOffen("ela")}
+            extraViews={EXTRA_VIEWS.map((view) => ({ view, kind: extraKind(view.key),
+              open: istOffen(extraKind(view.key)),
+              onOpen: () => setRight({ kind: extraKind(view.key) }) }))}
             onOpenCompare={() => setRight({ kind: "compare" })}
             compareOpen={istOffen("compare")}
             onRefresh={refresh}
@@ -353,11 +354,11 @@ export default function App() {
               onOpenCluster={wishCluster} />
           </ErrorBoundary></PanelFrame>
         )}
-        {selected && istOffen("ela") && (
-          <PanelFrame id="ela" title="Energy landscape" onClose={() => schliesse("ela")} defaultWidth={PANEL_WIDTH.ela}><ErrorBoundary label="the energy landscape">
-            <ElaPanel datasetId={selected.dataset_id} onClose={() => schliesse("ela")} onOpenAsv={openAsv} />
+        {selected && EXTRA_VIEWS.filter((v) => istOffen(extraKind(v.key))).map((v) => (
+          <PanelFrame key={v.key} id={v.key} title={v.title} onClose={() => schliesse(extraKind(v.key))} defaultWidth={v.width}><ErrorBoundary label={v.errorLabel}>
+            <v.Panel datasetId={selected.dataset_id} onClose={() => schliesse(extraKind(v.key))} onOpenAsv={openAsv} />
           </ErrorBoundary></PanelFrame>
-        )}
+        ))}
         {selected && finde("compare") && (
           <PanelFrame id="compare" title="Comparison" onClose={() => schliesse("compare")} defaultWidth={PANEL_WIDTH.compare}><ErrorBoundary label="the seasonal comparison">
             <ComparePanel datasetId={selected.dataset_id} initialAsvId={finde("compare")!.seed}

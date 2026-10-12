@@ -274,8 +274,25 @@ def join_faprotax(groups: dict[str, list[str]], lineage: dict) -> list[dict]:
 
 
 
+SOURCES_MISSING = ("Function annotation needs its literature tables, and {files} {verb} missing "
+                   "in tools/traits/vendor/ — run bash tools/traits/fetch_sources.sh first.")
+
+
+class SourcesMissing(Exception):
+    pass
+
+
+def missing_sources(marker: str | None) -> list[str]:
+    keys = MARKER_SOURCES.get((marker or "").strip().upper(), ())
+    return [SOURCES[k]["file"] for k in keys if not (VENDOR / SOURCES[k]["file"]).is_file()]
+
+
 def load_sources(marker: str | None) -> dict:
     keys = MARKER_SOURCES.get((marker or "").strip().upper(), ())
+    fehlt = missing_sources(marker)
+    if fehlt:
+        raise SourcesMissing(SOURCES_MISSING.format(files=", ".join(fehlt),
+                                                    verb="is" if len(fehlt) == 1 else "are"))
     loaded = {}
     for k in keys:
         loaded[k] = {"mdb": load_mdb, "tmd": load_tmd, "faprotax": load_faprotax,
@@ -394,6 +411,9 @@ def main(argv: list[str]) -> int:
     try:
         ingest.ensure_constraints(driver)
         p = annotate_dataset(driver, argv[1])
+    except SourcesMissing as e:
+        print(e, file=sys.stderr)
+        return 3
     finally:
         driver.close()
     print(f"{p['dataset_id']}: {p['n_annotated']} of {p['n_with_lineage']} ASVs with a lineage "

@@ -1901,8 +1901,6 @@ def provenance_chain(q: Runner, dataset_id: str) -> dict:
                      "ORDER BY r.run_id LIMIT 1"),
         "EnvLinkRun": ("MATCH (r:EnvLinkRun {dataset_id:$d}) RETURN properties(r) AS p "
                        "ORDER BY r.run_id LIMIT 1"),
-        "ElaRun": ("MATCH (e:ElaRun {dataset_id:$d}) RETURN properties(e) AS p "
-                   "ORDER BY e.ela_run_id LIMIT 1"),
     }
 
     def lauf(label: str, schluessel: str) -> dict:
@@ -1936,7 +1934,6 @@ def provenance_chain(q: Runner, dataset_id: str) -> dict:
          "params": {k: thr.get(k) for k in THRESHOLD_KEYS if thr.get(k) is not None}},
         {**lauf("TraitRun", "run_id"), "step": "traits", "label": "Literature annotation"},
         {**lauf("EnvLinkRun", "run_id"), "step": "env_links", "label": "Environment links"},
-        {**lauf("ElaRun", "ela_run_id"), "step": "ela", "label": "Energy landscape"},
         {"step": "source", "label": "Source publication",
          "present": bool(d0.get("citation") or d0.get("doi")),
          "detail": (d0.get("citation") or d0.get("doi") or CHAIN_NOT_RECORDED),

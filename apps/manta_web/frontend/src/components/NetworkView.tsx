@@ -8,6 +8,7 @@ import ClusterPanel from "./ClusterPanel";
 import PanelFrame from "./PanelFrame";
 import LegendPanel from "./LegendPanel";
 import NetworkSidebar, { type ViewItem } from "./NetworkSidebar";
+import type { ExtraView } from "../extraViews";
 import ThemeSwitch, { type Theme } from "./ThemeSwitch";
 import { useModules } from "../modules";
 import { functionColor as functionPaletteColor, FUNCTION_NONE, functionOther,
@@ -77,7 +78,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                                       onOpenEnvironment, environmentOpen,
                                       onOpenStarred, starredOpen, clusterVonAussen,
                                       onOpenWheel, wheelOpen,
-                                      onOpenEla, elaOpen,
+                                      extraViews,
                                       onOpenCompare, compareOpen,
                                       openAsvId, isAdmin, signedIn = true, onOpenTaxon, onCloseView,
                                       onShowNet,
@@ -103,8 +104,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   environmentOpen: boolean;
   onOpenWheel: () => void;
   wheelOpen: boolean;
-  onOpenEla: () => void;
-  elaOpen: boolean;
+  extraViews: { view: ExtraView; kind: string; open: boolean; onOpen: () => void }[];
   onOpenCompare: () => void;
   compareOpen: boolean;
   onRefresh?: () => void;
@@ -965,8 +965,9 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     { key: "wheel", testid: "wheel-toggle", label: "Wheel", icon: "◔",
       open: wheelOpen, onOpen: umschalten("wheel", wheelOpen, onOpenWheel),
       disabledReason: timeCap && !timeCap.available ? timeCap.detail : null },
-    { key: "ela", testid: "ela-toggle", label: "ELA", icon: "⛰",
-      open: elaOpen, onOpen: umschalten("ela", elaOpen, onOpenEla), disabledReason: null },
+    ...extraViews.map(({ view, kind, open, onOpen }) => ({
+      key: view.key, testid: view.testid, label: view.label, icon: view.icon,
+      open, onOpen: umschalten(kind, open, onOpen), disabledReason: null })),
     { key: "compare", testid: "compare-toggle", label: "Compare", icon: "⇄",
       open: compareOpen, onOpen: umschalten("compare", compareOpen, onOpenCompare),
       disabledReason: timeCap && !timeCap.available ? timeCap.detail : null },
@@ -975,8 +976,8 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     { key: "starred", testid: "starred-toggle", label: "Star", icon: "★",
       open: starredOpen, onOpen: umschalten("starred", starredOpen, onOpenStarred), disabledReason: null },
   ];
-  const anyViewOpen = environmentOpen || wheelOpen || elaOpen || compareOpen || starredOpen
-    || legendeOffen;
+  const anyViewOpen = environmentOpen || wheelOpen || extraViews.some((x) => x.open)
+    || compareOpen || starredOpen || legendeOffen;
 
   const selNode = sel?.kind === "asv" ? net?.nodes.find((n) => n.id === sel.id) ?? null : null;
 
@@ -995,11 +996,8 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         linkLength={linkLen} linkLengthDefault={LINK_LENGTH_DEFAULT}
         onLinkLength={(v) => { roam.current = null; setLinkLen(v); }}
         colorMode={colorMode} onColorMode={setColorMode} functionClasses={functionClasses}
-        legend={legend} sizeAbsent={sizePresent === false} widthText={widthText}
+        sizeAbsent={sizePresent === false}
         countsState={net ? "ready" : err != null ? "error" : "loading"}
-        thresholds={thresholdLine({
-          conTr: thr?.con_tr ?? null, conAlpha: thr?.con_alpha ?? null,
-          recorded: thr?.recorded ?? false })}
         views={{ anyViewOpen: anyViewOpen || selectedCluster != null || openAsvId != null,
                  onShowNet: () => { onShowNet(); setSelectedCluster(null); setLegendeOffen(false); },
                  items: viewItems }}
@@ -1208,6 +1206,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         <PanelFrame id="legend" title="Legend" onClose={() => setLegendeOffen(false)} defaultWidth={440}>
           <LegendPanel datasetId={dataset.dataset_id} thr={thr} c2={c2}
             labelMax={LABEL_AUTO_MAX} functionClasses={functionClasses} colorMode={colorMode}
+            sizeAbsent={sizePresent === false} widthText={widthText}
             onClose={() => setLegendeOffen(false)} />
         </PanelFrame>
       )}

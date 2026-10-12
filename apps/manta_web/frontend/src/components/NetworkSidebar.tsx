@@ -5,7 +5,7 @@ import DataAvailability from "./DataAvailability";
 import { useModules } from "../modules";
 import ProvenanceFooter from "./ProvenanceFooter";
 import { fmtRun, fmtUtc } from "../format";
-import { isActive, type Filters, type FilterKind, type LegendRow, layerLabel, layersDefault, functionLabel } from "../networkFilters";
+import { isActive, type Filters, type FilterKind, layerLabel, layersDefault, functionLabel } from "../networkFilters";
 import { FUNCTION_NONE, functionOther } from "../clusterPalette";
 import { useDatasetSearch } from "../datasetSearch";
 import ErrorNotice from "./ErrorNotice";
@@ -55,11 +55,8 @@ export type SidebarProps = {
   taxaLayers: { n_con: number; n_asv_con: number;
                 n_con_with_ccm: number; n_asv_ccm: number;
                 n_con_with_rejected: number; n_asv_rejected: number } | null;
-  legend: LegendRow[];
   sizeAbsent: boolean;
   countsState?: "loading" | "error" | "ready";
-  widthText: string | null;
-  thresholds: string;
   views: { anyViewOpen: boolean; onShowNet: () => void; items: ViewItem[] };
   onPickAsv: (id: string) => void;
   onOpenAsv: (id: string) => void;
@@ -72,23 +69,11 @@ export type SidebarProps = {
 
 const PRESENCE_START = 5;
 
-const LEGEND_TESTID: Record<string, string> = {
-  node: "legend-node", size: "size-legend", edge: "legend-edge", ccm: "legend-ccm",
-  cross: "legend-cross",
-  width: "edge-width-legend", c2: "c2-legend", highlight: "legend-highlight",
-};
-
 export default function NetworkSidebar(p: SidebarProps) {
   const { dataset, caps, net, c2, thr, visibleNodes, filters } = p;
   const modules = useModules();
 
   const [infoOpen, setInfoOpen] = useState(false);
-  const [legendOpen, setLegendOpen] = useState(() => {
-    try { return localStorage.getItem("manta-legend") === "1"; } catch { return false; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem("manta-legend", legendOpen ? "1" : "0"); } catch { }
-  }, [legendOpen]);
   useEffect(() => { setInfoOpen(false); }, [dataset.dataset_id]);
   const timeWord = caps ? (caps.time_axis === "dates" ? "calendar dates" : "ordinal") : null;
 
@@ -632,16 +617,6 @@ export default function NetworkSidebar(p: SidebarProps) {
                 </>
               );
             })()}
-            {net?.layers && (net.layers.ccm_tested_recorded ? (
-              <p className="text-2xs text-fg-muted tabular-nums leading-snug" data-testid="layer-tested-note">
-                OTTER tested {net.layers.n_ccm_tested} directions (each link both ways);{" "}
-                {net.layers.n_ccm_rejected} rejected at p ≥ 0.05.
-              </p>
-            ) : (
-              <p className="text-2xs text-fg-muted leading-snug" data-testid="layer-tested-note">
-                Rejected directions not recorded for this dataset (no PV table in its run).
-              </p>
-            ))}
             {net?.layers && !net.layers.ccm_tested_recorded && (
               <p data-testid="rejected-not-recorded" className="text-xs text-warn leading-snug">
                 rejected directions not recorded for this dataset
@@ -895,57 +870,6 @@ export default function NetworkSidebar(p: SidebarProps) {
 
       <div className="mt-auto space-y-2">
         <div className="text-2xs leading-snug">
-          <div className="flex items-center gap-1">
-            <button data-testid="legend-toggle" onClick={() => setLegendOpen((v) => !v)}
-              aria-expanded={legendOpen}
-              className={`rounded-md px-1 text-xs font-semibold ${legendOpen
-                ? "text-fg" : "text-fg-muted hover:text-fg hover:bg-control"}`}>
-              {legendOpen ? "▾" : "▸"} Legend
-            </button>
-          </div>
-          {legendOpen && (
-            <div data-testid="network-legend" className="mt-1">
-              {p.legend.map((row) => (
-                <div key={row.key} data-testid={LEGEND_TESTID[row.key] ?? `legend-${row.key}`}
-                  data-dim={row.dim ? "1" : "0"}
-                  className="flex items-baseline gap-2 py-px">
-                  <span className={`w-3 shrink-0 text-fg-muted${row.dim ? " opacity-50" : ""}`} aria-hidden
-                    style={row.color ? { color: row.color } : undefined}>{row.icon}</span>
-                  <span className={`w-[3.2rem] shrink-0 text-fg-muted${row.struck ? " line-through" : ""}`}>
-                    {row.term}
-                  </span>
-                  <span className={`${row.dim ? "text-fg-muted italic" : "text-fg"}${row.struck ? " line-through" : ""}`}>{row.desc}</span>
-                </div>
-              ))}
-              {p.widthText && (
-                <p data-testid="edge-width-text" className="mt-1 text-fg-muted">{p.widthText}</p>
-              )}
-              {p.sizeAbsent && (
-                <p data-testid="size-absent-reason" className="mt-1 text-fg-muted leading-snug">
-                  Size not computed for this dataset: its values are a transform of unknown form.
-                </p>
-              )}
-              <div data-testid="legend-thresholds" className="mt-1 text-fg-muted tabular-nums">
-                {p.thresholds}
-              </div>
-              {p.colorMode === "function" && (
-                <div data-testid="legend-function" className="mt-1">
-                  {p.functionClasses.map((c) => (
-                    <div key={c.label} data-testid="legend-function-class" data-label={c.label}
-                      className="flex items-center gap-2 py-px">
-                      <span className="inline-block w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: c.color }} />
-                      <span className="text-fg">{c.label}</span>
-                      <span className="text-fg-muted tabular-nums">{c.n}</span>
-                    </div>
-                  ))}
-                  <div className="flex items-center gap-2 py-px">
-                    <span className="inline-block w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: FUNCTION_NONE }} />
-                    <span className="text-fg-muted">{p.taxaMode ? "not annotated or mixed classes" : "not annotated"}</span>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
           {(p.countsState ?? "ready") !== "ready" ? (
             <div className="mt-1 text-fg-muted tabular-nums" data-testid="legend-counts">
               <span data-testid="counts-pending">
@@ -969,10 +893,6 @@ export default function NetworkSidebar(p: SidebarProps) {
             })()}
           </div>
           )}
-        </div>
-
-        <div className="text-2xs text-fg-muted" data-testid="position-note">
-          Node position: layout, not a measurement
         </div>
 
         <ProvenanceFooter datasetId={dataset.dataset_id} refreshKey={p.reloadKey} />

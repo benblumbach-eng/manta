@@ -6,8 +6,10 @@ import os
 SECONDS_PER_PAIR_96 = 0.0090
 REFERENCE_SAMPLES = 96
 SECONDS_PER_PERMUTATION_FIXED = 0.64
+SECONDS_PER_PERMUTATION_LOADED = 1.78
 BASE_SECONDS = 2.9
 RANGE_LOW, RANGE_HIGH, RANGE_HIGH_EXTRAPOLATED = 0.8, 2.0, 3.0
+RANGE_HIGH_LOADED = 1.5
 MEASURED_UP_TO_ASVS = 400
 
 MEMORY_BASE_BYTES = 350 * 1024 ** 2
@@ -40,14 +42,14 @@ def memory_budget_bytes() -> int | None:
 
 
 def seconds(n_asv: int, n_samples: int, num_permutations: int | None = None,
-            num_samples: int | None = None) -> float:
+            num_samples: int | None = None,
+            per_permutation: float = SECONDS_PER_PERMUTATION_FIXED) -> float:
     n = max(0, int(n_asv))
     pairs = n * (n - 1) / 2
     per_pair = SECONDS_PER_PAIR_96 * max(1, int(n_samples)) / REFERENCE_SAMPLES
     perms = OTTER_PERMUTATIONS if num_permutations is None else max(0, int(num_permutations))
     drawn = min(OTTER_SAMPLES if num_samples is None else max(0, int(num_samples)), pairs)
-    return BASE_SECONDS + pairs * per_pair + perms * (SECONDS_PER_PERMUTATION_FIXED
-                                                      + drawn * per_pair)
+    return BASE_SECONDS + pairs * per_pair + perms * (per_permutation + drawn * per_pair)
 
 
 def memory_bytes(n_asv: int) -> int:
@@ -62,15 +64,17 @@ def _gb(b: int | None) -> float | None:
 def estimate(n_asv: int, n_samples: int, num_permutations: int | None = None,
              num_samples: int | None = None) -> dict:
     t = seconds(n_asv, n_samples, num_permutations, num_samples)
+    t_last = seconds(n_asv, n_samples, num_permutations, num_samples,
+                     per_permutation=SECONDS_PER_PERMUTATION_LOADED)
     mem = memory_bytes(n_asv)
     budget = memory_budget_bytes()
     fits = budget is None or mem <= budget
     hoch = int(n_asv) > MEASURED_UP_TO_ASVS or int(n_samples) > REFERENCE_SAMPLES
+    oben = max(t * (RANGE_HIGH_EXTRAPOLATED if hoch else RANGE_HIGH), t_last * RANGE_HIGH_LOADED)
     out = {
         "n_asv": int(n_asv), "n_samples": int(n_samples),
         "minutes_low": max(1, math.floor(t * RANGE_LOW / 60)),
-        "minutes_high": max(1, math.ceil(t * (RANGE_HIGH_EXTRAPOLATED if hoch else RANGE_HIGH)
-                                         / 60)),
+        "minutes_high": max(1, math.ceil(oben / 60)),
         "memory_gb": max(0.1, _gb(mem)),
         "memory_budget_gb": _gb(budget),
         "machine_memory_gb": _gb(machine_memory_bytes()),

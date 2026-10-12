@@ -110,10 +110,6 @@ _KLASSEN = [
        "never derived from the sequences. `depth` is the exception: it is a coordinate of the "
        "sample, not an answer of the environment.",
        tools_=("environment", "env_variable_links")),
-    _b("StableState", "Stable state (energy landscape)", "klasse",
-       "A local energy minimum of the fitted pairwise maximum-entropy model. A MODEL quantity — "
-       "nothing about it was observed.",
-       source="Suzuki et al. 2021, Ecological Monographs 91(3):e01469"),
     _b("Run", "Computation run", "klasse",
        "One OTTER run with its thresholds. Every network number in MANTA belongs to exactly one "
        "run; re-computing REPLACES it, which is why the run id travels with every answer."),

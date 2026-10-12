@@ -5,13 +5,16 @@ import { SectionHeading } from "./ui";
 import { PanelHeader } from "./PanelFrame";
 import { Criterion2Details } from "./Criterion2";
 
-export default function LegendPanel({ thr, c2, labelMax, functionClasses = [], colorMode = "module", onClose }: {
+export default function LegendPanel({ thr, c2, labelMax, functionClasses = [], colorMode = "module",
+  sizeAbsent = false, widthText = null, onClose }: {
   datasetId: string;
   thr: Thresholds | undefined;
   c2: Criterion2Summary | null;
   labelMax: number;
   functionClasses?: { label: string; n: number; color: string; other?: boolean }[];
   colorMode?: "module" | "function";
+  sizeAbsent?: boolean;
+  widthText?: string | null;
   onClose: () => void;
 }) {
   const modules = useModules();
@@ -52,8 +55,8 @@ export default function LegendPanel({ thr, c2, labelMax, functionClasses = [], c
   const cross = <Svg><line x1={6} y1={MY} x2={W - 6} y2={MY} stroke={AMBER} strokeWidth={1.5} /></Svg>;
 
   const t = thr;
-  const Row = ({ sample, term, desc, testid }: { sample: React.ReactNode; term: string; desc: string; testid?: string }) => (
-    <div className="flex items-start gap-2 py-1" data-testid={testid}>
+  const Row = ({ sample, term, desc, testid, label }: { sample: React.ReactNode; term: string; desc: string; testid?: string; label?: string }) => (
+    <div className="flex items-start gap-2 py-1" data-testid={testid} data-label={label}>
       {sample}
       <div className="min-w-0">
         <span className="text-fg">{term}</span>
@@ -77,10 +80,12 @@ export default function LegendPanel({ thr, c2, labelMax, functionClasses = [], c
           <Row sample={node} term="ASV" desc="one ASV, an exactly resolved sequence type — one circle each" />
           <Row sample={<Svg><circle cx={14} cy={MY} r={5} fill={colorMode === "function" ? (functionClasses[0]?.color ?? GREY) : c0} />
                             <circle cx={30} cy={MY} r={5} fill={colorMode === "function" ? (functionClasses[1]?.color ?? GREY) : c1} /></Svg>}
-               term="Colour" desc={colorMode === "function"
+               term="Colour" testid="legend-colour-row" desc={colorMode === "function"
             ? "literature-annotated function, in its own colours (grey = not annotated; in the taxa view also mixed classes); switch back to modules in the sidebar"
             : `module ${modules.label(0)}, ${modules.label(1)}, …: a group with more links among themselves than chance would give`} />
-          <Row sample={size} term="Size" desc="circle area relative to the largest circle in view = stored value summed over all samples" />
+          <Row sample={size} term="Size" testid="legend-size-row" desc={sizeAbsent
+            ? "not computed for this dataset: its values are a transform of unknown form — all circles are drawn the same size"
+            : "circle area relative to the largest circle in view = stored value summed over all samples"} />
           {c2 && (
             <div className="flex items-start gap-2 py-1">
               {glowS}
@@ -105,11 +110,11 @@ export default function LegendPanel({ thr, c2, labelMax, functionClasses = [], c
             : "co-occurrence (Pearson on the Fourier coefficients); thresholds not recorded")
             + " — positive correlations only; anti-correlated pairs are never linked"} />
           <Row sample={width} term="Width" testid="legend-width-row"
-               desc={`strength on a fixed scale, the same in every filter: r from ${t?.con_tr ?? "the threshold"}${t?.recorded ? "" : " (default)"} to 1; with Links off, the larger NMI from 0 to 1`} />
+               desc={widthText ?? `strength on a fixed scale, the same in every filter: r from ${t?.con_tr ?? "the threshold"}${t?.recorded ? "" : " (default)"} to 1; with Links off, the larger NMI from 0 to 1`} />
           <Row sample={dir} term="Arrow" desc="CCM direction kept (p < 0.05): it points to the end that can be predicted from the other" />
           <Row sample={rejected} term="Dashed arrow" desc="CCM direction tested and rejected: p ≥ 0.05 (switch Rejected on)" />
           <Row sample={side} term="Side arrow" desc="a rejected direction shown beside a link that is drawn anyway" />
-          <Row sample={cross} term="Amber" desc="link between two different modules" />
+          <Row sample={cross} term="Amber" testid="legend-cross-row" desc="link between two different modules" />
         </Section>
 
         {colorMode === "function" && (
@@ -117,6 +122,7 @@ export default function LegendPanel({ thr, c2, labelMax, functionClasses = [], c
             <div data-testid="legend-function-classes">
               {functionClasses.map((c) => (
                 <Row key={c.label} sample={<Svg><circle cx={W / 2} cy={MY} r={6} fill={c.color} /></Svg>}
+                     testid="legend-function-class" label={c.label}
                      term={c.label} desc={`${c.n} ASV${c.n === 1 ? "" : "s"}`} />
               ))}
               <Row sample={grey} term="not annotated" desc="no entry for this name in the literature tables — in the taxa view also a taxon whose members carry different classes" />

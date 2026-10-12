@@ -53,6 +53,7 @@ export default function ImportsPanel() {
                     return i >= 0 ? ` (${i + 1}/${j.stages!.length})` : "";
                   })()}
                   {j.error ? <span className="text-danger"> — {j.error}</span> : null}
+                  {(j.notes ?? []).map((n) => <span key={n} className="block text-warn">{n}</span>)}
                 </td>
                 <td className="py-2 text-fg-muted">{wann(j.started_at)}</td>
               </tr>

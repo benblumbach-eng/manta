@@ -12,12 +12,9 @@ NOT_COPIED_LABELS = {
     "Cluster": "modules of the old network; names, colours and notes stay with the original",
     "Star": "a mark a person set on the original",
     "Note": "a note a person wrote on the original",
-    "ElaRun": "the energy landscape may be computed on the modules of the old network",
-    "StableState": "part of the energy landscape",
 }
 COPIED_RELS = ("IN_DATASET", "OF_DATASET", "AT_STATION", "HAS_ABUNDANCE", "COVARIES_WITH")
 NOT_COPIED_RELS = {"CO_OCCURS_WITH", "INFLUENCES", "CCM_REJECTED", "MEMBER_OF",
-                   "HAS_ELA_ENERGY", "HAS_ACTIVE", "TIPPING", "OF_ELA_RUN",
                    "RECOMPUTED_FROM"}
 SINGLE_RUNS = ("Dada2Run", "TraitRun", "EnvLinkRun")
 HAS_ABUNDANCE_BATCH = 5000
