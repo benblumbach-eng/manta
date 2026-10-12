@@ -46,23 +46,23 @@ export default function ClusterNet({ label, partners, onOpenCluster, onOpenEdge 
                 + (stark ? ` — opens the strongest of them (r ${stark.corr.toFixed(2)})`
                          : " — the individual links are not in this answer")}</title>
               <line x1={CX} y1={CY} x2={x} y2={y} stroke="transparent" strokeWidth={14} />
-              <line x1={CX} y1={CY} x2={x} y2={y} stroke="#64748b" strokeWidth={breite}
+              <line x1={CX} y1={CY} x2={x} y2={y} stroke="var(--chart-line)" strokeWidth={breite}
                     opacity={0.75} />
               {raus > 0 && (
                 <polygon data-testid="cluster-net-arrow" data-partner={b.partner} data-dir="out"
-                         points={pfeilPunkte(CX, CY, x, y, 0.72, "hin")} fill="#e2e8f0"
+                         points={pfeilPunkte(CX, CY, x, y, 0.72, "hin")} fill="var(--text)"
                          opacity={0.9} />
               )}
               {rein > 0 && (
                 <polygon data-testid="cluster-net-arrow" data-partner={b.partner} data-dir="in"
-                         points={pfeilPunkte(CX, CY, x, y, 0.28, "zurueck")} fill="#e2e8f0"
+                         points={pfeilPunkte(CX, CY, x, y, 0.28, "zurueck")} fill="var(--text)"
                          opacity={0.9} />
               )}
-              <circle cx={mx} cy={my} r={8.5} fill="#0f172a" opacity={0.85} />
-              <text x={mx} y={my + 3} fontSize={8} fill="#cbd5e1" textAnchor="middle"
+              <circle cx={mx} cy={my} r={10} fill="var(--raised)" opacity={0.85} />
+              <text x={mx} y={my + 4} fontSize={11} fill="var(--text)" textAnchor="middle"
                     className="pointer-events-none tabular-nums">{b.total}</text>
               <circle data-testid="cluster-net-link" data-partner={b.partner}
-                      cx={mx} cy={my} r={10} fill="#0f172a" opacity={0.01} />
+                      cx={mx} cy={my} r={11} fill="var(--raised)" opacity={0.01} />
             </g>
           );
         })}
@@ -75,25 +75,25 @@ export default function ClusterNet({ label, partners, onOpenCluster, onOpenEdge 
               <title>{`${modules.label(b.partner)} — open this cluster`}</title>
               <circle data-testid="cluster-net-node" data-partner={b.partner}
                       cx={x} cy={y} r={9} fill={modules.color(b.partner)}
-                      stroke="#0f172a" strokeWidth={1.5} />
-              <text x={x + (rechts ? 13 : -13)} y={y + 3} fontSize={9} fill="#cbd5e1"
+                      stroke="var(--raised)" strokeWidth={1.5} />
+              <text x={x + (rechts ? 13 : -13)} y={y + 4} fontSize={11} fill="var(--text)"
                     textAnchor={rechts ? "start" : "end"}>{modules.label(b.partner)}</text>
             </g>
           );
         })}
-        <circle cx={CX} cy={CY} r={12} fill={modules.color(label)} stroke="#0f172a" strokeWidth={2} />
-        <text x={CX} y={CY + 26} fontSize={9} fill="#e2e8f0" textAnchor="middle">
+        <circle cx={CX} cy={CY} r={12} fill={modules.color(label)} stroke="var(--raised)" strokeWidth={2} />
+        <text x={CX} y={CY + 27} fontSize={11} fill="var(--text)" textAnchor="middle">
           {modules.label(label)}
         </text>
       </svg>
-      <p className="text-[10px] text-slate-500">
+      <p className="text-2xs text-fg-muted">
         Every line leaves this module · width and number = links · arrow = a directed link (CCM)
       </p>
-      <p className="text-[10px] text-slate-500">
+      <p className="text-2xs text-fg-muted">
         A click opens the strongest link of that bundle
       </p>
       {alle.length > gezeigt.length && (
-        <p className="text-[10px] text-amber-400/90" data-testid="cluster-net-truncated">
+        <p className="text-xs text-warn" data-testid="cluster-net-truncated">
           Showing the {gezeigt.length} strongest of {alle.length} connected clusters.
         </p>
       )}

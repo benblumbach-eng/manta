@@ -1,13 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getAsv, getCluster, getEnvironment, getModules, getNetwork,
-         type Environment, type ModuleLabel, type Network } from "../api";
+import { getAsv, getCluster, getEnvironment, getModules,
+         type Environment, type ModuleLabel } from "../api";
 import { Chooser, ChooserRow, Segmented } from "./controls";
 import InfoTip from "./InfoTip";
+import { PanelHeader } from "./PanelFrame";
 import ProvenanceFooter from "./ProvenanceFooter";
+import ErrorNotice from "./ErrorNotice";
+import { useDatasetSearch } from "../datasetSearch";
+import { useTokens } from "../design/tokens";
+import { seriesColour } from "../design/dataColours";
 
 
-const LINE_COLORS = ["#22d3ee", "#fbbf24", "#f472b6", "#4ade80", "#a78bfa", "#fb923c"];
-const MAX_CURVES = LINE_COLORS.length;
+const MAX_CURVES = 6;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 const SHARE_UNIT = "share of the analysed values of one sample";
@@ -35,18 +39,16 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
   onClose: () => void;
   onOpenAsv: (id: string) => void;
 }) {
-  const [net, setNet] = useState<Network | null>(null);
   const [env, setEnv] = useState<Environment | null>(null);
   const [modules, setModules] = useState<ModuleLabel[]>([]);
   const [curves, setCurves] = useState<Curve[]>([]);
   const [search, setSearch] = useState("");
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<unknown>(null);
   const [mode, setMode] = useState<Mode>("absolute");
   const [zeitraum, setZeitraum] = useState<string>("total");
 
   useEffect(() => {
-    setNet(null); setCurves([]); setErr(null); setEnv(null); setModules([]);
-    getNetwork(datasetId, "con").then(setNet).catch((e) => setErr(String(e)));
+    setCurves([]); setErr(null); setEnv(null); setModules([]);
     getEnvironment(datasetId).then(setEnv).catch(() => setEnv(null));
     getModules(datasetId).then((m) => setModules(m.modules)).catch(() => setModules([]));
   }, [datasetId]);
@@ -55,10 +57,14 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
 
   const chosen = useMemo(() => new Set(curves.map((c) => c.key)), [curves]);
 
+  const ganz = useDatasetSearch(datasetId, search, 8);
+
+  type Kandidat = { key: string; kind: Kind; id: string; label: string; sub: string | null;
+                    outside?: boolean };
   const candidates = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return [] as { key: string; kind: Kind; id: string; label: string; sub: string | null }[];
-    const treffer: { key: string; kind: Kind; id: string; label: string; sub: string | null }[] = [];
+    if (!q) return [] as Kandidat[];
+    const treffer: Kandidat[] = [];
     for (const v of env?.variables ?? []) {
       if (v.label.toLowerCase().includes(q) || v.key.toLowerCase().includes(q)) {
         treffer.push({ key: `env:${v.key}`, kind: "env", id: v.key, label: v.label,
@@ -73,18 +79,19 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
                        id: String(m.louvain_label), label: name, sub: "collective curve" });
       }
     }
-    for (const n of net?.nodes ?? []) {
-      if (n.id.toLowerCase().includes(q) || (n.genus ?? "").toLowerCase().includes(q)) {
-        treffer.push({ key: `asv:${n.id}`, kind: "asv", id: n.id, label: n.id, sub: n.genus });
-      }
+    const r = ganz.result;
+    for (const a of [...(r?.in_network.asvs ?? []), ...(r?.outside_network.asvs ?? [])]) {
+      treffer.push({ key: `asv:${a.id}`, kind: "asv", id: a.id, label: a.id,
+                     sub: a.genus ?? (a.label !== "unassigned" ? a.label : null),
+                     outside: a.cluster == null });
     }
     return treffer.filter((t) => !chosen.has(t.key)).slice(0, 8);
-  }, [net, env, modules, search, chosen]);
+  }, [ganz.result, env, modules, search, chosen]);
 
   const add = (kind: Kind, id: string) => {
     const key = `${kind}:${id}`;
     if (curves.length >= MAX_CURVES || chosen.has(key)) return;
-    setSearch("");
+    setSearch(""); setErr(null);
     const anfuegen = (c: Curve) =>
       setCurves((cur) => cur.some((x) => x.key === c.key) ? cur : [...cur, c]);
 
@@ -93,7 +100,7 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
         key, kind, id, label: id, sub: d.lineage?.genus ?? null,
         unit: d.frequency.quantity?.unit ?? SHARE_UNIT, scale: "ratio", share: true,
         points: ausPunkten(d.frequency.points.map((p) => ({ date: p.date, value: p.share }))),
-      })).catch((e) => setErr(String(e)));
+      })).catch((e) => setErr(e));
     } else if (kind === "cluster") {
       getCluster(datasetId, Number(id)).then((d) => anfuegen({
         key, kind, id, label: modules.find((m) => String(m.louvain_label) === id)?.display
@@ -101,7 +108,7 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
         sub: "collective curve", unit: d.frequency.quantity?.unit ?? SHARE_UNIT,
         scale: "ratio", share: true,
         points: ausPunkten(d.frequency.points.map((p) => ({ date: p.date, value: p.share }))),
-      })).catch((e) => setErr(String(e)));
+      })).catch((e) => setErr(e));
     } else {
       const v = env?.variables.find((x) => x.key === id);
       if (!v) return;
@@ -145,7 +152,8 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [erlaubt.absolute, erlaubt.peak, mode]);
 
-  const W = 460, H = 220, PAD_L = 52, PAD_R = 8, PAD_T = 10, PAD_B = 24;
+  const tokLight = useTokens().light;
+  const W = 460, H = 222, PAD_L = 52, PAD_R = 8, PAD_T = 10, PAD_B = 26;
   const plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
 
   const fenster = useMemo(() => {
@@ -168,11 +176,11 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
       : (max > min ? (v - min) / (max - min) : null);
     return {
       ...c,
-      color: LINE_COLORS[i % LINE_COLORS.length],
+      color: seriesColour(i, tokLight),
       min, max, n: vals.length,
       points: drin.map((p) => ({ ...p, shown: p.value == null ? null : gezeigt(p.value) })),
     };
-  }), [curves, mode, fenster]);
+  }), [curves, mode, fenster, tokLight]);
 
   const yMax = useMemo(() => {
     const vals = series.flatMap((s) => s.points.map((p) => p.shown).filter((v): v is number => v != null));
@@ -229,11 +237,8 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
   };
 
   return (
-    <div className="h-full overflow-auto"
-      data-testid="compare-panel">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700 sticky top-0 bg-slate-900 z-10">
-        <h2 className="text-slate-100 font-medium text-sm flex items-center">
-          Comparison
+    <div data-testid="compare-panel">
+      <PanelHeader title="Comparison" onClose={onClose} closeTestid="compare-close">
           <InfoTip title="What is being compared">
             <p>Each line is the <strong>measured series</strong> of one thing — an ASV, a whole
             module, or a measured environmental variable. The same points its own page shows,
@@ -250,16 +255,13 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
             degrees Celsius do not have — the scale of each variable is declared in the meaning
             layer, never guessed here. Months without coverage stay gaps.</p>
           </InfoTip>
-        </h2>
-        <button onClick={onClose} aria-label="Close" data-testid="compare-close"
-          className="text-slate-400 hover:text-white">✕</button>
-      </div>
+      </PanelHeader>
 
-      <div className="p-4 text-xs text-slate-300 space-y-3">
-        {err && <div className="text-red-300">{err}</div>}
+      <div className="p-4 text-xs text-fg space-y-3">
+        {err != null && <ErrorNotice error={err} inline what="Could not add this curve." />}
 
         {!timeAxisIsDates ? (
-          <p className="text-slate-400" data-testid="compare-no-dates">
+          <p className="text-fg-muted" data-testid="compare-no-dates">
             This dataset has no calendar dates — the samples are ordered, not dated. A common
             time axis would place them on days nobody measured, so there is nothing to lay
             side by side here.
@@ -273,56 +275,71 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
                   ? `at most ${MAX_CURVES} curves`
                   : "add an ASV, a module or an environmental variable …"}
                 disabled={curves.length >= MAX_CURVES}
-                className="w-full px-2 py-1 rounded bg-slate-800 border border-slate-600 text-slate-100" />
+                className="w-full px-2 py-1 rounded bg-control border border-line-strong text-fg" />
               {candidates.length > 0 && (
-                <ul className="mt-1 rounded border border-slate-700 bg-slate-950/70">
+                <ul className="mt-1 rounded border border-line bg-surface/70">
                   {candidates.map((t) => (
                     <li key={t.key}>
                       <button data-testid="compare-candidate" data-kind={t.kind}
                         onClick={() => add(t.kind, t.id)}
-                        className="w-full text-left px-2 py-1 hover:bg-slate-800 flex items-baseline gap-1">
-                        <span className={`text-[9px] uppercase tracking-wide ${
-                          t.kind === "env" ? "text-emerald-400"
-                          : t.kind === "cluster" ? "text-violet-300" : "text-slate-500"}`}>
+                        className="w-full text-left px-2 py-1 hover:bg-control flex items-baseline gap-1">
+                        <span className={`text-2xs uppercase tracking-wide ${
+                          t.kind === "env" ? "text-ok"
+                          : t.kind === "cluster" ? "text-accent" : "text-fg-muted"}`}>
                           {t.kind === "env" ? "env" : t.kind === "cluster" ? "module" : "asv"}
                         </span>
-                        <span className={t.kind === "asv" ? "font-mono text-cyan-300" : "text-slate-200"}>
+                        <span className={t.kind === "asv" ? "font-mono text-accent" : "text-fg"}>
                           {t.label}
                         </span>
-                        {t.sub && <span className="text-slate-500">({t.sub})</span>}
+                        {t.sub && <span className="text-fg-muted">({t.sub})</span>}
+                        {t.outside && (
+                          <span className="text-fg-muted" data-testid="compare-candidate-outside">
+                            · no link in the network
+                          </span>
+                        )}
                       </button>
                     </li>
                   ))}
                 </ul>
               )}
+              {candidates.length === 0 && search.trim() && (ganz.loading ? (
+                <p className="mt-1 text-fg-muted" data-testid="compare-searching">
+                  searching the whole dataset …
+                </p>
+              ) : ganz.error != null ? (
+                <ErrorNotice error={ganz.error} inline testid="compare-search-error"
+                  what="The search over the whole dataset failed." />
+              ) : ganz.result?.sentence ? (
+                <p className="mt-1 text-fg-muted" data-testid="compare-none">{ganz.result.sentence}</p>
+              ) : null)}
             </div>
 
             {curves.length > 0 && (
-              <div className="flex flex-wrap gap-1.5" data-testid="compare-legend">
+              <div className="flex flex-wrap gap-2" data-testid="compare-legend">
                 {series.map((s) => (
                   <span key={s.key} data-testid="compare-curve" data-kind={s.kind}
-                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-slate-700">
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded border border-line">
                     <svg width="14" height="6" className="shrink-0">
                       <line x1="0" y1="3" x2="14" y2="3" stroke={s.color} strokeWidth="1.5"
                         strokeDasharray={s.kind === "env" ? "3 2" : undefined} />
                     </svg>
                     {s.kind === "asv" ? (
                       <button onClick={() => onOpenAsv(s.id)}
-                        className="font-mono text-cyan-300 hover:underline">{s.label}</button>
+                        className="font-mono text-accent hover:underline">{s.label}</button>
                     ) : (
-                      <span className="text-slate-200">{s.label}</span>
+                      <span className="text-fg">{s.label}</span>
                     )}
-                    {s.sub && <span className="text-slate-500">({s.sub})</span>}
+                    {s.sub && <span className="text-fg-muted">({s.sub})</span>}
                     <button aria-label={`remove ${s.label}`} data-testid="compare-remove"
                       onClick={() => setCurves((cur) => cur.filter((c) => c.key !== s.key))}
-                      className="text-slate-500 hover:text-white">✕</button>
+                      className="text-fg-muted hover:text-fg">✕</button>
                   </span>
                 ))}
               </div>
             )}
 
             {curves.length === 0 && (
-              <p className="text-slate-500">
+              <p className="text-fg-muted">
                 Add two or more curves to lay their measured series over each other.
               </p>
             )}
@@ -351,20 +368,20 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
                 <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: 760 }}
                   data-testid="compare-chart" data-mode={mode} data-period={zeitraum} role="img"
                   aria-label="the measured curves of the selected ASVs, modules and variables">
-                  <line x1={PAD_L} y1={PAD_T} x2={PAD_L} y2={PAD_T + plotH} stroke="#334155" />
+                  <line x1={PAD_L} y1={PAD_T} x2={PAD_L} y2={PAD_T + plotH} stroke="var(--chart-axis)" />
                   <line x1={PAD_L} y1={Y(Math.max(yMin, Math.min(0, yMax)))}
-                        x2={PAD_L + plotW} y2={Y(Math.max(yMin, Math.min(0, yMax)))} stroke="#334155" />
-                  <text x={PAD_L - 4} y={PAD_T + 8} textAnchor="end" fill="#64748b" fontSize="9">
+                        x2={PAD_L + plotW} y2={Y(Math.max(yMin, Math.min(0, yMax)))} stroke="var(--chart-axis)" />
+                  <text x={PAD_L - 4} y={PAD_T + 8} textAnchor="end" fill="var(--text-muted)" fontSize="11">
                     {achsenText(yMax)}
                   </text>
-                  <text x={PAD_L - 4} y={PAD_T + plotH} textAnchor="end" fill="#64748b" fontSize="9">
+                  <text x={PAD_L - 4} y={PAD_T + plotH} textAnchor="end" fill="var(--text-muted)" fontSize="11">
                     {achsenText(yMin)}
                   </text>
                   {marken.map((m) => (
                     <g key={m.t}>
                       <line x1={X(m.t)} y1={PAD_T + plotH} x2={X(m.t)} y2={PAD_T + plotH + 3}
-                            stroke="#334155" />
-                      <text x={X(m.t)} y={H - 8} textAnchor="middle" fill="#64748b" fontSize="9">
+                            stroke="var(--chart-axis)" />
+                      <text x={X(m.t)} y={H - 8} textAnchor="middle" fill="var(--text-muted)" fontSize="11">
                         {m.label}
                       </text>
                     </g>
@@ -385,12 +402,12 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
                 </svg>
 
                 {(["absolute", "peak"] as Mode[]).some((m) => erlaubt[m]) && (
-                  <p className="text-[10px] text-slate-500" data-testid="compare-locked">
+                  <p className="text-2xs text-fg-muted" data-testid="compare-locked">
                     {(["absolute", "peak"] as Mode[]).filter((m) => erlaubt[m])
                       .map((m) => `${MODE_LABEL[m]}: ${erlaubt[m]}`).join(" · ")}
                   </p>
                 )}
-                <p className="text-[10px] text-slate-500" data-testid="compare-caveat">
+                <p className="text-2xs text-fg-muted" data-testid="compare-caveat">
                   {mode === "absolute"
                     ? "Measured samples on their own dates — nothing averaged. Shares can rise because others fell."
                     : mode === "peak"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 import re
 
@@ -13,17 +14,38 @@ MARK = " [no evidence]"
 
 EPS = 1e-9
 
-_NUM = re.compile(r"(?<![\w.])[-+]?(?:\d[\d,]*(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?(?![\w])")
+_NUM = re.compile(r"(?<![\w.])[-+]?(?:\d(?:[\d,]*\d)?(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?"
+                  r"(?![\d])(?!\.\d)(?!(?:st|nd|rd|th)\b)")
 
-_ENUM = re.compile(
-    r"(?mi)"
-    r"^[ \t]*\d{1,2}[.)][ \t]"
-    r"|\b(?:die|der|das|den|nummer|nr\.?|punkt|option|methode|variante|schritt|frage"
-    r"|method|option|point|step|number|item)\s+\d{1,2}\b"
-    r"|\bdie\s+\d{1,2}\."
-    r"|\(\s*\d{1,2}\s*\)")
+_PURE_NUMBER = re.compile(r"^[-+]?(?:\d[\d,]*(?:\.\d+)?|\.\d+)(?:[eE][-+]?\d+)?$")
+
+_NAME_AFTER = re.compile(r"[SD](?![A-Za-z0-9_])")
+
+
+def _is_name(text: str, m: re.Match) -> bool:
+    raw = m.group()
+    if not raw.isdigit():
+        return False
+    nach = _NAME_AFTER.match(text, m.end())
+    if not nach:
+        return False
+    return len(raw) <= 2 if nach.group() == "S" else raw in {"1", "2", "3", "4"}
+
+_LINE_ENUM = re.compile(r"(?m)^[ \t]*(\d{1,2})[.)][ \t]")
+_PAREN = re.compile(r"\(\s*(\d{1,2})\s*\)")
+_PAREN_AT_LINE_START = re.compile(r"(?m)^[ \t]*\(\s*(\d{1,2})\s*\)")
+_REF = re.compile(
+    r"(?i)\b(?:die|der|das|den|nummer|nr\.?|punkt|option|methode|variante|schritt|frage"
+    r"|method|point|step|number|item)\s+(\d{1,2})\b")
 
 _WORD_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.:/")
+_TOKEN = re.compile(r"[A-Za-z0-9_\-.:/]+")
+_TRAIL = ".:/-"
+
+LABEL_KEYS = frozenset({
+    "kingdom", "phylum", "class", "order", "family", "genus", "species", "taxon", "taxa",
+    "top_genera", "genera", "region", "name", "display", "cluster_display", "module_name",
+    "s_genus", "t_genus", "mine_genus", "other_genus"})
 
 
 def _to_float(raw: str) -> float | None:
@@ -34,8 +56,10 @@ def _to_float(raw: str) -> float | None:
 
 
 def _decimals(raw: str) -> int:
-    m = re.search(r"\.(\d+)", raw)
-    return len(m.group(1)) if m else 0
+    m = re.match(r"[-+]?[\d,]*(?:\.(\d+))?(?:[eE]([-+]?\d+))?$", raw)
+    if not m:
+        return 0
+    return len(m.group(1) or "") - int(m.group(2) or 0)
 
 
 def data_numbers(texts: list[str]) -> set[float]:
@@ -48,6 +72,28 @@ def data_numbers(texts: list[str]) -> set[float]:
     return out
 
 
+def numbers_from(obj, _key: str | None = None) -> set[float]:
+    out: set[float] = set()
+    if isinstance(obj, bool) or obj is None:
+        return out
+    if isinstance(obj, (int, float)):
+        if math.isfinite(obj):
+            out.add(float(obj))
+        return out
+    if isinstance(obj, str):
+        return set() if _key in LABEL_KEYS else data_numbers([obj])
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            out |= data_numbers([str(k)])
+            out |= numbers_from(v, str(k))
+        return out
+    if isinstance(obj, (list, tuple, set)):
+        for v in obj:
+            out |= numbers_from(v, _key)
+        return out
+    return data_numbers([str(obj)])
+
+
 def _word_at(text: str, start: int, end: int) -> str:
     i, j = start, end
     while i > 0 and text[i - 1] in _WORD_CHARS:
@@ -55,6 +101,20 @@ def _word_at(text: str, start: int, end: int) -> str:
     while j < len(text) and text[j] in _WORD_CHARS:
         j += 1
     return text[i:j]
+
+
+def _tokens(texts: list[str]) -> set[str]:
+    out: set[str] = set()
+    for t in texts:
+        for w in _TOKEN.findall((t or "").lower()):
+            w = w.rstrip(_TRAIL)
+            if w:
+                out.add(w)
+    return out
+
+
+def _is_identifier(wort: str) -> bool:
+    return bool(wort) and not _PURE_NUMBER.match(wort)
 
 
 def _covered(value: float, raw: str, pool: set[float]) -> bool:
@@ -69,19 +129,48 @@ def _covered(value: float, raw: str, pool: set[float]) -> bool:
     return False
 
 
-def check(answer: str, tool_texts: list[str]) -> list[str]:
+def _gliederung(text: str) -> int:
+    marken = {int(m.group(1)) for m in _LINE_ENUM.finditer(text or "")}
+    marken |= {int(m.group(1)) for m in _PAREN.finditer(text or "")}
+    n = 0
+    while n + 1 in marken:
+        n += 1
+    return n
+
+
+def _reference_spans(answer: str, references: list[str] | None) -> list[tuple[int, int]]:
+    refs = [r for r in (references or []) if r]
+    spans = [m.span() for m in _LINE_ENUM.finditer(answer)]
+    spans += [m.span() for m in _PAREN_AT_LINE_START.finditer(answer)]
+    eigene = _gliederung(answer)
+    if eigene >= 2:
+        spans += [m.span() for m in _PAREN.finditer(answer) if int(m.group(1)) <= eigene]
+    weit = max([eigene] + [_gliederung(r) for r in refs])
+    angesprochen = {int(m.group(1)) for r in refs for m in _REF.finditer(r)}
+    for m in _REF.finditer(answer):
+        n = int(m.group(1))
+        if (1 <= n <= weit) or n in angesprochen:
+            spans.append(m.span())
+    return spans
+
+
+def check(answer: str, tool_texts: list[str], pool: set[float] | None = None,
+          references: list[str] | None = None) -> list[str]:
     if not answer:
         return []
-    pool = data_numbers(tool_texts)
-    haystack = "\n".join(t or "" for t in tool_texts).lower()
-    enum_spans = [m.span() for m in _ENUM.finditer(answer)]
+    if pool is None:
+        pool = data_numbers(tool_texts)
+    tokens = _tokens(tool_texts)
+    ref_spans = _reference_spans(answer, references)
 
     schlecht: list[str] = []
     for m in _NUM.finditer(answer):
-        if any(a <= m.start() < b for a, b in enum_spans):
+        if any(a <= m.start() < b for a, b in ref_spans):
             continue
-        wort = _word_at(answer, m.start(), m.end())
-        if wort and wort.lower() in haystack:
+        if _is_name(answer, m):
+            continue
+        wort = _word_at(answer, m.start(), m.end()).rstrip(_TRAIL)
+        if _is_identifier(wort) and wort.lower() in tokens:
             continue
         v = _to_float(m.group())
         if v is None or _covered(v, m.group(), pool):
@@ -95,7 +184,7 @@ def annotate(answer: str, ungrounded: list[str]) -> str:
     if not ungrounded:
         return answer
     ziel = set(ungrounded)
-    treffer = [m for m in _NUM.finditer(answer) if m.group() in ziel]
+    treffer = [m for m in _NUM.finditer(answer) if m.group() in ziel and not _is_name(answer, m)]
     out = answer
     for m in reversed(treffer):
         out = out[:m.end()] + MARK + out[m.end():]
@@ -106,11 +195,12 @@ REFUSAL = ("This answer contained numbers that appear in no tool result ({zahlen
            "was discarded. Please rephrase the question.")
 
 
-def apply(answer: str, tool_texts: list[str]) -> tuple[str, list[str]]:
+def apply(answer: str, tool_texts: list[str], pool: set[float] | None = None,
+          references: list[str] | None = None) -> tuple[str, list[str]]:
     eingestellt = mode()
     if eingestellt == "off":
         return answer, []
-    schlecht = check(answer, tool_texts)
+    schlecht = check(answer, tool_texts, pool=pool, references=references)
     if not schlecht:
         return answer, []
     if eingestellt == "refuse":

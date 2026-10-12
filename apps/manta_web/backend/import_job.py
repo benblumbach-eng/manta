@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import datetime
 import json
 import os
 import re
@@ -11,7 +12,11 @@ import threading
 import time
 import uuid
 from collections import deque
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Callable
+
+import otter_estimate
 
 BACKEND = Path(__file__).resolve().parent
 REPO = BACKEND.parents[2]
@@ -41,11 +46,26 @@ def ensure_fixture() -> bool:
 
 
 
-_ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}$")
+_ISO_SHAPE = re.compile(r"\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2})?$")
+
+
+def calendar_day(label: str | None) -> str | None:
+    s = (label or "").strip()
+    if not _ISO_SHAPE.match(s):
+        return None
+    try:
+        datetime.date.fromisoformat(s[:10])
+    except ValueError:
+        return None
+    return s[:10]
+
+
+def impossible_dates(labels: list[str]) -> list[str]:
+    return [s for s in labels if _ISO_SHAPE.match((s or "").strip()) and calendar_day(s) is None]
 
 
 def axis_from_labels(labels: list[str]) -> str:
-    return "dates" if all(_ISO_DATE.match(s or "") for s in labels) else "ordinal"
+    return "dates" if labels and all(calendar_day(s) for s in labels) else "ordinal"
 
 
 def _abundance_axis(csv_dir: Path) -> str:
@@ -127,6 +147,41 @@ DADA2_SCRIPT = CONVERT_DIR / "run_dada2.R"
 
 _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
+
+
+_active: dict[str, str] = {}
+
+
+class DatasetBusy(Exception):
+    pass
+
+
+def reserve(dataset_id: str, holder: str) -> None:
+    with _lock:
+        if dataset_id in _active:
+            raise DatasetBusy(
+                f"{dataset_id!r} is busy: {_active[dataset_id]} is still running on it. "
+                f"Wait until it has finished, then try again.")
+        _active[dataset_id] = holder
+
+
+def release(dataset_id: str) -> None:
+    with _lock:
+        _active.pop(dataset_id, None)
+
+
+def busy(dataset_id: str) -> str | None:
+    with _lock:
+        return _active.get(dataset_id)
+
+
+@contextmanager
+def hold(dataset_id: str, holder: str):
+    reserve(dataset_id, holder)
+    try:
+        yield
+    finally:
+        release(dataset_id)
 
 
 def _set(job_id: str, **kw) -> None:
@@ -226,8 +281,10 @@ def _run(job_id: str, rdata_dir: Path, dataset_id: str, run_id: str,
          fastq_dir: Path | None = None, dada2_env: dict | None = None,
          time_axis: str | None = None, thresholds: dict | None = None,
          tables_dir: Path | None = None, otter_out_dir: Path | None = None,
-         source_doi: str | None = None, citation: str | None = None) -> None:
+         source_doi: str | None = None, citation: str | None = None,
+         replace_wipe: "Callable[[], Callable[[], None] | None] | None" = None) -> None:
     work = Path(tempfile.mkdtemp(prefix=f"manta_import_{job_id}_"))
+    alt_geloescht = False
     csv_dir, otter_out = work / "csv", work / "otter"
     stages_list = (get_status(job_id) or {}).get("stages") or list(STAGES)
     n_stages = max(1, len(stages_list))
@@ -261,6 +318,7 @@ def _run(job_id: str, rdata_dir: Path, dataset_id: str, run_id: str,
                              and _abundance_axis(csv_dir) == "dates" else "ordinal")
 
         if otter_out_dir is None:
+            _otter_check(job_id, csv_dir, thresholds)
             _set(job_id, stage="otter", progress=round(_stage_base("otter"), 4))
             otter_cmd = [str(OTTER / ".venv/bin/python"), str(OTTER_RUNNER),
                          "--otter-root", str(OTTER),
@@ -290,17 +348,51 @@ def _run(job_id: str, rdata_dir: Path, dataset_id: str, run_id: str,
             ingest_cmd += ["--source-doi", source_doi]
         if citation:
             ingest_cmd += ["--citation", citation]
+        zurueck = None
+        if replace_wipe is not None:
+            _set(job_id, stage_detail="replacing the old dataset")
+            zurueck = replace_wipe()
+            alt_geloescht = True
+            _set(job_id, old_dataset_deleted=True, stage_detail="loading the graph")
         _run_sub("ingest", ingest_cmd, env=env)
+        if zurueck is not None:
+            zurueck()
 
         _set(job_id, status="done", stage="done", progress=1.0)
     except Exception as e:
-        _set(job_id, status="error", error=str(e))
+        fehler = str(e)
+        if alt_geloescht:
+            fehler += (" The old dataset under this name had already been deleted when the "
+                       "import failed — import it again.")
+        _set(job_id, status="error", error=fehler)
     finally:
+        release(dataset_id)
         shutil.rmtree(work, ignore_errors=True)
         for d in (rdata_dir, tables_dir, otter_out_dir,
                   fastq_dir.parent if fastq_dir is not None else None):
             if d is not None and _is_own_upload_dir(Path(d)):
                 shutil.rmtree(d, ignore_errors=True)
+
+
+def abundance_size(csv_dir: Path) -> tuple[int, int]:
+    with (Path(csv_dir) / "abundance.csv").open(newline="", encoding="utf-8") as fh:
+        rows = csv.reader(fh, delimiter=";")
+        kopf = next(rows, [])
+        n_samples = sum(1 for r in rows if r and r[0].strip())
+    return len([c for c in kopf[1:] if c.strip()]), n_samples
+
+
+def _otter_check(job_id: str, csv_dir: Path, thresholds: dict | None) -> dict | None:
+    if not (Path(csv_dir) / "abundance.csv").is_file():
+        return None
+    n_asv, n_samples = abundance_size(csv_dir)
+    t = thresholds or {}
+    est = otter_estimate.estimate(n_asv, n_samples, t.get("num_permutations"),
+                                  t.get("num_samples"))
+    _set(job_id, estimate=est)
+    if not est["fits"]:
+        raise RuntimeError(est["refusal"])
+    return est
 
 
 def _ingest_env(otter_out: Path, csv_dir: Path) -> dict:
@@ -316,25 +408,28 @@ def _is_own_upload_dir(d: Path) -> bool:
         return False
 
 
-RECOMPUTE_STAGES = ("export", "otter", "ingest")
+RECOMPUTE_STAGES = ("export", "otter", "copy", "ingest")
+COPY_SCRIPT = INGEST_DIR / "copy_dataset.py"
 
 THRESHOLD_ARGS = ("con_tr", "con_alpha", "ccmn_tr", "louvain_res", "fft_coeffs",
                   "num_permutations", "num_samples")
 
 
-def _recompute(job_id: str, dataset_id: str, run_id: str, thresholds: dict,
-               marker: str | None, region: str | None, station: str | None,
-               lat: float | None, lon: float | None, time_axis: str) -> None:
+def _recompute(job_id: str, dataset_id: str, new_dataset_id: str, label: str, at: str,
+               run_id: str, thresholds: dict, time_axis: str,
+               discard_new: "Callable[[], None] | None" = None) -> None:
     work = Path(tempfile.mkdtemp(prefix=f"manta_recompute_{job_id}_"))
     csv_dir, otter_out = work / "csv", work / "otter"
+    kopiert = False
     try:
-        _set(job_id, stage="export")
+        _set(job_id, stage="export", progress=0.0, stage_detail="reading the samples back")
         _run_sub("export", [str(INGEST_DIR / ".venv/bin/python"),
                             str(INGEST_DIR / "export_otter_csv.py"),
                             "--dataset-id", dataset_id, "--out", str(csv_dir)],
                  cwd=INGEST_DIR)
 
-        _set(job_id, stage="otter")
+        _otter_check(job_id, csv_dir, thresholds)
+        _set(job_id, stage="otter", progress=RECOMPUTE_OTTER_SPAN[0], stage_detail="otter")
         cmd = [str(OTTER / ".venv/bin/python"), str(OTTER_RUNNER),
                "--otter-root", str(OTTER),
                "--abundance", str(csv_dir / "abundance.csv"),
@@ -344,47 +439,96 @@ def _recompute(job_id: str, dataset_id: str, run_id: str, thresholds: dict,
         for key in THRESHOLD_ARGS:
             if thresholds.get(key) is not None:
                 cmd += [f"--{key.replace('_', '-')}", str(thresholds[key])]
-        _run_sub("otter", cmd, cwd=OTTER)
+        lo, hi = RECOMPUTE_OTTER_SPAN
+        _run_sub("otter", cmd, cwd=OTTER, on_line=_otter_progress_cb(job_id, lo, hi - lo))
 
-        _set(job_id, stage="ingest")
+        _set(job_id, stage="copy", progress=hi, stage_detail="copying samples into the new dataset")
+        kopiert = True
+        _run_sub("copy", [str(INGEST_DIR / ".venv/bin/python"), str(COPY_SCRIPT),
+                          "--from", dataset_id, "--to", new_dataset_id, "--label", label,
+                          "--at", at, "--params", json.dumps(thresholds)],
+                 cwd=INGEST_DIR)
+
+        _set(job_id, stage="ingest", progress=RECOMPUTE_INGEST_AT, stage_detail="loading the graph")
         env = _ingest_env(otter_out, csv_dir)
         ingest_cmd = [str(INGEST_DIR / ".venv/bin/python"), str(INGEST_DIR / "ingest.py"),
-                      "--dataset-id", dataset_id, "--run-id", run_id,
-                      "--time-axis", time_axis or "ordinal",
-                      "--network-only", "--wipe-network-first"]
-        if marker:
-            ingest_cmd += ["--marker", marker]
-        if region:
-            ingest_cmd += ["--region", region]
-        if station:
-            ingest_cmd += ["--station", station]
-        if lat is not None and lon is not None:
-            ingest_cmd += ["--lat", str(lat), "--lon", str(lon)]
+                      "--dataset-id", new_dataset_id, "--run-id", run_id,
+                      "--time-axis", time_axis or "ordinal", "--network-only"]
         _run_sub("ingest", ingest_cmd, env=env)
 
-        _set(job_id, status="done", stage="done")
+        _set(job_id, status="done", stage="done", progress=1.0)
     except Exception as e:
-        _set(job_id, status="error", error=str(e))
+        fehler = str(e)
+        if kopiert and discard_new is not None:
+            try:
+                discard_new()
+                fehler += (f" The half-built dataset {new_dataset_id!r} was removed again; "
+                           f"the original is unchanged.")
+            except Exception as weg:
+                fehler += (f" Removing the half-built dataset {new_dataset_id!r} failed too "
+                           f"({weg}); delete it from the list. The original is unchanged.")
+        _set(job_id, status="error", error=fehler)
     finally:
+        release(dataset_id)
+        release(new_dataset_id)
         shutil.rmtree(work, ignore_errors=True)
 
 
-def start_recompute(dataset_id: str, run_id: str, thresholds: dict,
-                    marker: str | None = None, region: str | None = None,
-                    station: str | None = None, lat: float | None = None,
-                    lon: float | None = None, time_axis: str = "ordinal",
-                    background: bool = True) -> str:
+RECOMPUTE_OTTER_SPAN = (0.05, 0.90)
+RECOMPUTE_INGEST_AT = 0.95
+
+
+def _start(target, args: tuple, job_id: str, dataset_id: str, reserved: bool,
+           background: bool) -> str:
+    try:
+        if background:
+            threading.Thread(target=target, args=args, daemon=True).start()
+        else:
+            target(*args)
+    except BaseException:
+        if not background:
+            raise
+        _set(job_id, status="error", error="the job could not be started")
+        if not reserved:
+            release(dataset_id)
+        raise
+    return job_id
+
+
+def start_recompute(dataset_id: str, new_dataset_id: str, label: str, run_id: str,
+                    thresholds: dict, time_axis: str = "ordinal", at: str | None = None,
+                    background: bool = True, reserved: bool = False,
+                    estimate: dict | None = None,
+                    discard_new: "Callable[[], None] | None" = None) -> str:
     job_id = uuid.uuid4().hex[:12]
+    holder = f"recompute job {job_id}"
+    if reserved:
+        with _lock:
+            _active[dataset_id] = holder
+            _active[new_dataset_id] = holder
+    else:
+        reserve(dataset_id, holder)
+        try:
+            reserve(new_dataset_id, holder)
+        except DatasetBusy:
+            release(dataset_id)
+            raise
+    at = at or datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
     with _lock:
         _jobs[job_id] = {"job_id": job_id, "status": "running", "stage": "queued",
-                         "dataset_id": dataset_id, "stages": list(RECOMPUTE_STAGES),
+                         "kind": "recompute", "dataset_id": new_dataset_id,
+                         "source_dataset_id": dataset_id, "label": label,
+                         "stages": list(RECOMPUTE_STAGES), "progress": 0.0,
+                         "estimate": estimate,
                          "started_at": time.time(), "stage_started_at": time.time()}
-    args = (job_id, dataset_id, run_id, thresholds, marker, region, station, lat, lon, time_axis)
-    if background:
-        threading.Thread(target=_recompute, args=args, daemon=True).start()
-    else:
-        _recompute(*args)
-    return job_id
+    args = (job_id, dataset_id, new_dataset_id, label, at, run_id, thresholds, time_axis,
+            discard_new)
+    try:
+        return _start(_recompute, args, job_id, dataset_id, reserved, background)
+    except BaseException:
+        if background and not reserved:
+            release(new_dataset_id)
+        raise
 
 
 def start_import(dataset_id: str, marker: str = "18S",
@@ -395,24 +539,28 @@ def start_import(dataset_id: str, marker: str = "18S",
                  fastq_dir: Path | None = None, dada2_env: dict | None = None,
                  time_axis: str | None = None, thresholds: dict | None = None,
                  tables_dir: Path | None = None, otter_out_dir: Path | None = None,
-                 source_doi: str | None = None, citation: str | None = None) -> str:
+                 source_doi: str | None = None, citation: str | None = None,
+                 reserved: bool = False,
+                 replace_wipe: "Callable[[], Callable[[], None] | None] | None" = None) -> str:
     rdata_dir = (Path(rdata_dir) if rdata_dir
                  else (None if (fastq_dir or tables_dir or otter_out_dir) else FIXTURE))
     if rdata_dir == FIXTURE and not ensure_fixture():
         raise ValueError(NO_INPUT)
     job_id = uuid.uuid4().hex[:12]
+    if reserved:
+        with _lock:
+            _active[dataset_id] = f"import job {job_id}"
+    else:
+        reserve(dataset_id, f"import job {job_id}")
     stages = (STAGES_INGEST if otter_out_dir else
               STAGES_TABLES if tables_dir else
               STAGES_FASTQ if fastq_dir else STAGES)
     with _lock:
         _jobs[job_id] = {"job_id": job_id, "status": "running", "stage": "queued",
-                         "dataset_id": dataset_id, "stages": list(stages),
+                         "kind": "import", "dataset_id": dataset_id, "stages": list(stages),
+                         "replace": replace_wipe is not None,
                          "started_at": time.time(), "stage_started_at": time.time()}
     args = (job_id, rdata_dir, dataset_id, run_id, marker, region, station, lat, lon,
             fastq_dir, dada2_env, time_axis, thresholds, tables_dir, otter_out_dir,
-            source_doi, citation)
-    if background:
-        threading.Thread(target=_run, args=args, daemon=True).start()
-    else:
-        _run(*args)
-    return job_id
+            source_doi, citation, replace_wipe)
+    return _start(_run, args, job_id, dataset_id, reserved, background)

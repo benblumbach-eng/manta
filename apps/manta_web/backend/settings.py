@@ -4,6 +4,7 @@ import os
 import re
 import sqlite3
 import time
+from urllib.parse import urlsplit
 
 import auth
 import mailer
@@ -25,12 +26,15 @@ AGENT_KEYS: dict[str, str] = {
     "openai_api_key": "MANTA_OPENAI_API_KEY",
     "openai_models": "MANTA_OPENAI_MODELS",
     "openai_timeout": "MANTA_OPENAI_TIMEOUT",
+    "provider_hosts": "MANTA_PROVIDER_HOSTS",
+    "admins_read_transcripts": "MANTA_ADMINS_READ_TRANSCRIPTS",
 }
 ALL_KEYS: dict[str, str] = {**MAIL_KEYS, **AGENT_KEYS}
 ENV_TO_KEY: dict[str, str] = {env: key for key, env in ALL_KEYS.items()}
 SECRET_KEYS = frozenset({"smtp_password", "openai_api_key"})
 TLS_MODES = ("starttls", "ssl", "none")
 GROUNDING_MODES = ("off", "mark", "refuse")
+SWITCH_VALUES = ("on", "off")
 
 
 def _conn() -> sqlite3.Connection:
@@ -73,6 +77,24 @@ def source(key: str) -> str:
 
 
 
+def host_entry(eintrag: str) -> tuple[str, int | None] | None:
+    e = (eintrag or "").strip().lower()
+    if not e or not re.fullmatch(r"[a-z0-9.\-:\[\]]+", e):
+        return None
+    if e.count(":") > 1 and not e.startswith("["):
+        return (e, None) if re.fullmatch(r"[0-9a-f:.]+", e) else None
+    if e.endswith(":"):
+        return None
+    try:
+        teile = urlsplit("//" + e)
+        host, port = (teile.hostname or ""), teile.port
+    except ValueError:
+        return None
+    if not host or teile.path or port == 0:
+        return None
+    return host, port
+
+
 def _valid_recipients(raw: str) -> bool:
     teile = [t.strip() for t in re.split(r"[,;]", raw) if t.strip()]
     return all(mailer.valid_email(t) for t in teile)
@@ -103,6 +125,20 @@ def validate(values: dict[str, str]) -> None:
     basis = (values.get("openai_base_url") or "").strip()
     if basis and not re.match(r"^https?://", basis):
         raise ValueError("openai_base_url must start with http:// or https://")
+    if basis.lower().startswith("http://"):
+        try:
+            host = (urlsplit(basis).hostname or "").lower()
+        except ValueError:
+            host = ""
+        if host not in ("localhost", "127.0.0.1", "::1"):
+            raise ValueError("openai_base_url must use https — http only to localhost")
+    mitlesen = (values.get("admins_read_transcripts") or "").strip().lower()
+    if mitlesen and mitlesen not in SWITCH_VALUES:
+        raise ValueError(f"admins_read_transcripts must be {' | '.join(SWITCH_VALUES)}")
+    hosts = (values.get("provider_hosts") or "").strip()
+    if hosts and not all(host_entry(h) for h in hosts.split(",") if h.strip()):
+        raise ValueError("provider_hosts: host names (optionally host:port) separated by commas, "
+                         "without scheme or path")
     zeit = (values.get("openai_timeout") or "").strip()
     if zeit:
         try:
@@ -112,14 +148,42 @@ def validate(values: dict[str, str]) -> None:
             raise ValueError("openai_timeout must be a number greater than 0") from None
 
 
+SECRET_TARGETS: dict[str, tuple[str, ...]] = {
+    "smtp_password": ("smtp_host", "smtp_port", "smtp_tls"),
+    "openai_api_key": ("openai_base_url",),
+}
+
+
+def _ziel(key: str, value: str) -> str:
+    v = (value or "").strip()
+    if key == "openai_base_url":
+        return (v or "https://api.openai.com/v1").rstrip("/").lower()
+    if key == "smtp_tls":
+        return (v or "starttls").lower()
+    if key == "smtp_port":
+        return v or "587"
+    return v.lower()
+
+
+def _check_secret_targets(values: dict[str, str]) -> None:
+    for geheim, ziele in SECRET_TARGETS.items():
+        if geheim in values or not get(geheim):
+            continue
+        neu = [z for z in ziele if z in values and _ziel(z, values[z]) != _ziel(z, get(z))]
+        if neu:
+            raise ValueError(f"{', '.join(neu)} changes where the stored {geheim} is sent — "
+                             f"enter {geheim} again in the same save")
+
+
 def set_many(values: dict[str, str], by: str) -> dict:
     validate(values)
+    _check_secret_targets(values)
     init_db()
     now = time.time()
     with _conn() as c:
         for key, value in values.items():
             wert = (value or "").strip()
-            if key in ("smtp_tls", "grounding"):
+            if key in ("smtp_tls", "grounding", "admins_read_transcripts"):
                 wert = wert.lower()
             c.execute("INSERT INTO settings(key, value, updated_at, updated_by) VALUES (?,?,?,?) "
                       "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "

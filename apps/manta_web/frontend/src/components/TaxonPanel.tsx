@@ -1,7 +1,10 @@
+import { StateNotice, SectionHeading } from "./ui";
 import { useEffect, useState } from "react";
 import { getTaxon, type TaxonDetail } from "../api";
 import InfoTip from "./InfoTip";
 import ProvenanceFooter from "./ProvenanceFooter";
+import ErrorNotice from "./ErrorNotice";
+import { PanelHeader } from "./PanelFrame";
 import { useModules } from "../modules";
 
 export default function TaxonPanel({ datasetId, asvId, onClose, onOpenAsv }: {
@@ -11,59 +14,60 @@ export default function TaxonPanel({ datasetId, asvId, onClose, onOpenAsv }: {
   onOpenAsv: (id: string) => void;
 }) {
   const [d, setD] = useState<TaxonDetail | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<unknown>(null);
+  const [nochmal, setNochmal] = useState(0);
   const modules = useModules();
 
   useEffect(() => {
     setD(null); setErr(null);
-    getTaxon(datasetId, asvId).then(setD).catch((e) => setErr(String(e.message ?? e)));
-  }, [datasetId, asvId]);
+    let alive = true;
+    getTaxon(datasetId, asvId).then((x) => { if (alive) setD(x); })
+      .catch((e) => { if (alive) setErr(e); });
+    return () => { alive = false; };
+  }, [datasetId, asvId, nochmal]);
 
   return (
-    <div className="h-full overflow-auto"
-      data-testid="taxon-panel">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700 sticky top-0 bg-slate-900 z-10">
-        <span className="flex items-center text-sm text-slate-100 font-medium">
-          <span data-testid="taxon-label">{d?.label ?? "…"}</span>
-          {d && <span className="ml-2 text-xs text-slate-500" data-testid="taxon-n">
+    <div data-testid="taxon-panel">
+      <PanelHeader onClose={onClose} closeTestid="taxon-close"
+        title={<span data-testid="taxon-label">{d?.label ?? "…"}</span>}>
+          {d && <span className="shrink-0 text-xs text-fg-muted" data-testid="taxon-n">
             {d.n_asv} ASV{d.n_asv === 1 ? "" : "s"}
           </span>}
           {d && (
-            <InfoTip title="What this page adds up">
-              <p>{d.note}</p>
-              <p>Grouped by the full taxonomy across all seven ranks; a placeholder in any rank
-              keeps an ASV out of the group. Grouping happens in this view, never in the graph.</p>
-              <p>{d.value_declaration.value_kind} · {d.value_declaration.frame}</p>
+            <InfoTip title="What this group is">
+              <p>The members are different sequence variants (ASVs) that carry the same
+              name at all seven ranks. The name only says which reference entry is closest —
+              it does not make them one organism.</p>
+              <p>A placeholder in any rank keeps an ASV out of the group. Grouping happens in
+              this view, never in the graph.</p>
             </InfoTip>
           )}
-        </span>
-        <button onClick={onClose} data-testid="taxon-close" aria-label="Close"
-          className="text-slate-400 hover:text-white">✕</button>
-      </div>
+      </PanelHeader>
 
-      {err && <div className="p-4 text-red-300" data-testid="error">{err}</div>}
-      {!d && !err && <div className="p-4 text-slate-500">loading …</div>}
+      {err != null && <ErrorNotice error={err} what="Could not load this taxon."
+        onRetry={() => setNochmal((n) => n + 1)} />}
+      {!d && err == null && <StateNotice state="loading">loading …</StateNotice>}
 
       {d && !d.groupable && (
-        <p className="p-4 text-sm text-amber-400" data-testid="taxon-not-groupable">{d.reason}</p>
+        <p className="p-4 text-sm text-warn" data-testid="taxon-not-groupable">{d.reason}</p>
       )}
 
       {d && d.groupable && (
         <div className="p-4 space-y-4 text-sm">
-          <div className="text-[11px] text-slate-500" data-testid="taxon-path">
+          <div className="text-2xs text-fg-muted" data-testid="taxon-path">
             {["kingdom", "phylum", "class", "order", "family", "genus", "species"]
               .map((r) => d.path[r]).filter(Boolean).join(" › ")}
           </div>
 
           <section>
-            <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">Members</div>
+            <SectionHeading as="div" className="mb-1">Members</SectionHeading>
             <div className="space-y-1" data-testid="taxon-members">
               {d.members.map((m) => (
-                <div key={m.id} className="flex items-baseline gap-2 rounded hover:bg-slate-800 px-1">
+                <div key={m.id} className="flex items-baseline gap-2 rounded hover:bg-control px-1">
                   <button data-testid="taxon-member" onClick={() => onOpenAsv(m.id)}
-                    className="font-mono text-cyan-300 hover:underline">{m.id}</button>
-                  <span className="text-xs text-slate-400">{modules.label(m.cluster)}</span>
-                  <span className="ml-auto text-xs text-slate-500 tabular-nums">
+                    className="font-mono text-accent hover:underline">{m.id}</button>
+                  <span className="text-xs text-fg-muted">{modules.label(m.cluster)}</span>
+                  <span className="ml-auto text-xs text-fg-muted tabular-nums">
                     {m.n_samples_present} samples
                   </span>
                 </div>

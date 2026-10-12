@@ -2,19 +2,20 @@ import { useEffect, useState } from "react";
 import { getParams, type Params } from "../api";
 import { fmtRun, fmtUtc } from "../format";
 
-export default function ProvenanceFooter({ datasetId, testid = "provenance-footer" }:
-  { datasetId: string; testid?: string }) {
+export default function ProvenanceFooter({ datasetId, testid = "provenance-footer", refreshKey = 0 }:
+  { datasetId: string; testid?: string;
+    refreshKey?: number }) {
   const [p, setP] = useState<Params | null>(null);
   useEffect(() => {
     let live = true;
     setP(null);
     getParams(datasetId).then((r) => { if (live) setP(r); }).catch(() => { if (live) setP(null); });
     return () => { live = false; };
-  }, [datasetId]);
+  }, [datasetId, refreshKey]);
 
   const thr = p?.thresholds;
   return (
-    <div className="text-[10px] text-slate-500 tabular-nums leading-snug" data-testid={testid}>
+    <div className="text-2xs text-fg-muted tabular-nums leading-snug" data-testid={testid}>
       {datasetId} ·{" "}
       {p == null ? "retrieving …" : (
         <>

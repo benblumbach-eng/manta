@@ -40,6 +40,11 @@ rownames(ab) <- inp$samples
 colnames(ab) <- inp$asvs
 dates <- inp$dates
 
+nz <- rowSums(ab) > 0
+dropped_empty <- rownames(ab)[!nz]
+ab <- ab[nz, , drop = FALSE]
+dates <- dates[nz]
+
 enmat <- NULL
 env_scaling <- NULL
 n_dropped_env <- 0
@@ -47,6 +52,7 @@ if (length(env_keys)) {
   fehlt <- setdiff(env_keys, names(inp$environment))
   if (length(fehlt)) stop("environment variable(s) not in the input: ", paste(fehlt, collapse = ", "))
   raw <- sapply(env_keys, function(k) as.numeric(inp$environment[[k]]))
+  raw <- raw[nz, , drop = FALSE]
   ok <- rowSums(is.na(raw)) == 0
   n_dropped_env <- sum(!ok)
   ab <- ab[ok, , drop = FALSE]
@@ -99,10 +105,17 @@ landscape <- function(sa_obj, envpt) {
     active = colnames(ocmat)[as.numeric(as.character(unlist(ss[i, -(1:2)]))) == 1]
   ))
   states <- states[order(vapply(states, function(s) s$energy, 0))]
-  tippings <- if (is.null(tp)) list() else lapply(seq_len(nrow(tp)), function(i) list(
-    ss1 = as.character(tp$SS1[i]), ss2 = as.character(tp$SS2[i]),
-    energy = as.numeric(as.character(tp$Energy[i]))
-  ))
+  tippings <- if (is.null(tp)) list() else {
+    s1 <- as.character(tp$SS1); s2 <- as.character(tp$SS2)
+    e  <- as.numeric(as.character(tp$Energy))
+    ids <- unique(c(s1, s2))
+    D <- matrix(Inf, length(ids), length(ids), dimnames = list(ids, ids))
+    for (i in seq_along(e)) D[s1[i], s2[i]] <- D[s2[i], s1[i]] <- min(D[s1[i], s2[i]], e[i])
+    for (k in ids) D <- pmin(D, pmax(outer(D[, k], rep(1, length(ids))),
+                                     outer(rep(1, length(ids)), D[k, ])))
+    lapply(seq_along(e), function(i) list(
+      ss1 = s1[i], ss2 = s2[i], energy = D[s1[i], s2[i]], rela_path_energy = e[i]))
+  }
   list(states = states, tippings = tippings)
 }
 
@@ -136,7 +149,7 @@ if (is.null(enmat)) {
     out <- list(sample = rownames(ocmat)[i],
                 energy = Energy(ocmat[i, ], hge, je),
                 basin = zu[[1]])
-    if (!is.null(dates)) out$date <- dates[match(rownames(ocmat)[i], inp$samples)]
+    if (!is.null(inp$dates)) out$date <- inp$dates[match(rownames(ocmat)[i], inp$samples)]
     out
   })
 } else {
@@ -180,7 +193,13 @@ result <- list(
   value_kind = inp$value_kind,
   parameters = P,
   preprocessing = list(
-    method = "rELA::Formatting(normalize=1) -- relative abundance >= ath becomes 1, prevalence window minoc..maxoc",
+    method = if (identical(inp$level, "cluster"))
+      "rELA::Formatting(normalize=1) -- share of the network-ASV subtotal of the sample (sum of the cluster columns, not the sample total) >= ath becomes 1, prevalence window minoc..maxoc"
+    else "rELA::Formatting(normalize=1) -- relative abundance >= ath becomes 1, prevalence window minoc..maxoc",
+    n_samples_input = length(inp$samples),
+    n_samples_dropped_empty = length(dropped_empty),
+    samples_dropped_empty = I(dropped_empty),
+    empty_rule = "samples whose row in the input matrix sums to 0 are not observations and are removed before Formatting",
     n_species_input = ncol(ab),
     n_species_after_formatting = length(survivors),
     n_species_model = ncol(ocmat),

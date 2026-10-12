@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { getModules, type ModuleLabel } from "./api";
 import { clusterColor } from "./clusterPalette";
+import { useTokens } from "./design/tokens";
 
 
 type Modules = {
@@ -34,6 +35,7 @@ export function ModulesProvider({ datasetId, children }: {
 }) {
   const [rows, setRows] = useState<ModuleLabel[]>([]);
   const [tick, setTick] = useState(0);
+  const { light } = useTokens();
 
   useEffect(() => {
     if (!datasetId) { setRows([]); return; }
@@ -49,12 +51,12 @@ export function ModulesProvider({ datasetId, children }: {
     return {
       label: (l) => (l == null ? "no module" : displayOf(l, byLabel.get(l)?.name)),
       name: (l) => (l == null ? "" : (byLabel.get(l)?.name ?? "")),
-      color: (l) => (l == null ? clusterColor(null)
-        : (byLabel.get(l)?.color ?? clusterColor(l))),
+      color: (l) => (l == null ? clusterColor(null, light)
+        : (byLabel.get(l)?.color ?? clusterColor(l, light))),
       all: rows,
       reload: () => setTick((t) => t + 1),
     };
-  }, [rows]);
+  }, [rows, light]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

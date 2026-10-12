@@ -1,39 +1,217 @@
 const BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8000";
 
-const F = (input: RequestInfo | URL, init: RequestInit = {}) =>
-  fetch(input, { credentials: "include", ...init });
+
+export type ErrorKind = string;
+
+export class ApiError extends Error {
+  status: number | null;
+  detail: string | null;
+  kind: ErrorKind;
+  constructor(message: string, status: number | null, detail: string | null, kind: ErrorKind) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+    this.kind = kind;
+  }
+}
+
+export class HttpError extends ApiError {}
+
+const OFFLINE_TEXT = "The MANTA server did not answer — it may be restarting, or the connection dropped.";
+
+const STATUS_TEXT: Record<number, string> = {
+  400: "The server did not accept the request.",
+  401: "You are not signed in, or your session has ended.",
+  403: "Your account is not allowed to do this.",
+  404: "Not found — it may have been deleted or renamed.",
+  409: "This conflicts with something that is running right now.",
+  413: "This is larger than the server accepts.",
+  422: "The server did not accept the input.",
+  429: "Too many requests in a short time.",
+  500: "The server ran into an internal error.",
+  502: "The server cannot be reached behind its proxy.",
+  503: "The server cannot answer right now.",
+  504: "The server took too long to answer.",
+};
+
+function kindOf(status: number): ErrorKind {
+  if (status === 401) return "signed_out";
+  if (status === 403) return "forbidden";
+  if (status === 404) return "not_found";
+  if (status === 400 || status === 422) return "invalid";
+  if (status === 409) return "conflict";
+  if (status === 413) return "too_large";
+  if (status === 429) return "too_many";
+  if (status === 500) return "server";
+  if (status >= 502 && status <= 504) return "unavailable";
+  return "http";
+}
+
+function detailOf(body: unknown): string | null {
+  const d = (body as { detail?: unknown } | null)?.detail;
+  if (typeof d === "string") return d.trim() || null;
+  if (Array.isArray(d)) {
+    const teile = d.map((x) => {
+      const msg = typeof x?.msg === "string" ? x.msg : null;
+      const loc = Array.isArray(x?.loc) ? x.loc[x.loc.length - 1] : null;
+      return msg ? (loc != null && loc !== "body" ? `${loc}: ${msg}` : msg) : null;
+    }).filter(Boolean);
+    return teile.length ? teile.join("; ") : null;
+  }
+  return null;
+}
+
+export async function failFrom(r: Response): Promise<never> {
+  const body = await r.json().catch(() => null);
+  const detail = detailOf(body);
+  const own = (body as { kind?: unknown } | null)?.kind;
+  const kind = typeof own === "string" && own ? own : kindOf(r.status);
+  throw new HttpError(detail ?? STATUS_TEXT[r.status] ?? `The server answered with HTTP ${r.status}.`,
+                      r.status, detail, kind);
+}
+
+export function errorText(e: unknown): string {
+  if (e instanceof ApiError) return e.message;
+  if (e instanceof Error) return e.message || String(e);
+  return String(e);
+}
+
+const TODO: Record<string, string> = {
+  offline: "Check that the MANTA server is running, then try again.",
+  signed_out: "Sign in again, then try again.",
+  forbidden: "Ask an administrator if you need this.",
+  not_found: "Go back to the map to see what is there now.",
+  invalid: "Check the input and send it again.",
+  conflict: "Wait until the running job has finished, then try again.",
+  too_large: "Use a smaller file.",
+  too_many: "Wait a moment, then try again.",
+  server: "Try again; if it keeps failing, the server log names the cause.",
+  unavailable: "Try again in a moment.",
+  credit: "Top up that account, or switch to a local model.",
+  auth: "Check the key and the address of the provider.",
+  rate_limit: "Wait a moment, then try again.",
+  timeout: "Try again; a smaller model answers faster.",
+  unreachable: "Check that the model service is running, then try again.",
+  model_missing: "Pick another model in the menu.",
+  provider: "Try again later, or switch to a local model.",
+};
+
+export type ErrorDescription = { why: string; todo: string; kind: ErrorKind; status: number | null };
+
+export function describeError(e: unknown): ErrorDescription {
+  const a = e instanceof ApiError ? e : null;
+  const kind = a?.kind ?? "unknown";
+  return { why: errorText(e), todo: TODO[kind] ?? "Try again.", kind, status: a?.status ?? null };
+}
+
+export const SESSION_EVENT = "manta-session-changed";
+export type SessionChange = { before: Me; after: Me };
+
+let bekannt: Me | null = null;
+let pruefung: Promise<void> | null = null;
+let zuletztGeprueft = 0;
+let kanal: BroadcastChannel | null = null;
+
+export function checkSession(): Promise<void> {
+  if (pruefung) return pruefung;
+  if (!bekannt) return Promise.resolve();
+  const vorher = bekannt;
+  pruefung = fetch(`${BASE}/auth/me`, { credentials: "include" })
+    .then((r) => (r.ok ? (r.json() as Promise<Me>) : null))
+    .then((nachher) => {
+      if (!nachher || typeof nachher.role !== "string") return;
+      bekannt = nachher;
+      if (nachher.username !== vorher.username || nachher.role !== vorher.role) {
+        window.dispatchEvent(new CustomEvent<SessionChange>(SESSION_EVENT,
+          { detail: { before: vorher, after: nachher } }));
+      }
+    })
+    .catch(() => undefined)
+    .finally(() => { pruefung = null; zuletztGeprueft = Date.now(); });
+  return pruefung;
+}
+
+function ablehnungGesehen(url: string) {
+  if (url.includes("/auth/")) return;
+  if (Date.now() - zuletztGeprueft < 3000) return;
+  void checkSession();
+}
+
+export function watchSession(): () => void {
+  const sichtbar = () => { if (document.visibilityState === "visible") void checkSession(); };
+  document.addEventListener("visibilitychange", sichtbar);
+  try { kanal ??= new BroadcastChannel("manta-auth"); } catch { kanal = null; }
+  const signal = () => { void checkSession(); };
+  kanal?.addEventListener("message", signal);
+  return () => {
+    document.removeEventListener("visibilitychange", sichtbar);
+    kanal?.removeEventListener("message", signal);
+  };
+}
+
+export const currentUsername = (): string | null => bekannt?.username ?? null;
+
+function anmeldungGeaendert() {
+  try { (kanal ??= new BroadcastChannel("manta-auth")).postMessage("changed"); } catch { }
+}
+
+const F = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
+  let r: Response;
+  try {
+    r = await fetch(input, { credentials: "include", ...init });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") throw e;
+    throw new HttpError(OFFLINE_TEXT, null, null, "offline");
+  }
+  if (r.status === 401 || r.status === 403 || r.status === 404) ablehnungGesehen(String(input));
+  return r;
+};
+
+export async function okJson<T>(r: Response): Promise<T> {
+  if (!r.ok) return failFrom(r);
+  return r.json() as Promise<T>;
+}
 
 export type Me = { username: string | null; role: string; can_see_internal: boolean };
 
 export const getMe = (): Promise<Me> =>
-  F(`${BASE}/auth/me`).then((r) => r.json());
+  F(`${BASE}/auth/me`).then(okJson<Me>).then((m) => { bekannt = m; return m; });
 
 export async function login(username: string, password: string): Promise<Me> {
   const r = await F(`${BASE}/auth/login`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password }),
   });
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? `HTTP ${r.status}`);
+  if (!r.ok) {
+    const detail = (await r.json().catch(() => ({}))).detail;
+    if (typeof detail === "string" && detail) throw new Error(detail);
+    throw new Error(r.status === 429 ? "Too many attempts — try again later." : `HTTP ${r.status}`);
+  }
+  anmeldungGeaendert();
   return getMe();
 }
 
-export const logout = (): Promise<void> =>
-  F(`${BASE}/auth/logout`, { method: "POST" }).then(() => undefined);
+export const logout = (): Promise<void> => {
+  bekannt = null;
+  return F(`${BASE}/auth/logout`, { method: "POST" }).then(() => { anmeldungGeaendert(); });
+};
 
 export type AdminUser = {
   username: string; role: string; created_at: number; disabled: number; sessions: number;
 };
 
-export const adminUsers = ():
-  Promise<{ users: AdminUser[]; roles: string[]; visibilities?: string[] }> =>
-  F(`${BASE}/admin/users`).then((r) => r.json());
+type AdminUsersAnswer = { users: AdminUser[]; roles: string[]; visibilities?: string[];
+                          min_password_len?: number };
+export const adminUsers = (): Promise<AdminUsersAnswer> =>
+  F(`${BASE}/admin/users`).then(okJson<AdminUsersAnswer>);
 
 async function adminSend(path: string, method: string, body?: unknown) {
   const r = await F(`${BASE}${path}`, {
     method, headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? `HTTP ${r.status}`);
+  if (!r.ok) return failFrom(r);
   return r.json();
 }
 
@@ -51,13 +229,13 @@ export type ImportJob = {
   started_at?: number; stage_detail?: string;
 };
 export const importJobs = (): Promise<{ jobs: ImportJob[]; hinweis: string }> =>
-  F(`${BASE}/imports`).then((r) => r.json());
+  F(`${BASE}/imports`).then(okJson<{ jobs: ImportJob[]; hinweis: string }>);
 
 export type AuditEntry = {
   at: number; who: string; what: string; detail: string;
 };
 export const auditLog = (): Promise<{ entries: AuditEntry[] }> =>
-  F(`${BASE}/admin/audit`).then((r) => r.json());
+  F(`${BASE}/admin/audit`).then(okJson<{ entries: AuditEntry[] }>);
 
 export type AdminStatus = {
   ok: boolean;
@@ -65,7 +243,7 @@ export type AdminStatus = {
                  { ok: boolean; detail: string }>;
 };
 export const adminStatus = (): Promise<AdminStatus> =>
-  F(`${BASE}/admin/status`).then((r) => r.json());
+  F(`${BASE}/admin/status`).then(okJson<AdminStatus>);
 
 export type MailSettingsView = {
   values: {
@@ -73,6 +251,8 @@ export type MailSettingsView = {
     mail_from: string; request_mailto: string; public_url: string;
     ollama_model: string; grounding: string; openai_base_url: string;
     openai_models: string; openai_timeout: string;
+    provider_hosts?: string;
+    admins_read_transcripts?: string;
     smtp_password_set: boolean; openai_api_key_set: boolean;
   };
   source: Record<string, "panel" | "env" | "unset">;
@@ -86,17 +266,17 @@ export type MailSettingsPatch = Partial<Record<
 
 export type AgentSettingsPatch = Partial<Record<
   "ollama_model" | "grounding" | "openai_base_url" | "openai_api_key" |
-  "openai_models" | "openai_timeout", string>>;
+  "openai_models" | "openai_timeout" | "provider_hosts" | "admins_read_transcripts", string>>;
 
 export const agentSettings = (): Promise<MailSettingsView> =>
-  F(`${BASE}/admin/settings/agent`).then((r) => r.json());
+  F(`${BASE}/admin/settings/agent`).then(okJson<MailSettingsView>);
 export const saveAgentSettings = (patch: AgentSettingsPatch) =>
   adminSend("/admin/settings/agent", "PUT", patch) as Promise<MailSettingsView>;
 export const resetAgentSettings = (keys: string[]) =>
   adminSend("/admin/settings/agent/reset", "POST", { keys }) as Promise<MailSettingsView>;
 
 export const mailSettings = (): Promise<MailSettingsView> =>
-  F(`${BASE}/admin/settings/mail`).then((r) => r.json());
+  F(`${BASE}/admin/settings/mail`).then(okJson<MailSettingsView>);
 export const saveMailSettings = (patch: MailSettingsPatch) =>
   adminSend("/admin/settings/mail", "PUT", patch) as Promise<MailSettingsView>;
 export const resetMailSettings = (keys: string[]) =>
@@ -114,7 +294,7 @@ export type SignupTopic = { key: string; label: string };
 export type SignupOptions = { topics: SignupTopic[]; mail_configured: boolean };
 
 export const signupOptions = (): Promise<SignupOptions> =>
-  F(`${BASE}/signup/options`).then((r) => r.json());
+  F(`${BASE}/signup/options`).then(okJson<SignupOptions>);
 
 export type SignupInput = {
   full_name: string; email: string; reason: string;
@@ -127,7 +307,7 @@ export async function submitSignup(data: SignupInput): Promise<{ ok: boolean; id
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? `HTTP ${r.status}`);
+  if (!r.ok) return failFrom(r);
   return r.json();
 }
 
@@ -182,6 +362,13 @@ export type Dataset = {
   n_sample: number;
   station: string | null;
   coords: [number, number] | null;
+  derived?: DerivedInfo | null;
+};
+
+export type DerivedInfo = {
+  from: string | null; from_available: boolean; at: string | null;
+  params: { con_tr: number | null; con_alpha: number | null; num_permutations: number | null;
+            n_asv: number | null } | null;
 };
 
 export type NetNode = {
@@ -201,6 +388,43 @@ export type NetNode = {
   starred?: boolean;
   trait_group?: string | null;
   trait_rank?: string | null;
+  criterion2?: Criterion2Node | null;
+};
+
+export type Criterion2Node = {
+  module: number | null; module_size: number | null; closeness: number | null;
+  p: number | null; q: number | null; passes: boolean; testable: boolean;
+  reason: string | null; reason_text: string | null;
+};
+
+export type Criterion2Texts = {
+  label: string;
+  title: string;
+  mark: string;
+  method: string;
+  formula: string;
+  not_keystone: string;
+  selection_note: string;
+  source: string; source_doi: string; source_location: string;
+};
+
+export type Criterion2Summary = Criterion2Texts & {
+  alpha: number; n_network: number; n_modules: number; n_testable: number; n_pass: number;
+  n_not_testable: number;
+  not_testable: { reason: string; reason_text: string; n_asv: number; n_modules: number;
+                  modules: number[] }[];
+  ids: string[];
+  statement: string;
+};
+
+export type Criterion2Asv = Criterion2Node & Criterion2Texts & { verdict: string };
+
+export type Criterion2Module = Criterion2Texts & {
+  module: number; module_size: number; testable: boolean; reason: string | null;
+  reason_text: string | null; mean_closeness: number | null; sd_closeness: number | null;
+  n_pass: number; verdict: string;
+  members_meeting: { asv_id: string; closeness: number | null; p: number | null;
+                     q: number | null }[];
 };
 
 export type NetEdge = {
@@ -233,6 +457,7 @@ export type Partition = {
 
 export type Network = {
   dataset_id: string;
+  n_samples?: number;
   partition: Partition;
   marker: string | null;
   traits?: TraitRun;
@@ -240,30 +465,11 @@ export type Network = {
   directed: boolean;
   thresholds: Thresholds;
   layers: Layers;
-  hubs: HubCriterion;
+  criterion2?: Criterion2Summary;
   edge_width_legend: { con: string; ccm: string; rejected: string };
+  edge_width_scale?: { con: [number, number]; ccm: [number, number]; rejected: [number, number] };
   nodes: NetNode[];
   edges: NetEdge[];
-};
-
-export type HubCriterion = {
-  measure: string; measure_label: string; k: number;
-  mu: number | null; sigma: number | null; threshold: number | null;
-  sigma_kind: string;
-  n_network: number; n_with_value: number; n_marked: number; n_zero: number;
-  ids: string[];
-  statement: string;
-  zero_caveat: string | null;
-  measure_caveat: string;
-  why_not_keystone: string;
-  node_tooltip: string;
-  title: string;
-  source: string;
-  controls: {
-    measures: { key: string; label: string }[];
-    default_measure: string; default_k: number;
-    k_min: number; k_max: number; k_step: number;
-  };
 };
 
 export type Quantity = {
@@ -281,6 +487,7 @@ export type ClusterAtSample = {
   sample: string;
   cluster_total: number;
   note: string | null;
+  caveat?: string | null;
   members: { id: string; genus: string | null; count: number;
              share_of_sample: number | null; share_of_cluster: number | null }[];
 };
@@ -460,9 +667,9 @@ export type AsvDetail = {
   id: string;
   dataset_id: string;
   network_scope: NetworkScope;
+  in_network_run?: boolean | null;
   spectrum?: Spectrum | null;
   frequency: Frequency;
-  pool?: PoolShare;
   capabilities: Capabilities;
   lineage: Record<string, string | null>;
   cluster: number;
@@ -474,10 +681,8 @@ export type AsvDetail = {
   seq_length: number | null;
   seq_hash: string | null;
   starred: boolean;
-  peak_environment: PeakEnvironment;
   environment_profile: EnvironmentProfile;
-  hub_glow: boolean;
-  hub_tooltip: string;
+  criterion2?: Criterion2Asv;
   neighbors: { con: Neighbor[]; ccm: Neighbor[] };
   funktion: string;
   trait?: TraitAnnotation | null;
@@ -522,6 +727,7 @@ export type EdgeDetail = {
     method: string; caveat: string;
   } | null;
   thresholds: Thresholds;
+  ccm_p_resolution?: { denominator: number | null; exact: boolean; short: string; statement: string };
   source_publication: SourcePublication;
 };
 
@@ -540,10 +746,10 @@ export type ClusterDetail = {
   activity: { axis: string; window: string[]; peak: string | null; n_min: number;
               statement: string | null };
   note: { n: string | null; t: string | null };
-  hub_tooltip: string;
+  criterion2?: Criterion2Module;
   members: { id: string; genus: string | null; family: string | null;
              read_count_total: number | null; n_samples_present: number;
-             peak_month: number | null; hub: boolean }[];
+             peak_month: number | null; criterion2?: Criterion2Node | null }[];
   taxa_breakdown: { genus: Record<string, number>; family: Record<string, number> };
   function_breakdown?: FunctionBreakdown;
   trait_run?: TraitRun;
@@ -551,24 +757,13 @@ export type ClusterDetail = {
   starred: boolean;
 };
 
-export type PoolShare = {
-  share: number | null; n_asv: number;
-  basis?: string; caveat?: string; absent_reason?: string | null;
-};
-
-export type PeakEnvironment = {
-  items: { key: string; label: string; unit: string | null; unit_note?: string | null;
-           value: number }[];
-  at_date: string | null;
-  at_sample?: string | null;
-  caveat: string;
-};
-
 export type EnvironmentProfile = {
   items: { key: string; label: string; unit: string | null; unit_note?: string | null;
            weighted_mean: number;
            weighted_sd?: number | null;
-           p10: number; p90: number; n_samples_used: number; n_samples_present: number }[];
+           p10: number; p90: number; n_samples_used: number; n_samples_present: number;
+           p25?: number | null; median?: number | null; p75?: number | null;
+           dataset_min?: number | null; dataset_max?: number | null }[];
   method: string;
   caveat: string;
 };
@@ -609,9 +804,7 @@ export type Environment = {
 };
 
 async function get<T>(path: string): Promise<T> {
-  const r = await F(`${BASE}${path}`);
-  if (!r.ok) throw new Error(`${path} → ${r.status}`);
-  return r.json() as Promise<T>;
+  return okJson<T>(await F(`${BASE}${path}`));
 }
 
 export type ImportStatus = {
@@ -619,7 +812,19 @@ export type ImportStatus = {
   dataset_id: string; stages?: string[]; error?: string;
   started_at?: number; stage_started_at?: number; finished_at?: number;
   progress?: number; stage_detail?: string;
+  kind?: "import" | "recompute"; source_dataset_id?: string; label?: string;
+  estimate?: OtterEstimate | null;
 };
+
+export type OtterEstimate = {
+  n_asv: number; n_samples: number; minutes_low: number; minutes_high: number;
+  memory_gb: number; memory_budget_gb: number | null; machine_memory_gb: number | null;
+  fits: boolean; extrapolated: boolean; basis: string; refusal: string | null;
+};
+
+export const fmtMinutes = (e: Pick<OtterEstimate, "minutes_low" | "minutes_high">) =>
+  e.minutes_high <= 1 ? "about a minute"
+    : `${e.minutes_low}–${e.minutes_high} min`;
 
 export const getImports = () =>
   get<{ jobs: ImportStatus[]; hinweis: string }>("/imports");
@@ -636,6 +841,7 @@ export type AgentStatus = {
   setup_hint?: string;
   remote?: { configured: boolean; models: string[] };
   local_error?: string;
+  limits?: { question_chars: number; history_turns: number };
 };
 export type AgentContext = {
   dataset_id?: string; asv_id?: string; cluster?: number | null;
@@ -656,6 +862,9 @@ export type AgentAnswer = {
   grounding?: string;
   corrected?: boolean;
   own_key?: boolean;
+  conversation_id?: string | null;
+  turn_id?: number | null;
+  admins_can_read?: boolean;
 };
 
 export type OwnProvider = { base_url: string; model: string; key: string };
@@ -679,10 +888,7 @@ export const runTool = (name: string, args: Record<string, unknown>) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ arguments: args }),
   }).then(async (r) => {
-    if (!r.ok) {
-      const detail = await r.json().catch(() => null);
-      throw new Error(detail?.detail ?? `${name} → ${r.status}`);
-    }
+    if (!r.ok) return failFrom(r);
     return r.json() as Promise<ToolRun>;
   });
 export type ChatTurn = {
@@ -690,8 +896,19 @@ export type ChatTurn = {
   tools?: { name: string; arguments: Record<string, unknown> }[];
 };
 
+export class AgentAskError extends ApiError {
+  turnId: number | null;
+  conversationId: string | null;
+  constructor(e: ApiError, turnId?: number | null, conversationId?: string | null) {
+    super(e.message, e.status, e.detail, e.kind);
+    this.name = "AgentAskError";
+    this.turnId = turnId ?? null;
+    this.conversationId = conversationId ?? null;
+  }
+}
+
 export const askAgent = (question: string, ctx: AgentContext, model?: string,
-                         own?: OwnProvider, history?: ChatTurn[]) =>
+                         own?: OwnProvider, history?: ChatTurn[], conversationId?: string | null) =>
   F(`${BASE}/agent/ask`, {
     method: "POST",
     headers: { "Content-Type": "application/json",
@@ -701,14 +918,72 @@ export const askAgent = (question: string, ctx: AgentContext, model?: string,
                            dataset_id: ctx.dataset_id,
                            asv_id: ctx.asv_id, cluster: ctx.cluster ?? null,
                            concept: ctx.concept,
-                           history: history?.length ? history : undefined }),
+                           history: history?.length ? history : undefined,
+                           conversation_id: conversationId ?? undefined }),
   }).then(async (r) => {
     if (!r.ok) {
-      const detail = await r.json().catch(() => null);
-      throw new Error(detail?.detail ?? `agent → ${r.status}`);
+      const body = await r.clone().json().catch(() => null);
+      return failFrom(r).catch((e: ApiError) => {
+        throw new AgentAskError(e, body?.turn_id, body?.conversation_id);
+      });
     }
     return r.json() as Promise<AgentAnswer>;
   });
+
+
+export type ConversationSummary = {
+  id: string; username: string; dataset_id: string; title: string;
+  created_at: number; updated_at: number; n_turns: number;
+  earlier_account?: boolean;
+};
+export type StoredTurn = {
+  id: number; seq: number; asked_at: number; finished_at: number;
+  question: string; answer: string;
+  status: "answered" | "step_limit" | "error"; error: string;
+  model: string; provider: "local" | "operator" | "own" | ""; provider_host: string;
+  grounding: string; ungrounded: string[]; corrected: boolean; own_key: boolean;
+  steps: number | null; evidence: AgentEvidence[];
+};
+export type TranscriptEvent = { kind: string; at: number; step?: number } & Record<string, unknown>;
+export type TurnRecord = StoredTurn & {
+  conversation_id: string;
+  conversation: { id: string; username: string; dataset_id: string; title: string };
+  record: {
+    context?: { dataset_id?: string | null; asv_id?: string | null; cluster?: number | null;
+                concept?: string | null };
+    request?: { model_requested?: string | null; history_turns?: number; own_key?: boolean };
+    provider?: { kind?: string; host?: string };
+    grounding?: TranscriptEvent | null;
+    events: TranscriptEvent[];
+    stored_truncated?: boolean;
+  };
+};
+export type ConversationDetail = {
+  conversation: Omit<ConversationSummary, "earlier_account">;
+  turns: StoredTurn[];
+  own: boolean;
+};
+
+export const getConversations = (opts: { q?: string; datasetId?: string } = {}) => {
+  const p = new URLSearchParams();
+  if (opts.q) p.set("q", opts.q);
+  if (opts.datasetId != null) p.set("dataset_id", opts.datasetId);
+  const qs = p.toString();
+  return F(`${BASE}/agent/conversations${qs ? `?${qs}` : ""}`)
+    .then(okJson<{ admins_can_read: boolean; conversations: ConversationSummary[] }>);
+};
+export const getConversation = (id: string) =>
+  F(`${BASE}/agent/conversations/${encodeURIComponent(id)}`).then(okJson<ConversationDetail>);
+export const getTurnRecord = (turnId: number) =>
+  F(`${BASE}/agent/turns/${turnId}`).then(okJson<TurnRecord>);
+export const adminTranscripts = (opts: { q?: string; user?: string } = {}) => {
+  const p = new URLSearchParams();
+  if (opts.q) p.set("q", opts.q);
+  if (opts.user) p.set("user", opts.user);
+  const qs = p.toString();
+  return F(`${BASE}/admin/transcripts${qs ? `?${qs}` : ""}`)
+    .then(okJson<{ enabled: boolean; conversations: ConversationSummary[] }>);
+};
 
 export const getDatasets = () => get<{ datasets: Dataset[] }>("/datasets");
 export const getImportStatus = (jobId: string) => get<ImportStatus>(`/import/${jobId}`);
@@ -732,28 +1007,39 @@ export const uploadImport = (files: File[], dataset_id: string, region?: string,
   });
 };
 export const deleteDataset = (id: string) =>
-  F(`${BASE}/datasets/${id}`, { method: "DELETE" }).then((r) => r.json());
-export const moveDataset = (id: string, lat: number, lon: number) =>
+  F(`${BASE}/datasets/${id}`, { method: "DELETE" })
+    .then(okJson<{ deleted: string; kept_derived?: string[] }>);
+export const moveDataset = (id: string, lat: number, lon: number, moveStation = false) =>
   F(`${BASE}/datasets/${id}`, {
     method: "PATCH", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ lat, lon }),
+    body: JSON.stringify(moveStation ? { lat, lon, move_station: true } : { lat, lon }),
   }).then(async (r) => {
-    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail ?? `move → ${r.status}`);
-    return r.json() as Promise<{ dataset_id: string; lat: number; lon: number }>;
+    if (!r.ok) {
+      const detail = (await r.json().catch(() => ({}))).detail;
+      const satz = typeof detail === "string" ? detail : `move → ${r.status}`;
+      if (r.status === 409 && satz.includes("move_station")) throw new SharedStationError(satz);
+      throw new Error(satz);
+    }
+    return r.json() as Promise<{ dataset_id: string; lat: number; lon: number;
+                                 moved_with_station?: string[] }>;
   });
+
+export class SharedStationError extends Error {
+  get reason(): string {
+    return this.message.replace(/\s*Send the same request[\s\S]*$/, "");
+  }
+}
 
 export const renameDataset = (id: string, region: string) =>
   F(`${BASE}/datasets/${id}`, {
     method: "PATCH", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ region }),
   }).then((r) => {
-    if (!r.ok) throw new Error(`rename → ${r.status}`);
+    if (!r.ok) return failFrom(r);
     return r.json() as Promise<{ dataset_id: string; region: string }>;
   });
 export const getNetwork = (ds: string, edge: "con" | "ccm", marker?: string | null) =>
   get<Network>(`/datasets/${ds}/network?edge=${edge}${marker ? `&marker=${marker}` : ""}`);
-export const getHubCriterion = (ds: string, measure: string, k: number) =>
-  get<HubCriterion>(`/datasets/${ds}/hub-criterion?measure=${encodeURIComponent(measure)}&k=${k}`);
 export const getAsv = (ds: string, id: string) => get<AsvDetail>(`/datasets/${ds}/asv/${id}`);
 export const getSpectrum = (ds: string, id: string) =>
   get<{ dataset_id: string; asv_id: string; spectrum: Spectrum }>(
@@ -799,19 +1085,6 @@ export const setClusterLabel = (ds: string, label: number,
   adminSend(`/datasets/${encodeURIComponent(ds)}/cluster/${label}/label`, "PUT", body);
 
 export const getCluster = (ds: string, label: number) => get<ClusterDetail>(`/datasets/${ds}/cluster/${label}`);
-export type ClusterTimeseries = {
-  dataset_id: string;
-  time_axis: "dates" | "ordinal";
-  clusters: number[];
-  samples: { sample: string; date: string | null; sample_total: number; in_modules: number;
-             outside: number; values: Record<string, number> }[];
-  value_declaration: { value_kind: string; unit: string; frame: string; applies_to: string };
-  method: string;
-  caveat: string;
-  cluster_caveat: string;
-};
-export const getClusterTimeseries = (ds: string) =>
-  get<ClusterTimeseries>(`/datasets/${ds}/cluster-timeseries`);
 export const getCapabilities = (ds: string) => get<Capabilities>(`/datasets/${ds}/capabilities`);
 export const getEnvironment = (ds: string) => get<Environment>(`/datasets/${ds}/environment`);
 
@@ -968,10 +1241,21 @@ export type ThresholdInput = {
   con_tr: number; con_alpha: number; ccmn_tr: number;
   louvain_res: number; fft_coeffs: number; num_permutations: number; num_samples: number;
 };
-export type RecomputeAck = {
-  job_id: string; dataset_id: string; run_id: string; thresholds: ThresholdInput;
-  n_asv: number; estimated_minutes: number; warning: string;
+export const PRODUCTION_THRESHOLDS: ThresholdInput = {
+  con_tr: 0.7, con_alpha: 0.05, ccmn_tr: 0, louvain_res: 1,
+  fft_coeffs: 14, num_permutations: 999, num_samples: 10,
 };
+export type RecomputeAck = {
+  job_id: string; dataset_id: string; new_dataset_id: string; new_label: string; run_id: string;
+  thresholds: ThresholdInput; n_asv: number; n_samples: number; estimate: OtterEstimate;
+  note: string;
+};
+export type RecomputePreview = {
+  dataset_id: string; new_dataset_id: string; new_label: string; estimate: OtterEstimate;
+};
+export const getRecomputeEstimate = (ds: string, num_permutations: number, num_samples: number) =>
+  get<RecomputePreview>(`/datasets/${ds}/recompute/estimate?num_permutations=${num_permutations}`
+    + `&num_samples=${num_samples}`);
 export const recompute = (ds: string, t: ThresholdInput) =>
   F(`${BASE}/datasets/${ds}/recompute`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(t),
@@ -980,14 +1264,17 @@ export const recompute = (ds: string, t: ThresholdInput) =>
     return r.json() as Promise<RecomputeAck>;
   });
 
-export const setAsvNote = (ds: string, id: string, note: string) =>
+export const setAsvNote = (ds: string, id: string, note: string, opts?: { keepalive?: boolean }) =>
   F(`${BASE}/datasets/${ds}/asv/${id}/note`, {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note }),
-  }).then((r) => r.json() as Promise<{ note: string; note_at: string }>);
-export const setClusterNote = (ds: string, label: number, note: string) =>
+    keepalive: opts?.keepalive,
+  }).then(okJson<{ note: string; note_at: string }>);
+export const setClusterNote = (ds: string, label: number, note: string,
+                               opts?: { keepalive?: boolean }) =>
   F(`${BASE}/datasets/${ds}/cluster/${label}/note`, {
     method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note }),
-  }).then((r) => r.json() as Promise<{ note: string; note_at: string }>);
+    keepalive: opts?.keepalive,
+  }).then(okJson<{ note: string; note_at: string }>);
 
 export type FastqPreflight = {
   ok: boolean; rscript: boolean; cutadapt: boolean; dada2: boolean;
@@ -1000,19 +1287,19 @@ export type ImportTools = {
   tools: Record<"convert" | "otter" | "ingest", boolean>;
   entries: Record<ImportEntry, { ok: boolean; missing: string[] }>;
   hint: string;
+  limits?: { ncores_max?: number };
 };
 export const getImportTools = () => get<ImportTools>("/import/tools");
 
 export const uploadFastq = (
   fastq: File[], dataset_id: string, region: string,
-  opts?: { metadata?: File | null; top_n?: number; ncores?: number; taxonomy_ref?: string;
+  opts?: { metadata?: File | null; ncores?: number; taxonomy_ref?: string;
            station?: string; lat?: number; lon?: number; marker?: string;
            thresholds?: ThresholdInput },
 ) => {
   const fd = new FormData();
   fd.append("dataset_id", dataset_id);
   fd.append("region", region);
-  if (opts?.top_n) fd.append("top_n", String(opts.top_n));
   if (opts?.ncores) fd.append("ncores", String(opts.ncores));
   if (opts?.taxonomy_ref) fd.append("taxonomy_ref", opts.taxonomy_ref);
   if (opts?.marker) fd.append("marker", opts.marker);
@@ -1033,19 +1320,36 @@ export const uploadFastq = (
 
 export const getClusterAtSample = (ds: string, label: number, sample: string) =>
   F(`${BASE}/datasets/${ds}/cluster/${label}/at/${encodeURIComponent(sample)}`)
-    .then((r) => r.json() as Promise<ClusterAtSample>);
+    .then(okJson<ClusterAtSample>);
 
 export const getStarred = (ds: string) =>
-  F(`${BASE}/datasets/${ds}/starred`).then((r) => r.json() as Promise<Starred>);
+  F(`${BASE}/datasets/${ds}/starred`).then(okJson<Starred>);
 
 export const setAsvStar = (ds: string, id: string, starred: boolean) =>
   F(`${BASE}/datasets/${ds}/asv/${id}/star`, {
     method: "PUT", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ starred }),
-  }).then((r) => r.json() as Promise<{ starred: boolean; starred_at: string | null }>);
+  }).then(okJson<{ starred: boolean; starred_at: string | null }>);
 
 export const setClusterStar = (ds: string, label: number, starred: boolean) =>
   F(`${BASE}/datasets/${ds}/cluster/${label}/star`, {
     method: "PUT", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ starred }),
-  }).then((r) => r.json() as Promise<{ starred: boolean; starred_at: string | null }>);
+  }).then(okJson<{ starred: boolean; starred_at: string | null }>);
+
+export type SearchHit = {
+  id: string; label: string; genus: string | null; cluster: number | null;
+  n_samples_present: number;
+  id_match: boolean; matched_ranks: string[];
+};
+export type SearchTaxon = { rank: string; value: string; n_asv: number; asvs: SearchHit[] };
+export type SearchResult = {
+  dataset_id: string; query: string; n_samples: number;
+  taxon_searched: boolean; min_taxon_chars: number; limit: number;
+  in_network: { n_asv: number; asvs: SearchHit[] };
+  outside_network: { n_asv: number; asvs: SearchHit[]; n_taxa: number; taxa: SearchTaxon[] };
+  sentence: string | null;
+};
+export const searchDataset = (ds: string, q: string, limit = 25, signal?: AbortSignal) =>
+  F(`${BASE}/datasets/${encodeURIComponent(ds)}/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+    { signal }).then(okJson<SearchResult>);

@@ -2,6 +2,14 @@
 	encode gzip zstd
 
 	handle_path /api/* {
+		@mit_dateien path /import/upload /import/fastq
+		request_body @mit_dateien {
+			max_size 32GB
+		}
+		@ohne_dateien not path /import/upload /import/fastq
+		request_body @ohne_dateien {
+			max_size 10MB
+		}
 		reverse_proxy api:8000 {
 			lb_try_duration 20s
 			lb_try_interval 500ms
@@ -19,6 +27,8 @@
 	}
 
 	header X-Robots-Tag "noindex, nofollow"
+
+	header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; child-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 
 	@ueber_https expression {scheme} == "https"
 	header @ueber_https Strict-Transport-Security "max-age={$MANTA_HSTS_MAX_AGE:86400}"

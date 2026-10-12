@@ -31,8 +31,8 @@ export default function StarButton({ starred, onToggle, testid = "star", label }
         }
       }}
       className={`px-1 leading-none text-base transition-colors disabled:opacity-50 ${on
-        ? "text-amber-300 hover:text-amber-200"
-        : "text-slate-600 hover:text-amber-300"}`}
+        ? "text-warn hover:text-warn"
+        : "text-fg-muted hover:text-warn"}`}
     >
       {on ? "★" : "☆"}
     </button>

@@ -1,3 +1,4 @@
+import { Button, Dialog, SectionHeading } from "./ui";
 import { useEffect, useState } from "react";
 import {
   adminCreateUser, adminDeleteUser, adminPatchUser, adminRevokeSessions, adminUsers,
@@ -10,6 +11,7 @@ import DatasetAdmin from "./DatasetAdmin";
 import ImportsPanel from "./ImportsPanel";
 import MailSettings from "./MailSettings";
 import StatusPanel from "./StatusPanel";
+import TranscriptsAdmin from "./TranscriptsAdmin";
 
 export default function AdminPanel(
   { datasets, onClose, onDatasetsChanged, focusRequest }:
@@ -23,11 +25,14 @@ export default function AdminPanel(
   const [name, setName] = useState("");
   const [pw, setPw] = useState("");
   const [role, setRole] = useState("viewer");
+  const [minPw, setMinPw] = useState(8);
+  const [settingsSaved, setSettingsSaved] = useState(0);
 
   const reload = () =>
     adminUsers().then((d) => {
       setUsers(d.users); setRoles(d.roles);
       if (d.visibilities?.length) setVisibilities(d.visibilities);
+      if (typeof d.min_password_len === "number" && d.min_password_len > 0) setMinPw(d.min_password_len);
     })
                 .catch((e) => setError(String(e.message ?? e)));
   useEffect(() => { reload(); }, []);
@@ -36,27 +41,22 @@ export default function AdminPanel(
     p.then(() => { setError(null); reload(); })
      .catch((e) => setError(String(e.message ?? e)));
 
-  const input = "px-2 py-1 rounded bg-slate-950 border border-slate-700 text-sm text-slate-100 " +
-                "focus:border-cyan-500 focus:outline-none";
+  const input = "px-2 py-1 rounded-md bg-control border border-line-strong text-sm text-fg " +
+                "focus:border-accent focus:outline-none";
 
   return (
-    <div className="fixed inset-0 z-40 bg-slate-900/95 overflow-y-auto" data-testid="admin-panel">
-      <div className="mx-auto max-w-3xl p-6 space-y-8">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-slate-100">Administration</h2>
-          <button onClick={onClose} data-testid="admin-close"
-                  className="text-sm text-slate-400 hover:text-cyan-300">close</button>
-        </div>
+    <Dialog page title="Administration" onClose={onClose} testid="admin-panel" closeTestid="admin-close">
+      <div className="space-y-6">
 
-        {error && <p data-testid="admin-error" className="text-sm text-red-400">{error}</p>}
+        {error && <p data-testid="admin-error" className="text-sm text-danger">{error}</p>}
 
         <StatusPanel />
 
-        <AccessRequests onAccountsChanged={reload} focusRequest={focusRequest} />
+        <AccessRequests onAccountsChanged={reload} focusRequest={focusRequest} minPassword={minPw} />
 
         <MailSettings input={input} />
 
-        <AgentSettings input={input} />
+        <AgentSettings input={input} onSaved={() => setSettingsSaved((n) => n + 1)} />
 
         <DatasetAdmin datasets={datasets} visibilities={visibilities} input={input}
                       onChanged={onDatasetsChanged} />
@@ -65,35 +65,39 @@ export default function AdminPanel(
 
         <AuditLog />
 
+        <TranscriptsAdmin datasets={datasets} input={input} refresh={settingsSaved} />
+
         <section className="space-y-3">
-          <h3 className="text-sm font-medium text-slate-200">Accounts</h3>
+          <SectionHeading as="h3">Accounts</SectionHeading>
           <table className="w-full text-sm">
-            <thead className="text-[11px] uppercase tracking-wide text-slate-500">
+            <thead className="text-xs font-semibold text-fg-muted">
               <tr><th className="text-left">user</th><th className="text-left">role</th>
                   <th className="text-left">sessions</th><th /></tr>
             </thead>
             <tbody>
               {users.map((u) => (
-                <tr key={u.username} className="border-t border-slate-800">
-                  <td className="py-1.5 text-slate-300">
-                    {u.username}{u.disabled ? <span className="text-red-400"> (blocked)</span> : null}
+                <tr key={u.username} className="border-t border-line-subtle">
+                  <td className="py-2 text-fg">
+                    {u.username}{u.disabled ? <span className="text-danger"> (blocked)</span> : null}
                   </td>
-                  <td className="py-1.5">
+                  <td className="py-2">
                     <select className={input} value={u.role}
                             onChange={(e) => run(adminPatchUser(u.username, { role: e.target.value }))}>
                       {roles.map((r) => <option key={r} value={r}>{r}</option>)}
                     </select>
                   </td>
-                  <td className="py-1.5 text-slate-400">{u.sessions}</td>
-                  <td className="py-1.5 text-right space-x-3 text-xs">
-                    <button className="text-slate-400 hover:text-cyan-300"
-                            onClick={() => run(adminRevokeSessions(u.username))}>sign out everywhere</button>
-                    <button className="text-slate-400 hover:text-cyan-300"
-                            onClick={() => run(adminPatchUser(u.username, { disabled: !u.disabled }))}>
-                      {u.disabled ? "unblock" : "block"}
-                    </button>
-                    <button className="text-red-400 hover:text-red-300"
-                            onClick={() => run(adminDeleteUser(u.username))}>delete</button>
+                  <td className="py-2 text-fg-muted">{u.sessions}</td>
+                  <td className="py-2 text-right">
+                    <div className="inline-flex gap-1">
+                      <Button variant="ghost" onClick={() => run(adminRevokeSessions(u.username))}>
+                        sign out everywhere</Button>
+                      <Button variant="ghost"
+                              onClick={() => run(adminPatchUser(u.username, { disabled: !u.disabled }))}>
+                        {u.disabled ? "unblock" : "block"}
+                      </Button>
+                      <Button variant="ghost" className="text-danger hover:text-danger"
+                              onClick={() => run(adminDeleteUser(u.username))}>delete</Button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -103,23 +107,22 @@ export default function AdminPanel(
           <div className="flex flex-wrap gap-2 items-end pt-2">
             <input className={input} placeholder="new user" value={name} data-testid="admin-new-user"
                    onChange={(e) => setName(e.target.value)} />
-            <input className={input} placeholder="password (min. 10)" type="password" value={pw}
+            <input className={input} placeholder={`password (min. ${minPw})`} type="password" value={pw}
                    data-testid="admin-new-pw" onChange={(e) => setPw(e.target.value)} />
             <select className={input} value={role} onChange={(e) => setRole(e.target.value)}>
               {roles.map((r) => <option key={r} value={r}>{r}</option>)}
             </select>
-            <button data-testid="admin-create"
-                    className="px-3 py-1 rounded bg-cyan-600 text-sm text-white hover:bg-cyan-500
-                               disabled:opacity-40"
-                    disabled={!name || pw.length < 10}
+            <Button variant="primary" size="md" data-testid="admin-create"
+                    disabled={!name || pw.length < minPw}
+                    reason={`a user name and a password of at least ${minPw} characters`}
                     onClick={() => run(adminCreateUser(name, pw, role).then(() => {
                       setName(""); setPw("");
                     }))}>
               create
-            </button>
+            </Button>
           </div>
         </section>
       </div>
-    </div>
+    </Dialog>
   );
 }

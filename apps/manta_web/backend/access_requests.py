@@ -103,7 +103,7 @@ def recipients_for(topic: str) -> tuple[list[str], str]:
 
 
 def _clean(value, limit: int) -> str:
-    return re.sub(r"[\x00-\x1f\x7f]", " ", str(value or "")).strip()[:limit]
+    return re.sub(r"[\x00-\x1f\x7f\x85\u2028\u2029]", " ", str(value or "")).strip()[:limit]
 
 
 def _clean_text(value, limit: int) -> str:
@@ -143,8 +143,9 @@ def create(data: dict, ip: str = "") -> dict:
         raise ValueError("Please say briefly what you need access for.")
 
     wunsch = _clean(data.get("wanted_username"), LIMITS["wanted_username"]).lower()
-    if wunsch and not re.fullmatch(r"[a-z0-9._-]{2,}", wunsch):
-        raise ValueError("Preferred username: only letters, digits, dot, hyphen and underscore.")
+    if wunsch and not auth.valid_username(wunsch):
+        raise ValueError("Preferred username: letters, digits, dot, hyphen and underscore, "
+                         "starting with a letter or digit, 2 to 60 characters.")
 
     topic = _clean(data.get("topic"), LIMITS["topic"])
     if topic and topic not in {r["topic"] for r in list_routes()}:
@@ -246,6 +247,9 @@ def notification(req: dict, base_url: str = "") -> tuple[str, str]:
     zeilen += ["", "Reason:", req["reason"], ""]
     if base_url:
         zeilen += [f"Open this request: {link(base_url, req['id'])}", ""]
+    else:
+        zeilen += ["Open the access requests in the MANTA admin panel. (Set the public address "
+                   "under Mail settings to get a direct link here.)", ""]
     zeilen += ["This mail is only the notification; the request itself is stored in the "
                "database and will not get lost."]
     return (f"[MANTA] Access request from {req['full_name']}", "\n".join(zeilen))

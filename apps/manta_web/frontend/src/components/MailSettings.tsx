@@ -1,7 +1,9 @@
+import { Button } from "./ui";
 import { useEffect, useState } from "react";
 import { mailSettings, resetMailSettings, saveMailSettings, testMail,
          type MailSettingsPatch, type MailSettingsView } from "../api";
 import InfoTip from "./InfoTip";
+import SecretRemove, { patchField, secretNeededAgain, serverAskedFor } from "./SecretRemove";
 
 const FIELDS: { key: keyof MailSettingsPatch; label: string; placeholder: string }[] = [
   { key: "smtp_host", label: "SMTP server", placeholder: "smtp.example.org" },
@@ -31,15 +33,18 @@ export default function MailSettings({ input }: { input: string }) {
     finally { setBusy(false); }
   };
 
-  if (!state) return <section data-testid="mail-settings" className="text-xs text-slate-500">…</section>;
+  if (!state) return <section data-testid="mail-settings" className="text-xs text-fg-muted">…</section>;
 
   const gespeichert = (key: keyof MailSettingsPatch): string =>
     key === "smtp_password" ? "" : (state.values[key as keyof typeof state.values] as string) ?? "";
   const value = (key: keyof MailSettingsPatch) => patch[key] ?? gespeichert(key);
+  const nochmal = secretNeededAgain("smtp_password", patch, state.values,
+                                    state.values.smtp_password_set)
+    || (serverAskedFor("smtp_password", err) && !("smtp_password" in patch));
 
   return (
     <section className="space-y-3" data-testid="mail-settings">
-      <h3 className="flex items-center text-sm font-medium text-slate-200">
+      <h3 className="flex items-center text-sm font-medium text-fg">
         Mail
         <InfoTip title="Where these values come from">
           <p>Saved here, they live in the database and win over <code>deploy/.env</code>, which is
@@ -50,32 +55,35 @@ export default function MailSettings({ input }: { input: string }) {
         </InfoTip>
       </h3>
 
-      <p className="text-xs text-slate-400" data-testid="mail-state">
+      <p className="text-xs text-fg-muted" data-testid="mail-state">
         {state.mail.configured
-          ? <>Sending as <span className="text-slate-200">{state.mail.sender}</span>
+          ? <>Sending as <span className="text-fg">{state.mail.sender}</span>
              {state.mail.collect_to.length > 0
-               ? <> to <span className="text-slate-200">{state.mail.collect_to.join(", ")}</span></>
-               : <span className="text-amber-400"> — but no recipient is set</span>}</>
-          : <span className="text-amber-400">No mail server configured — requests are stored, nobody is notified.</span>}
+               ? <> to <span className="text-fg">{state.mail.collect_to.join(", ")}</span></>
+               : <span className="text-warn"> — but no recipient is set</span>}</>
+          : <span className="text-warn">No mail server configured — requests are stored, nobody is notified.</span>}
       </p>
 
       <div className="grid grid-cols-2 gap-2">
         {FIELDS.map(({ key, label, placeholder }) => (
-          <label key={key} className="text-[11px] uppercase tracking-wide text-slate-500">
+          <label key={key} className="text-xs text-fg-muted">
             {label}
-            <span className="ml-1 normal-case tracking-normal text-slate-600">
+            <span className="ml-1 text-fg-muted">
               {state.source[key] === "panel" ? "panel" : state.source[key] === "env" ? ".env" : ""}
             </span>
             <input
-              data-testid={`mail-${key}`} className={input} placeholder={placeholder}
+              data-testid={`mail-${key}`} placeholder={placeholder}
+              className={key === "smtp_password" && nochmal
+                ? input.replace("border-line", "border-warn") : input}
+              aria-invalid={key === "smtp_password" && nochmal ? true : undefined}
               type={key === "smtp_password" ? "password" : "text"}
               value={value(key)}
-              onChange={(e) => setPatch({ ...patch, [key]: e.target.value })} />
+              onChange={(e) => setPatch(patchField(patch, key, e.target.value))} />
           </label>
         ))}
-        <label className="text-[11px] uppercase tracking-wide text-slate-500">
+        <label className="text-xs text-fg-muted">
           Encryption
-          <span className="ml-1 normal-case tracking-normal text-slate-600">
+          <span className="ml-1 text-fg-muted">
             {state.source.smtp_tls === "panel" ? "panel" : state.source.smtp_tls === "env" ? ".env" : ""}
           </span>
           <select data-testid="mail-smtp_tls" className={input}
@@ -86,36 +94,45 @@ export default function MailSettings({ input }: { input: string }) {
         </label>
       </div>
 
-      {state.values.smtp_password_set && !("smtp_password" in patch) && (
-        <p className="text-[11px] text-slate-500">A password is stored. Leave the field empty to keep it.</p>
+      {nochmal ? (
+        <p data-testid="mail-secret-again" role="alert" className="text-xs text-warn">
+          Server, port or encryption changed: enter the password again — the stored one is never
+          sent to a new destination.
+        </p>
+      ) : state.values.smtp_password_set && !("smtp_password" in patch) && (
+        <p className="text-2xs text-fg-muted">
+          A password is stored. Leave the field empty to keep it.{" "}
+          <SecretRemove what="password" busy={busy} testid="mail-password-remove"
+            onRemove={() => run(saveMailSettings({ smtp_password: "" }), "password removed")} />
+        </p>
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        <button data-testid="mail-save" disabled={busy || Object.keys(patch).length === 0}
-          className="px-3 py-1 rounded bg-cyan-700 text-sm text-white hover:bg-cyan-500 disabled:opacity-40"
-          onClick={() => run(saveMailSettings(patch), "saved")}>save</button>
-        <button data-testid="mail-reset" disabled={busy}
-          className="text-xs text-slate-400 hover:text-cyan-300"
+        <Button variant="primary" size="md" data-testid="mail-save"
+          disabled={busy || Object.keys(patch).length === 0} reason={busy ? "saving" : "nothing changed"}
+          onClick={() => run(saveMailSettings(patch), "saved")}>save</Button>
+        <Button variant="ghost" data-testid="mail-reset" disabled={busy}
           onClick={() => run(resetMailSettings([...FIELDS.map((f) => f.key), "smtp_tls"]),
                              "back to deploy/.env")}>
           back to .env
-        </button>
+        </Button>
         <span className="flex-1" />
         <input data-testid="mail-test-to" className={input + " w-56"} placeholder="test message to …"
                value={to} onChange={(e) => setTo(e.target.value)} />
-        <button data-testid="mail-test" disabled={busy || !to.trim()}
-          className="px-3 py-1 rounded border border-slate-600 text-sm text-slate-300 disabled:opacity-40"
+        <Button size="md" data-testid="mail-test" disabled={busy || !to.trim()} reason="enter an address first"
           onClick={() => run(testMail(to.trim()).then((r) => {
             if (r.status !== "sent") throw new Error(r.status);
           }), `test message sent to ${to.trim()}`)}>
           send test
-        </button>
+        </Button>
       </div>
 
-      {msg && <p data-testid="mail-msg" className="text-xs text-emerald-400">{msg}</p>}
-      {err && <p data-testid="mail-error" className="text-xs text-red-400">{err}</p>}
+      {msg && <p data-testid="mail-msg" className="text-xs text-ok">{msg}</p>}
+      {err && !serverAskedFor("smtp_password", err) && (
+        <p data-testid="mail-error" className="text-xs text-danger">{err}</p>
+      )}
       {state.updated_by && (
-        <p className="text-[11px] text-slate-600">last change by {state.updated_by}</p>
+        <p className="text-2xs text-fg-muted">last change by {state.updated_by}</p>
       )}
     </section>
   );

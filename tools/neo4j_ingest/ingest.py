@@ -197,8 +197,16 @@ ENV_COLUMNS = {"MLD": "mld", "temp": "temp", "PW_frac": "pw_frac", "chl_sens": "
                "depth": "depth"}
 
 
+FEHLWERT_TEXTE = {"na", "n/a", "nan", "null", "none"}
+
+
 def read_environment():
-    env, ignored = {}, []
+    env, ignored, _ = read_environment_report()
+    return env, ignored
+
+
+def read_environment_report():
+    env, ignored, unlesbar = {}, [], {}
     with open(OTTER_INPUT_DIR / ENVIRONMENT, newline="", encoding="utf-8") as fh:
         rd = csv.DictReader(fh, delimiter=";")
         ignored = [c for c in (rd.fieldnames or [])
@@ -207,8 +215,15 @@ def read_environment():
             sid = (r.get("date") or "").strip()
             if not sid:
                 continue
+            for col in ENV_COLUMNS:
+                roh = (r.get(col) or "").strip()
+                if roh and roh.lower() not in FEHLWERT_TEXTE and _f(roh) is None:
+                    unlesbar[col] = unlesbar.get(col, 0) + 1
+            if sid in env:
+                raise SystemExit(f"ABORT: {ENVIRONMENT} has more than one row for the sample "
+                                 f"{sid!r}; each sample needs exactly one row.")
             env[sid] = {prop: _f(r.get(col)) for col, prop in ENV_COLUMNS.items()}
-    return env, ignored
+    return env, ignored, unlesbar
 
 
 def read_id_map():
@@ -231,10 +246,16 @@ def read_abundance():
         header = next(rd)
         asv_ids = [c.strip() for c in header[1:]]
         sample_ids, cells = [], []
+        gesehen = set()
         for row in rd:
             sid = row[0].strip()
             if not sid:
                 continue
+            if sid in gesehen:
+                raise SystemExit(f"ABORT: {ABUNDANCE} has more than one row for the sample "
+                                 f"{sid!r}; each row must be a different sample (for several "
+                                 f"samples on one day use YYYY-MM-DDT00:00:01, …T00:00:02).")
+            gesehen.add(sid)
             sample_ids.append(sid)
             for aid, val in zip(asv_ids, row[1:]):
                 f = _f(val)
@@ -270,12 +291,36 @@ CONSTRAINTS = schema_decl.constraint_statements()
 INDEXES = schema_decl.index_statements()
 
 
+DEFAULT_MARKER = "18S"
+DEFAULT_REGION = "HAUSGARTEN/Fram Strait F4"
+DEFAULT_TIME_AXIS = "ordinal"
 Q_DATASET = ("MERGE (d:Dataset {dataset_id:$d}) "
              "SET d.visibility = coalesce(d.visibility, 'internal'), "
-             "d.marker=$marker, d.region=$region, "
-             "d.station=$station, d.lat=$lat, d.lon=$lon, d.time_axis=$time_axis, "
+             "d.marker = coalesce($marker, d.marker, $default_marker), "
+             "d.region = coalesce($region, d.region, $default_region), "
+             "d.station=$station, d.lat=$lat, d.lon=$lon, "
+             "d.time_axis = coalesce($time_axis, d.time_axis, $default_time_axis), "
              "d.source_doi = coalesce($source_doi, d.source_doi), "
              "d.citation = coalesce($citation, d.citation)")
+Q_DATASET_KEEP = ("MERGE (d:Dataset {dataset_id:$d}) "
+                  "SET d.visibility = coalesce(d.visibility, 'internal'), "
+                  "d.marker = coalesce($marker, d.marker), "
+                  "d.region = coalesce($region, d.region), "
+                  "d.station = coalesce($station, d.station), "
+                  "d.lat = coalesce($lat, d.lat), d.lon = coalesce($lon, d.lon), "
+                  "d.time_axis = coalesce($time_axis, d.time_axis, $default_time_axis), "
+                  "d.source_doi = coalesce($source_doi, d.source_doi), "
+                  "d.citation = coalesce($citation, d.citation)")
+DATASET_DEFAULTS = {"default_marker": DEFAULT_MARKER, "default_region": DEFAULT_REGION,
+                    "default_time_axis": DEFAULT_TIME_AXIS}
+
+
+def resolve_time_axis(driver, dataset_id, time_axis):
+    if time_axis:
+        return time_axis
+    with driver.session() as s:
+        r = s.run("MATCH (d:Dataset {dataset_id:$d}) RETURN d.time_axis AS ta", d=dataset_id).single()
+    return (r["ta"] if r and r["ta"] else None) or DEFAULT_TIME_AXIS
 Q_VALUE_KIND = ("MATCH (d:Dataset {dataset_id:$d}) "
                 "CALL { WITH d MATCH (:Sample {dataset_id:d.dataset_id})-[r:HAS_ABUNDANCE]->() "
                 "RETURN sum(CASE WHEN r.count <> round(r.count) THEN 1 ELSE 0 END) AS frac, "
@@ -292,7 +337,7 @@ Q_MAX_MONTH_SET = (
     "MATCH (smp:Sample {dataset_id:$d})-[r:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) "
     "WITH a, smp, r ORDER BY r.count DESC, smp.date ASC "
     "WITH a, collect(smp.date)[0] AS peak_date "
-    "SET a.max_abundance_month = peak_date.month")
+    "SET a.max_abundance_month = date(peak_date).month")
 Q_MAX_MONTH_CLEAR = (
     "MATCH (a:ASV {dataset_id:$d}) WHERE a.max_abundance_month IS NOT NULL "
     "REMOVE a.max_abundance_month")
@@ -331,6 +376,15 @@ Q_ASV_TAXA = ("UNWIND $rows AS row MATCH (a:ASV {id: row.id, dataset_id:$d}) "
               "    a.family  = coalesce(a.family,  row.family), "
               "    a.genus   = coalesce(a.genus,   row.genus), "
               "    a.species = coalesce(a.species, row.species)")
+Q_TAXA_SET = ("UNWIND $rows AS row MATCH (a:ASV {id: row.id, dataset_id:$d}) "
+              "SET a.kingdom = row.kingdom, a.phylum = row.phylum, a.class = row.class, "
+              "    a.order = row.order, a.family = row.family, a.genus = row.genus, "
+              "    a.species = row.species")
+Q_REPLACE_MEASUREMENT = [
+    "MATCH (:Sample {dataset_id:$d})-[r:HAS_ABUNDANCE]->() DELETE r",
+    "MATCH (s:Sample {dataset_id:$d}) WHERE NOT s.sample_id IN $sids DETACH DELETE s",
+    "MATCH (a:ASV {dataset_id:$d}) WHERE NOT a.id IN $aids DETACH DELETE a",
+]
 Q_ASV_SEQ = ("UNWIND $rows AS row MATCH (a:ASV {id: row.id, dataset_id:$d}) "
              "SET a.sequence = row.sequence, a.seq_hash = row.seq_hash")
 Q_HAS_AB = ("UNWIND $rows AS row MATCH (s:Sample {sample_id: row.sample, dataset_id:$d}) "
@@ -344,6 +398,9 @@ Q_AT_STATION = (
     "MERGE (s)-[:AT_STATION]->(st)")
 Q_AT_STATION_CLEAR = (
     "MATCH (:Sample {dataset_id:$d})-[r:AT_STATION]->() DELETE r")
+Q_AT_STATION_OTHERS_CLEAR = (
+    "MATCH (:Sample {dataset_id:$d})-[r:AT_STATION]->(st:Station) "
+    "WHERE st.station_id <> $sid DELETE r")
 
 
 def ingest_station(session, dataset_id, station, lat, lon) -> "str | None":
@@ -352,6 +409,7 @@ def ingest_station(session, dataset_id, station, lat, lon) -> "str | None":
         return None
     sid = str(station).strip()
     session.run(Q_STATION, sid=sid, name=sid, lat=float(lat), lon=float(lon))
+    session.run(Q_AT_STATION_OTHERS_CLEAR, sid=sid, d=dataset_id)
     session.run(Q_AT_STATION, sid=sid, d=dataset_id)
     return sid
 
@@ -369,10 +427,11 @@ def _kalendertag(sample_id: str) -> "str | None":
 
 def sample_zeit_props(sample_ids: list[str], time_axis: str) -> dict[str, dict]:
     import datetime
+    position = {sid: i for i, sid in enumerate(sample_ids, start=1)}
     aus: dict[str, dict] = {}
     if time_axis != "dates":
-        for i, sid in enumerate(sample_ids, start=1):
-            aus[sid] = {"ordinal_index": i, "nominal_date_label": sid,
+        for sid in sample_ids:
+            aus[sid] = {"ordinal_index": position[sid], "nominal_date_label": sid,
                         "date": None, "same_day_index": None}
         return aus
     je_tag: dict[str, list[str]] = {}
@@ -388,7 +447,7 @@ def sample_zeit_props(sample_ids: list[str], time_axis: str) -> dict[str, dict]:
         for n, sid in enumerate(sorted(sids), start=1):
             aus[sid] = {"date": datetime.date.fromisoformat(tag),
                         "same_day_index": n if mehrfach else None,
-                        "ordinal_index": None, "nominal_date_label": None}
+                        "ordinal_index": position[sid], "nominal_date_label": None}
     return aus
 
 
@@ -410,12 +469,35 @@ def ensure_constraints(driver):
             s.run(c)
 
 
-def ingest_network(driver, dataset_id, run_id, marker=None, region=None, params="PyTest defaults",
-                   station=None, lat=None, lon=None, time_axis="ordinal",
-                   source_doi=None, citation=None):
+def check_single_run(driver, dataset_id, run_id):
+    with driver.session() as s:
+        fremde = [r["run_id"] for r in s.run(
+            "MATCH (r:Run {dataset_id:$d}) WHERE r.run_id <> $run "
+            "RETURN r.run_id AS run_id ORDER BY r.run_id", d=dataset_id, run=run_id)]
+    if fremde:
+        raise SystemExit(
+            f"ABORT: {dataset_id!r} already has the run {fremde[0]!r}"
+            + (f" (and {fremde[1:]})" if len(fremde) > 1 else "")
+            + f", and {run_id!r} is to be loaded. A dataset may have only ONE run: queries "
+            f"filter on dataset_id only, so a second run would add parallel edges between "
+            f"the same ASVs and the interface would show either one at random. To replace "
+            f"the old run, pass --wipe-network-first. Nothing was written.")
+
+
+def read_network_tables() -> dict:
     asvs = read_enriched(); con = read_con(); pruned = read_pruned()
     pv = read_pv()
     rejected = read_rejected(pv, pruned) if pv is not None else None
+    return {"asvs": asvs, "con": con, "pruned": pruned, "pv": pv, "rejected": rejected,
+            "fft": read_fft()}
+
+
+def ingest_network(driver, dataset_id, run_id, marker=None, region=None, params="PyTest defaults",
+                   station=None, lat=None, lon=None, time_axis=None,
+                   source_doi=None, citation=None, tables=None):
+    t = tables if tables is not None else read_network_tables()
+    check_single_run(driver, dataset_id, run_id)
+    asvs, con, pruned, pv, rejected = t["asvs"], t["con"], t["pruned"], t["pv"], t["rejected"]
     with driver.session() as _s:
         _vk_row = _s.run("MATCH (d:Dataset {dataset_id:$d}) RETURN d.value_kind AS vk",
                          d=dataset_id).single()
@@ -431,12 +513,12 @@ def ingest_network(driver, dataset_id, run_id, marker=None, region=None, params=
     with driver.session() as s:
         prev = s.run("MATCH (d:Dataset {dataset_id:$d}) RETURN d.time_axis AS ta",
                      d=dataset_id).single()
-        if prev and prev["ta"] and prev["ta"] != time_axis:
+        if time_axis and prev and prev["ta"] and prev["ta"] != time_axis:
             print(f"WARNING: time_axis of {dataset_id!r} changes {prev['ta']!r} -> {time_axis!r}. "
                   f"Month, year and season statements depend on this.", flush=True)
-        s.run(Q_DATASET, d=dataset_id, marker=marker, region=region,
+        s.run(Q_DATASET_KEEP, d=dataset_id, marker=marker, region=region,
               station=station, lat=lat, lon=lon, time_axis=time_axis,
-              source_doi=source_doi, citation=citation)
+              source_doi=source_doi, citation=citation, **DATASET_DEFAULTS)
         props = dict(run_params())
         if props:
             props["computed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -445,17 +527,6 @@ def ingest_network(driver, dataset_id, run_id, marker=None, region=None, params=
             val = network_scope().get(key)
             if val is not None:
                 props[prop] = int(val)
-        fremde = [r["run_id"] for r in s.run(
-            "MATCH (r:Run {dataset_id:$d}) WHERE r.run_id <> $run "
-            "RETURN r.run_id AS run_id ORDER BY r.run_id", d=dataset_id, run=run_id)]
-        if fremde:
-            raise SystemExit(
-                f"ABORT: {dataset_id!r} already has the run {fremde[0]!r}"
-                + (f" (and {fremde[1:]})" if len(fremde) > 1 else "")
-                + f", and {run_id!r} is to be loaded. A dataset may have only ONE run: queries "
-                f"filter on dataset_id only, so a second run would add parallel edges between "
-                f"the same ASVs and the interface would show either one at random. To replace "
-                f"the old run, pass --wipe-network-first.")
         s.run(Q_RUN, d=dataset_id, run=run_id, params=params, threshold_props=props)
         s.run(Q_ASV, rows=asvs, d=dataset_id, run=run_id)
         s.run(Q_CLUSTER, labels=labels, d=dataset_id, run=run_id)
@@ -468,15 +539,16 @@ def ingest_network(driver, dataset_id, run_id, marker=None, region=None, params=
         else:
             print("  CCM_REJECTED: NOT written — no PV table in the output folder; rejected "
                   "directions stay unknown for this dataset.", flush=True)
-    n_fft = write_fft(driver, dataset_id, run_id)
+    n_fft = write_fft(driver, dataset_id, run_id, fft=t["fft"])
     return {"asv_network": len(asvs), "cluster": len(labels), "member_of": len(members),
             "co_occurs": len(con), "influences": len(pruned),
             "ccm_rejected": (len(rejected) if rejected is not None else None),
             "fft_amplitudes": n_fft}
 
 
-def write_fft(driver, dataset_id, run_id):
-    fft = read_fft()
+def write_fft(driver, dataset_id, run_id, fft="read"):
+    if fft == "read":
+        fft = read_fft()
     if fft is None:
         print("  fft_amplitudes: NOT written — no FFT table in the output folder.", flush=True)
         return None
@@ -492,37 +564,50 @@ def write_fft(driver, dataset_id, run_id):
 
 
 def ingest_samples(driver, dataset_id, marker=None, region=None, station=None,
-                   lat=None, lon=None, time_axis="ordinal", source_doi=None, citation=None):
+                   lat=None, lon=None, time_axis=None, source_doi=None, citation=None):
+    time_axis = resolve_time_axis(driver, dataset_id, time_axis)
     sample_ids, asv_ids, cells = read_abundance()
-    env, env_ignored = read_environment()
+    env, env_ignored, env_unlesbar = read_environment_report()
     if env_ignored:
         print(f"  environment: columns NOT loaded (unknown to MANTA): "
               f"{', '.join(env_ignored)}", flush=True)
+    if env_unlesbar:
+        print(f"  WARNING: environment: cells that are not numbers were NOT loaded: "
+              + ", ".join(f"{c} {n}" for c, n in sorted(env_unlesbar.items()))
+              + " (a decimal comma such as 3,5 is not read as a number; write 3.5)", flush=True)
     zeit = sample_zeit_props(sample_ids, time_axis)
     sample_rows = []
     for sid in sample_ids:
         props = dict(zeit[sid])
-        if station is not None:
-            props["station"] = station
-        umwelt = {k: v for k, v in env.get(sid, {}).items() if v is not None}
+        props["station"] = station
+        umwelt = {prop: env.get(sid, {}).get(prop) for prop in ENV_COLUMNS.values()}
         props.update(umwelt)
         props["depth_m"] = umwelt.get("depth")
         sample_rows.append({"sample_id": sid, "props": props})
+    asv_set = set(asv_ids)
+    taxa = [t for t in read_taxa() if t["id"] in asv_set]
+    id_map = read_id_map()
     with driver.session() as s:
         s.run(Q_DATASET, d=dataset_id, marker=marker, region=region,
               station=station, lat=lat, lon=lon, time_axis=time_axis,
-              source_doi=source_doi, citation=citation)
+              source_doi=source_doi, citation=citation, **DATASET_DEFAULTS)
         s.run("MATCH (d:Dataset {dataset_id:$d}) SET d.env_ignored_columns=$cols",
               d=dataset_id, cols=env_ignored)
+        unlesbar = sorted(env_unlesbar.items())
+        s.run("MATCH (d:Dataset {dataset_id:$d}) SET d.env_unparsed_columns=$cols, "
+              "d.env_unparsed_cells=$n", d=dataset_id,
+              cols=[c for c, _ in unlesbar], n=[k for _, k in unlesbar])
+        for q in Q_REPLACE_MEASUREMENT:
+            s.run(q, d=dataset_id, sids=sample_ids, aids=asv_ids)
         s.run(Q_ASV_LIGHT, ids=asv_ids, d=dataset_id)
-        taxa = [t for t in read_taxa() if t["id"] in set(asv_ids)]
         if taxa:
-            s.run(Q_ASV_TAXA, rows=taxa, d=dataset_id)
+            s.run(Q_TAXA_SET, rows=taxa, d=dataset_id)
+            s.run("MATCH (d:Dataset {dataset_id:$d}) SET d.taxonomy_scope = 'all_asvs'",
+                  d=dataset_id)
         print(f"  taxonomy: {len(taxa)} of {len(asv_ids)} ASVs from {TAXA}", flush=True)
-        id_map = read_id_map()
         if id_map:
             s.run(Q_ASV_SEQ, d=dataset_id,
-                  rows=[{"id": k, **v} for k, v in id_map.items() if k in set(asv_ids)])
+                  rows=[{"id": k, **v} for k, v in id_map.items() if k in asv_set])
         s.run(Q_SAMPLE, rows=sample_rows, d=dataset_id)
         st = ingest_station(s, dataset_id, station, lat, lon)
         print(f"  station: {st if st else 'none (needs --station, --lat and --lon)'}", flush=True)
@@ -568,19 +653,23 @@ def ingest_dada2_provenance(driver, dataset_id, entry_point="unknown"):
 
 
 def ingest_all(driver, dataset_id, run_id, marker=None, region=None, station=None,
-               lat=None, lon=None, time_axis="ordinal", entry_point="unknown",
-               source_doi=None, citation=None):
+               lat=None, lon=None, time_axis=None, entry_point="unknown",
+               source_doi=None, citation=None, tables=None):
+    if tables is None:
+        tables = read_network_tables()
+    check_single_run(driver, dataset_id, run_id)
     ensure_constraints(driver)
     sm = ingest_samples(driver, dataset_id, marker, region, station, lat=lat, lon=lon,
                         time_axis=time_axis, source_doi=source_doi, citation=citation)
     n = ingest_network(driver, dataset_id, run_id, marker, region,
                        station=station, lat=lat, lon=lon, time_axis=time_axis,
-                       source_doi=source_doi, citation=citation)
+                       source_doi=source_doi, citation=citation, tables=tables)
     dp = ingest_dada2_provenance(driver, dataset_id, entry_point)
     return {**n, **sm, **dp}
 
 
 RUN_SCOPED_ASV_PROPS = [
+    "run_id",
     "louvain_label", "louvain_label_res", "louvain_label_color", "color_label", "shape",
     "fft_amplitudes",
     "read_count_total", "max_abundance_month_color",
@@ -588,7 +677,6 @@ RUN_SCOPED_ASV_PROPS = [
     "con_betweenness", "con_closeness", "con_cluster_closeness", "con_cluster_betweenness",
     "peak_mld", "peak_temp", "peak_pw_frac", "peak_chl_sens", "peak_par_satellite",
     "peak_sal", "peak_o2_conc", "peak_depth",
-    "trait_function", "trait_source", "trait_rank", "trait_run_id",
 ]
 
 
@@ -601,10 +689,6 @@ def wipe_network(driver, dataset_id):
         s.run("MATCH (a:ASV {dataset_id:$d}) REMOVE a." +
               ", a.".join(RUN_SCOPED_ASV_PROPS), d=dataset_id)
         s.run("MATCH (r:Run {dataset_id:$d}) DETACH DELETE r", d=dataset_id)
-        s.run("MATCH (t:TraitRun {dataset_id:$d}) DETACH DELETE t", d=dataset_id)
-        s.run("MATCH (:EnvVariable {dataset_id:$d})-[r:COVARIES_WITH {dataset_id:$d}]->() DELETE r", d=dataset_id)
-        s.run("MATCH (v:EnvVariable {dataset_id:$d}) DETACH DELETE v", d=dataset_id)
-        s.run("MATCH (x:EnvLinkRun {dataset_id:$d}) DETACH DELETE x", d=dataset_id)
 
 
 def wipe(driver, dataset_id):
@@ -668,24 +752,29 @@ def main():
     p.add_argument("--run-id", default="PyTest",
                    help="name of the OTTER run; a dataset holds exactly one run "
                         "(default: %(default)s)")
-    p.add_argument("--marker", default="18S", help="marker gene, e.g. 18S or 16S (default: %(default)s)")
-    p.add_argument("--region", default="HAUSGARTEN/Fram Strait F4",
-                   help="free-text region shown in the interface (default: %(default)s)")
+    p.add_argument("--marker", default=None,
+                   help=f"marker gene, e.g. 18S or 16S; without it an existing dataset keeps its "
+                        f"marker, a new one gets {DEFAULT_MARKER}")
+    p.add_argument("--region", default=None,
+                   help=f"free-text region shown in the interface; without it an existing dataset "
+                        f"keeps its region, a new one gets {DEFAULT_REGION!r}")
     p.add_argument("--station", default=None,
                    help="station name; together with --lat and --lon the samples are linked to "
-                        "a shared station node")
+                        "a shared station node (with --network-only, an existing station is "
+                        "kept unless these are given)")
     p.add_argument("--lat", type=float, default=None,
                    help="latitude of the sampling site in decimal degrees; give it together "
                         "with --lon, otherwise the dataset gets no station node and usually no "
                         "position on the world map")
     p.add_argument("--lon", type=float, default=None,
                    help="longitude of the sampling site in decimal degrees")
-    p.add_argument("--time-axis", choices=["dates", "ordinal"], default="ordinal",
+    p.add_argument("--time-axis", choices=["dates", "ordinal"], default=None,
                    help="'dates' if the sample names (first column of abundance.csv) are real "
-                        "calendar dates (YYYY-MM-DD), 'ordinal' if they only give the order "
-                        "(default: %(default)s)")
+                        "calendar dates (YYYY-MM-DD), 'ordinal' if they only give the order; "
+                        "without it an existing dataset keeps its axis, a new one is 'ordinal'")
     p.add_argument("--network-only", action="store_true",
-                   help="load only the network level (samples and time series stay as they are)")
+                   help="load only the network level (samples, time series and the dataset's "
+                        "marker, region, station and time axis stay as they are unless given)")
     p.add_argument("--wipe-network-first", action="store_true",
                    help="remove this dataset's existing network first (samples stay); needed "
                         "to replace a run")
@@ -698,13 +787,15 @@ def main():
                         "provenance is recorded as 'absent' (DADA2 ran) or 'not_applicable' "
                         "(it never did) (default: %(default)s)")
     args = p.parse_args()
-    if (args.time_axis == "dates" and not args.network_only
-            and (OTTER_INPUT_DIR / PLACEHOLDER_DATES).exists()):
-        raise SystemExit(f"ABORT: {OTTER_INPUT_DIR / PLACEHOLDER_DATES} says the dates in "
-                         f"abundance.csv are placeholders that only encode the sample order "
-                         f"(run_dada2.R ran without MANTA_METADATA). Use --time-axis ordinal, or "
-                         f"rerun run_dada2.R with MANTA_METADATA pointing to the real sampling "
-                         f"dates.")
+    def placeholder_check(axis):
+        if (axis == "dates" and not args.network_only
+                and (OTTER_INPUT_DIR / PLACEHOLDER_DATES).exists()):
+            raise SystemExit(f"ABORT: {OTTER_INPUT_DIR / PLACEHOLDER_DATES} says the dates in "
+                             f"abundance.csv are placeholders that only encode the sample order "
+                             f"(run_dada2.R ran without MANTA_METADATA). Use --time-axis ordinal, or "
+                             f"rerun run_dada2.R with MANTA_METADATA pointing to the real sampling "
+                             f"dates.")
+    placeholder_check(args.time_axis)
     missing = missing_inputs(args.network_only)
     if missing:
         raise SystemExit("Input files not found:\n  " + "\n  ".join(str(m) for m in missing)
@@ -714,7 +805,12 @@ def main():
     driver = connect()
     try:
         driver.verify_connectivity()
+        placeholder_check(resolve_time_axis(driver, args.dataset_id, args.time_axis))
         ensure_constraints(driver)
+        tables = read_network_tables()
+        if not args.network_only:
+            read_abundance()
+            read_environment()
         if args.wipe_network_first:
             wipe_network(driver, args.dataset_id)
         run = ingest_network if args.network_only else ingest_all
@@ -722,7 +818,7 @@ def main():
         counts = run(driver, args.dataset_id, args.run_id,
                      marker=args.marker, region=args.region, station=args.station,
                      lat=args.lat, lon=args.lon, time_axis=args.time_axis,
-                     source_doi=args.source_doi, citation=args.citation, **extra)
+                     source_doi=args.source_doi, citation=args.citation, tables=tables, **extra)
         print(f"Ingestion ok ({args.dataset_id}): {counts}")
     finally:
         driver.close()

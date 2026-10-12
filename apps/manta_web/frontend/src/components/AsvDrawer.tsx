@@ -1,3 +1,4 @@
+import { Button, StateNotice } from "./ui";
 import { useEffect, useRef, useState } from "react";
 import { getAsv, getEnvironment, getTaxon, setAsvNote, setAsvStar,
          type AsvDetail, type Environment } from "../api";
@@ -9,8 +10,11 @@ import FrequencyPanel from "./FrequencyPanel";
 import EnvironmentBars from "./EnvironmentBars";
 import NeighbourNet from "./NeighbourNet";
 import NoteBox from "./NoteBox";
+import ErrorNotice from "./ErrorNotice";
 import { findCap } from "./DataAvailability";
 import StarButton from "./StarButton";
+import { PanelHeader } from "./PanelFrame";
+import Criterion2Declaration from "./Criterion2";
 
 const RANKS: [string, string][] = [
   ["kingdom", "Kingdom"], ["phylum", "Phylum"], ["class", "Class"], ["order", "Order"],
@@ -20,7 +24,7 @@ const PLACEHOLDERS = new Set(["unassigned", "NA", "", "Environment_Condition", "
 const named = (v: string | null | undefined) => (v && !PLACEHOLDERS.has(v) ? v : null);
 
 export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpenEdge,
-                                    onCompare, onOpenTaxon, onOpenCluster }: {
+                                    onCompare, onOpenTaxon, onOpenCluster, signedIn = true }: {
   datasetId: string;
   asvId: string;
   onClose: () => void;
@@ -29,33 +33,33 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
   onCompare?: (id: string) => void;
   onOpenTaxon?: (id: string) => void;
   onOpenCluster?: (label: number) => void;
+  signedIn?: boolean;
 }) {
   const modules = useModules();
   const [d, setD] = useState<AsvDetail | null>(null);
   const [taxonN, setTaxonN] = useState<number | null>(null);
-  const sternSchreib = useRef<{ t: number; wert: boolean } | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const sternSchreib = useRef<{ asv: string; t: number; wert: boolean } | null>(null);
+  const [err, setErr] = useState<unknown>(null);
+  const [nochmal, setNochmal] = useState(0);
   const [env, setEnv] = useState<Environment | null>(null);
   const [showSeq, setShowSeq] = useState(false);
-  const [markSample, setMarkSample] = useState<string | null>(null);
-  const kurveRef = useRef<HTMLElement | null>(null);
-  const zurKurve = (sample: string) => {
-    setMarkSample(sample);
-    kurveRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  };
 
   useEffect(() => {
     setD(null); setErr(null);
+    setShowSeq(false);
     const losgeschickt = performance.now();
+    let alive = true;
     getAsv(datasetId, asvId).then((frisch) => {
+      if (!alive) return;
       const w = sternSchreib.current;
-      setD(w && w.t > losgeschickt ? { ...frisch, starred: w.wert } : frisch);
-    }).catch((e) => setErr(String(e)));
+      setD(w && w.asv === asvId && w.t > losgeschickt ? { ...frisch, starred: w.wert } : frisch);
+    }).catch((e) => { if (alive) setErr(e); });
     setTaxonN(null);
     getTaxon(datasetId, asvId)
-      .then((t) => setTaxonN(t.groupable ? t.n_asv : null))
-      .catch(() => setTaxonN(null));
-  }, [datasetId, asvId]);
+      .then((t) => { if (alive) setTaxonN(t.groupable ? t.n_asv : null); })
+      .catch(() => { if (alive) setTaxonN(null); });
+    return () => { alive = false; };
+  }, [datasetId, asvId, nochmal]);
 
   useEffect(() => {
     setEnv(null);
@@ -69,47 +73,51 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
   const caps = d?.capabilities;
 
   return (
-    <div className="h-full overflow-auto" data-testid="asv-drawer">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700 sticky top-0 bg-slate-900 z-10">
-        <span className="flex items-center gap-1">
-          {d && (
-            <StarButton starred={d.starred} testid="asv-star" label={asvId}
-              onToggle={(next) => {
-                sternSchreib.current = { t: performance.now(), wert: next };
-                return setAsvStar(datasetId, asvId, next).then((r) => {
-                  sternSchreib.current = { t: performance.now(), wert: r.starred };
-                  setD((cur) => (cur ? { ...cur, starred: r.starred } : cur));
-                });
-              }} />
-          )}
-          <span className="font-mono text-cyan-300" data-testid="drawer-asv-id">{asvId}</span>
-          {d?.hub_glow && (
-            <span data-testid="drawer-hub" title={d.hub_tooltip}
-              className="text-amber-300">✦ hub</span>
-          )}
-        </span>
-        <button onClick={onClose} data-testid="drawer-close" aria-label="Close" className="text-slate-400 hover:text-white">✕</button>
-      </div>
+    <div data-testid="asv-drawer">
+      <PanelHeader onClose={onClose} closeTestid="drawer-close"
+        lead={d && signedIn ? (
+          <StarButton starred={d.starred} testid="asv-star" label={asvId}
+            onToggle={(next) => {
+              const id = asvId;
+              sternSchreib.current = { asv: id, t: performance.now(), wert: next };
+              return setAsvStar(datasetId, id, next).then((r) => {
+                sternSchreib.current = { asv: id, t: performance.now(), wert: r.starred };
+                setD((cur) => (cur && cur.id === id ? { ...cur, starred: r.starred } : cur));
+              });
+            }} />
+        ) : undefined}
+        title={<span className="font-mono font-normal text-accent select-text cursor-text"
+          data-no-drag="" data-testid="drawer-asv-id">{asvId}</span>}>
+        {d?.criterion2?.passes && (
+          <span data-testid="drawer-c2" title={d.criterion2.mark}
+            className="text-sm text-warn whitespace-nowrap">✦ criterion 2</span>
+        )}
+      </PanelHeader>
 
-      {err && <div className="p-4 text-red-300" data-testid="error">{err}</div>}
-      {!d && !err && <div className="p-4 text-slate-500">loading …</div>}
+      {err != null && <ErrorNotice error={err} what="Could not load this ASV."
+        onRetry={() => setNochmal((n) => n + 1)} />}
+      {!d && err == null && <StateNotice state="loading">loading …</StateNotice>}
 
       {d && caps && (
-        <div className="p-5 space-y-5 text-sm">
+        <div className="p-6 space-y-6 text-sm">
           <section>
-            <div className="text-xl text-slate-100" data-testid="drawer-genus">
-              {named(d.lineage.genus) ?? <span className="text-slate-500">no genus assigned</span>}
+            <div className="text-xl text-fg" data-testid="drawer-genus">
+              {named(d.lineage.genus) ?? <span className="text-fg-muted">no genus assigned</span>}
             </div>
-            <div className="text-xs text-slate-500">
+            <div className="text-xs text-fg-muted">
               {d.cluster == null ? "no module"
                 : onOpenCluster ? (
                   <button data-testid="asv-open-cluster" onClick={() => onOpenCluster(d.cluster!)}
-                    className="text-cyan-300 hover:underline">{modules.label(d.cluster)} ↗</button>
+                    className="text-accent hover:underline">{modules.label(d.cluster)} ↗</button>
                 ) : modules.label(d.cluster)} · dataset {d.dataset_id}
+            </div>
+            <div className="text-xs text-fg-muted tabular-nums" data-testid="asv-presence"
+                 data-n={d.frequency.summary.n_detected} data-total={d.frequency.summary.n_samples}>
+              found in {d.frequency.summary.n_detected} of {d.frequency.summary.n_samples} samples
             </div>
             {taxonN != null && taxonN > 1 && onOpenTaxon && (
               <button data-testid="same-taxon" onClick={() => onOpenTaxon(asvId)}
-                className="mt-0.5 text-xs text-cyan-300 hover:underline">
+                className="mt-1 text-xs text-accent hover:underline">
                 same taxon · {taxonN} ASVs → open taxon
               </button>
             )}
@@ -121,39 +129,29 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
               if (d.cluster == null) {
                 limits.push(
                   <span key="net" className="inline-flex items-center" data-testid="asv-not-in-run"
-                    title={d.network_scope.recorded
-                      ? (d.network_scope.subset
-                          ? `The network was computed on ${d.network_scope.n_in_run} of the `
-                            + `${d.network_scope.n_dataset} ASVs of this dataset, so it may not `
-                            + `have been tested at all.`
-                          : "It was part of the run and reached no correlation threshold with any partner.")
-                      : "It is not recorded how many ASVs went into the network run, so it "
-                        + "cannot be said whether it was tested."}>
-                    {d.network_scope.recorded
-                      ? (d.network_scope.subset ? "not in the network run (not tested)"
-                                                : "in the run, below every threshold")
-                      : "not in the network run (scope not recorded)"}
+                    title="This ASV has no link in the network. Its time series and taxonomy are complete.">
+                    not in the network
                   </span>);
               }
               return limits.length > 0 ? (
-                <div className="mt-0.5 text-xs text-amber-400/90 flex items-center gap-1"
+                <div className="mt-1 text-xs text-warn flex items-center gap-1"
                   data-testid="asv-limitations">
-                  {limits.map((l, i) => [i > 0 && <span key={`s${i}`} className="text-slate-600">·</span>, l])}
+                  {limits.map((l, i) => [i > 0 && <span key={`s${i}`} className="text-fg-muted" aria-hidden>·</span>, l])}
                 </div>
               ) : null;
             })()}
           </section>
 
           <section data-testid="taxonomy-section">
-            <h3 className="text-slate-300 font-medium mb-1 flex items-center">Taxonomy</h3>
-            <table className="text-xs text-slate-300">
+            <h3 className="text-fg font-medium mb-1 flex items-center">Taxonomy</h3>
+            <table className="text-xs text-fg">
               <tbody>
                 {RANKS.map(([k, label]) => (
                   <tr key={k}>
-                    <td className="text-slate-500 pr-3 align-top">{label}</td>
+                    <td className="text-fg-muted pr-3 align-top">{label}</td>
                     <td data-testid={`rank-${k}`}>
                       {named(d.lineage[k])
-                        ?? <span className="text-slate-600 italic">not assigned</span>}
+                        ?? <span className="text-fg-muted italic">not assigned</span>}
                     </td>
                   </tr>
                 ))}
@@ -163,113 +161,111 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
 
           {findCap(caps, "sequence")?.available && d.sequence && (
             <section data-testid="sequence-section">
-              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
-                <h3 className="text-slate-300 font-medium">Sequence</h3>
+              <div className="flex flex-wrap items-center gap-2 text-xs text-fg-muted">
+                <h3 className="text-fg font-medium">Sequence</h3>
                 <span>{d.seq_length} bp</span>
-                <span className="font-mono text-slate-500" data-testid="seq-hash">{d.seq_hash}</span>
-                <button onClick={() => navigator.clipboard?.writeText(d.sequence ?? "")}
-                  className="px-2 py-0.5 rounded border border-slate-600 hover:border-cyan-400 hover:text-cyan-300">
+                <span className="font-mono text-fg-muted" data-testid="seq-hash">{d.seq_hash}</span>
+                <Button onClick={() => navigator.clipboard?.writeText(d.sequence ?? "")}>
                   copy
-                </button>
+                </Button>
                 <a data-testid="blast-link" href={blastUrl ?? "#"} target="_blank" rel="noopener noreferrer"
-                  className="px-2 py-0.5 rounded border border-slate-600 hover:border-cyan-400 hover:text-cyan-300">
+                  className="px-2 py-1 rounded border border-line-strong hover:border-accent hover:text-accent">
                   BLAST ↗
                 </a>
-                <button data-testid="sequence-toggle" onClick={() => setShowSeq((v) => !v)}
-                  className="px-2 py-0.5 rounded border border-slate-600 hover:border-cyan-400 hover:text-cyan-300">
+                <Button data-testid="sequence-toggle" onClick={() => setShowSeq((v) => !v)}>
                   {showSeq ? "hide" : "show"}
-                </button>
+                </Button>
               </div>
               {showSeq && (
-                <pre data-testid="sequence" className="mt-2 max-h-24 overflow-auto rounded bg-slate-950 p-2 font-mono
-                                text-[10px] leading-tight text-slate-400 break-all whitespace-pre-wrap">{d.sequence}</pre>
+                <pre data-testid="sequence" className="mt-2 max-h-24 overflow-auto rounded bg-surface p-2 font-mono
+                                text-2xs leading-tight text-fg-muted break-all whitespace-pre-wrap">{d.sequence}</pre>
               )}
             </section>
           )}
 
-          <section ref={kurveRef} data-testid="asv-frequency-section">
-            <h3 className="text-slate-300 font-medium mb-2 flex items-baseline">
-              Frequency over time
+          <section data-testid="asv-frequency-section">
+            <h3 className="text-fg font-medium mb-2 flex items-baseline gap-1"
+                data-testid="asv-frequency-title">
+              Share of sample total
+              <span className="text-xs font-normal text-fg-muted">(normalized for sequencing depth)</span>
               {onCompare && (
-                <button data-testid="asv-compare" onClick={() => onCompare(asvId)}
-                  className="ml-auto text-xs font-normal px-2 py-0.5 rounded bg-slate-700
-                             text-slate-200 hover:bg-slate-600">
+                <Button data-testid="asv-compare" onClick={() => onCompare(asvId)} className="ml-auto">
                   Compare ↗
-                </button>
+                </Button>
               )}
             </h3>
-            <FrequencyPanel freq={d.frequency} subject="this ASV" env={env} testid="asv-frequency"
-              markSample={markSample} pool={d.pool} />
+            <FrequencyPanel freq={d.frequency} subject="this ASV" env={env} testid="asv-frequency" />
           </section>
 
           {findCap(caps, "environment")?.available && (
-          <section data-testid="peak-env-section">
-            <h3 className="text-slate-300 font-medium mb-1 flex items-center">
-              Environment
+          <section data-testid="asv-env-section">
+            <h3 className="text-fg font-medium mb-1 flex items-center">
+              Environment where it was found
               <InfoTip title="Method and caveat">
-                <p data-testid="peak-env-caveat-full">{d.peak_environment.caveat}</p>
                 <p>{d.environment_profile.method}</p>
                 <p>{d.environment_profile.caveat}</p>
               </InfoTip>
             </h3>
-            {d.peak_environment.items.length === 0 && d.environment_profile.items.length === 0 ? (
-              <p className="text-xs text-slate-500" data-testid="peak-env-missing">
-                Not recorded for this ASV — these values exist only for ASVs in the network.
+            {d.environment_profile.items.length === 0 ? (
+              <p className="text-xs text-fg-muted" data-testid="asv-env-missing">
+                No measured conditions for the samples where this ASV was found.
               </p>
             ) : (
-              <>
-                <EnvironmentBars peak={d.peak_environment} profile={d.environment_profile}
-                  onPeakSample={zurKurve} />
-                <p className="mt-1 text-[10px] text-slate-500" data-testid="peak-env-caveat">
-                  {d.peak_environment.at_date && <>Peak sample of {d.peak_environment.at_date} · </>}
-                  one sample, not a range and not an optimum
-                </p>
-              </>
+              <EnvironmentBars profile={d.environment_profile} />
             )}
           </section>
           )}
 
+          {d.criterion2 && d.criterion2.reason !== "not_in_network" && (
+            <section data-testid="asv-c2-section">
+              <h3 className="text-fg font-medium mb-1">{d.criterion2.title}</h3>
+              <Criterion2Declaration c2={d.criterion2} verdict={d.criterion2.verdict}
+                testid="asv-c2" />
+            </section>
+          )}
+
           <section>
-            <h3 className="text-slate-300 font-medium mb-1 flex items-center">Neighbours</h3>
-            <p className="text-[10px] text-slate-500 mb-1" data-testid="neighbours-declaration">
+            <h3 className="text-fg font-medium mb-1 flex items-center">Neighbours</h3>
+            <p className="text-2xs text-fg-muted mb-1" data-testid="neighbours-declaration">
               CON = co-occurrence (correlation, not an interaction) · CCM = predictive value without a convergence test — no evidence of causation
             </p>
             <NeighbourNet asvId={asvId} cluster={d.cluster} neighbors={d.neighbors}
                           onOpenAsv={onOpenAsv} onOpenEdge={onOpenEdge} />
           </section>
 
-          <NoteBox testid="asv-note" value={d.note} savedAt={d.note_at}
-            onSave={(t) => setAsvNote(datasetId, asvId, t)
+          <NoteBox key={`${datasetId}/${asvId}`} testid="asv-note" value={d.note} savedAt={d.note_at}
+            readOnly={!signedIn} draftKey={`${datasetId}/asv/${asvId}`}
+            onSave={(t, o) => setAsvNote(datasetId, asvId, t, o)
               .then((r) => setD((cur) => (cur ? { ...cur, note: r.note, note_at: r.note_at } : cur)))} />
 
           <section data-testid="function-section" data-annotated={d.trait?.annotated ? "1" : "0"}>
             {d.trait?.annotated && (
               <div className="mb-1" data-testid="function-literature">
-                <div className="text-[10px] uppercase tracking-wide text-slate-500 flex items-center">
+                <div className="text-xs font-semibold text-fg-muted flex items-center">
                   annotated function (literature)
                   <InfoTip title="Where this comes from">
                     <p>{d.trait.note}</p>
                     {d.trait_run?.statement && <p data-testid="function-coverage">{d.trait_run.statement}</p>}
-                    {d.trait_run?.source_citations?.map((c) => <p key={c} className="text-slate-500">{c}</p>)}
+                    {d.trait_run?.source_citations?.map((c) => <p key={c} className="text-fg-muted">{c}</p>)}
                     {d.trait.functions.some((f) => f.startsWith("mixoplankton (")) && d.trait_run?.mdb_categories && (
-                      <p className="text-slate-500">
+                      <p className="text-fg-muted">
                         {Object.entries(d.trait_run.mdb_categories).map(([k, v]) => `${k} = ${v}`).join(" · ")}
                       </p>
                     )}
                   </InfoTip>
                 </div>
-                <ul className="text-xs mt-0.5">
+                <ul className="text-xs mt-1">
                   {d.trait.functions.map((f, i) => (
                     <li key={`${f}|${d.trait!.sources[i]}`} data-testid="function-entry" data-function={f}
                       className="flex items-baseline gap-2">
-                      <span className="text-slate-200">{f}</span>
-                      <span className="text-slate-500">— {d.trait!.sources[i]}</span>
+                      <span className="text-fg">{f}</span>
+                      <span className="text-fg-muted">— {d.trait!.sources[i]}</span>
                     </li>
                   ))}
                 </ul>
               </div>
             )}
-            <div className="text-xs text-slate-500 italic">
+            <div className="text-xs text-fg-muted italic">
               Ecological function — not derivable from amplicon data (a gene fragment, not an activity)
             </div>
           </section>

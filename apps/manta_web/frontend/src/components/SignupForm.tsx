@@ -1,3 +1,4 @@
+import { Button } from "./ui";
 import { useEffect, useState } from "react";
 import { signupOptions, submitSignup, type SignupOptions } from "../api";
 
@@ -32,26 +33,24 @@ export default function SignupForm({ onBack }: { onBack: () => void }) {
     }
   }
 
-  const input = "w-full mt-1 px-3 py-2 rounded bg-slate-950 border border-slate-700 text-sm " +
-                "text-slate-100 focus:border-cyan-500 focus:outline-none";
-  const label = "text-[11px] uppercase tracking-wide text-slate-500";
+  const input = "w-full mt-1 px-3 py-2 rounded-md bg-control border border-line-strong text-sm " +
+                "text-fg placeholder:text-fg-muted focus:border-accent focus:outline-none";
+  const label = "text-xs text-fg-muted";
 
   if (done) {
     return (
-      <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900 overflow-y-auto p-6">
+      <div className="fixed inset-0 z-50 grid place-items-center bg-surface overflow-y-auto p-4">
         <div data-testid="signup-done"
-             className="w-[26rem] rounded-lg border border-slate-700 bg-slate-800/60 p-6 space-y-4">
-          <h1 className="text-lg font-semibold text-slate-100">Request filed</h1>
-          <p className="text-sm text-slate-300">
+             className="w-full max-w-[26rem] rounded-lg border border-line bg-raised p-6 space-y-4 shadow-xl">
+          <h1 className="text-xl font-semibold text-fg">Request filed</h1>
+          <p className="text-sm text-fg">
             {opts?.mail_configured
               ? "Thank you. Your request is recorded and the people responsible have been notified. You will hear from them by e-mail — accounts are created by hand, so this is not instant."
               : "Thank you. Your request is recorded and waiting in the administration page. Note that this instance sends no notifications, so nobody was alerted automatically — if it stays quiet, ask the people who run MANTA directly."}
           </p>
-          <button onClick={onBack} data-testid="signup-back"
-                  className="w-full py-2 rounded bg-cyan-600 text-sm font-medium text-white
-                             hover:bg-cyan-500">
+          <Button variant="primary" size="md" className="w-full" onClick={onBack} data-testid="signup-back">
             back to sign in
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -60,12 +59,12 @@ export default function SignupForm({ onBack }: { onBack: () => void }) {
   const complete = form.full_name.trim() && form.email.trim() && form.reason.trim().length >= 10;
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900 overflow-y-auto p-6">
+    <div className="fixed inset-0 z-50 grid place-items-center bg-surface overflow-y-auto p-4">
       <form onSubmit={submit} data-testid="signup-form"
-            className="w-[26rem] rounded-lg border border-slate-700 bg-slate-800/60 p-6 space-y-4">
+            className="w-full max-w-[26rem] rounded-lg border border-line bg-raised p-6 space-y-4 shadow-xl">
         <div>
-          <h1 className="text-lg font-semibold text-slate-100 tracking-wide">Request access</h1>
-          <p className="text-xs text-slate-400 mt-1">
+          <h1 className="text-xl font-semibold text-fg tracking-wide">Request access</h1>
+          <p className="text-xs text-fg-muted mt-1">
             MANTA has no self-registration. This form asks for an account; a person reads it and
             decides.
           </p>
@@ -73,7 +72,7 @@ export default function SignupForm({ onBack }: { onBack: () => void }) {
 
         {opts && !opts.mail_configured && (
           <p data-testid="signup-nomail"
-             className="text-xs text-amber-300 border border-amber-400/40 rounded px-3 py-2">
+             className="text-xs text-warn border border-warn bg-warn-soft rounded-md px-3 py-2">
             This instance sends no notifications (no mail server or no recipient configured).
             Your request will still be recorded and waits in the administration page — but
             nobody is alerted automatically, so expect it to take longer.
@@ -130,18 +129,17 @@ export default function SignupForm({ onBack }: { onBack: () => void }) {
           </label>
         </div>
 
-        {error && <p data-testid="signup-error" className="text-xs text-red-400">{error}</p>}
+        {error && <p data-testid="signup-error" className="text-xs text-danger">{error}</p>}
 
-        <button type="submit" disabled={busy || !complete} data-testid="signup-submit"
-                className="w-full py-2 rounded bg-cyan-600 text-sm font-medium text-white
-                           disabled:opacity-40 hover:bg-cyan-500">
+        <Button type="submit" variant="primary" size="md" className="w-full"
+                disabled={busy || !complete} data-testid="signup-submit"
+                reason={busy ? "sending" : "fill in name, e-mail and a reason of at least 10 characters"}>
           {busy ? "sending …" : "Send request"}
-        </button>
+        </Button>
 
-        <button type="button" onClick={onBack} data-testid="signup-cancel"
-                className="w-full text-xs text-slate-400 hover:text-cyan-300 hover:underline">
+        <Button variant="ghost" className="w-full" onClick={onBack} data-testid="signup-cancel">
           back to sign in
-        </button>
+        </Button>
       </form>
     </div>
   );

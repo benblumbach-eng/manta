@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getStarred, type Capabilities, type Dataset, type HubCriterion,
+import { getStarred, type Capabilities, type Criterion2Summary, type Dataset,
          type Network, type NetNode, type Thresholds } from "../api";
 import DataAvailability from "./DataAvailability";
 import { useModules } from "../modules";
 import ProvenanceFooter from "./ProvenanceFooter";
 import { fmtRun, fmtUtc } from "../format";
 import { isActive, type Filters, type FilterKind, type LegendRow, layerLabel, layersDefault, functionLabel } from "../networkFilters";
+import { FUNCTION_NONE, functionOther } from "../clusterPalette";
+import { useDatasetSearch } from "../datasetSearch";
+import ErrorNotice from "./ErrorNotice";
+import DatasetFacts from "./DatasetFacts";
+import { Button, SectionHeading, TextButton, ToggleButton } from "./ui";
+import { Segmented } from "./controls";
+
+const NEUTRAL_SWATCH = "var(--control-strong)";
+const BOX = "rounded-md border border-line bg-raised px-2 py-2 mb-2";
 
 
 export const TAX_RANKS = ["species", "genus", "family", "order", "class", "phylum", "kingdom"];
@@ -20,7 +29,7 @@ export type SidebarProps = {
   dataset: Dataset;
   caps: Capabilities | null;
   net: Network | null;
-  hub: HubCriterion | null;
+  c2: Criterion2Summary | null;
   thr: Thresholds | undefined;
   visibleNodes: NetNode[];
   clusters: number[];
@@ -33,7 +42,8 @@ export type SidebarProps = {
   order: FilterKind[];
   chipCounts: Map<FilterKind, number>;
   unknownAsvIds: string[];
-  counts: { nodes: number; edges: number; cross: number; ccm: number; rejected?: number };
+  counts: { nodes: number; edges: number; cross: number; ccm: number; rejected?: number;
+            c2?: number };
   taxaMode: boolean;
   onTaxaMode: (v: boolean) => void;
   linkLength: number;
@@ -41,28 +51,35 @@ export type SidebarProps = {
   onLinkLength: (v: number) => void;
   colorMode: "module" | "function";
   onColorMode: (m: "module" | "function") => void;
-  functionClasses: { label: string; n: number; color: string }[];
+  functionClasses: { label: string; n: number; color: string; other?: boolean }[];
   taxaLayers: { n_con: number; n_asv_con: number;
                 n_con_with_ccm: number; n_asv_ccm: number;
                 n_con_with_rejected: number; n_asv_rejected: number } | null;
   legend: LegendRow[];
   sizeAbsent: boolean;
+  countsState?: "loading" | "error" | "ready";
   widthText: string | null;
   thresholds: string;
   views: { anyViewOpen: boolean; onShowNet: () => void; items: ViewItem[] };
   onPickAsv: (id: string) => void;
+  onOpenAsv: (id: string) => void;
   onPickTaxon: (rank: string, value: string) => void;
   onPickCluster: (label: number) => void;
   onOpenClusterPanel: (label: number) => void;
+  nSamples: number;
+  reloadKey?: number;
 };
+
+const PRESENCE_START = 5;
 
 const LEGEND_TESTID: Record<string, string> = {
   node: "legend-node", size: "size-legend", edge: "legend-edge", ccm: "legend-ccm",
-  width: "edge-width-legend", hub: "hub-legend", highlight: "legend-highlight",
+  cross: "legend-cross",
+  width: "edge-width-legend", c2: "c2-legend", highlight: "legend-highlight",
 };
 
 export default function NetworkSidebar(p: SidebarProps) {
-  const { dataset, caps, net, hub, thr, visibleNodes, filters } = p;
+  const { dataset, caps, net, c2, thr, visibleNodes, filters } = p;
   const modules = useModules();
 
   const [infoOpen, setInfoOpen] = useState(false);
@@ -87,10 +104,13 @@ export default function NetworkSidebar(p: SidebarProps) {
   const q = search.trim();
   const results = useMemo(
     () => (q
-      ? visibleNodes.filter((n) => n.id.startsWith(q)
+      ? visibleNodes.filter((n) => n.id.toLowerCase().includes(q.toLowerCase())
           || (n.genus ?? "").toLowerCase().includes(q.toLowerCase()))
       : []),
     [q, visibleNodes]);
+  const ganz = useDatasetSearch(dataset.dataset_id, q);
+  const [offeneGruppe, setOffeneGruppe] = useState<string | null>(null);
+  useEffect(() => { setOffeneGruppe(null); }, [q, dataset.dataset_id]);
   const taxMatches = useMemo(() => {
     const ql = q.toLowerCase();
     if (ql.length < 2) return [] as { rank: string; value: string; n: number }[];
@@ -118,12 +138,28 @@ export default function NetworkSidebar(p: SidebarProps) {
     const label = Number(m[1]);
     return p.clusters.includes(label) ? label : null;
   }, [q, p.clusters]);
+  const netzLeer = results.length === 0 && taxMatches.length === 0 && clusterMatch == null;
 
   const [addOpen, setAddOpen] = useState(false);
+  const addRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!addOpen) return;
+    const taste = (e: KeyboardEvent) => { if (e.key === "Escape") setAddOpen(false); };
+    const daneben = (e: MouseEvent) => {
+      if (addRef.current && !addRef.current.contains(e.target as Node)) setAddOpen(false);
+    };
+    document.addEventListener("keydown", taste);
+    document.addEventListener("mousedown", daneben);
+    return () => {
+      document.removeEventListener("keydown", taste);
+      document.removeEventListener("mousedown", daneben);
+    };
+  }, [addOpen]);
   const [taxonOpen, setTaxonOpen] = useState(isActive(filters, "taxon"));
   const [functionOpen, setFunctionOpen] = useState(isActive(filters, "function"));
   const [asvOpen, setAsvOpen] = useState(isActive(filters, "asvs"));
   const [sizeOpen, setSizeOpen] = useState(isActive(filters, "size"));
+  const [presenceOpen, setPresenceOpen] = useState(isActive(filters, "presence"));
   const [strengthOpen, setStrengthOpen] = useState(isActive(filters, "strength"));
   const [taxRank, setTaxRank] = useState("genus");
   const [taxValue, setTaxValue] = useState("");
@@ -134,6 +170,7 @@ export default function NetworkSidebar(p: SidebarProps) {
     if (isActive(filters, "function")) setFunctionOpen(true);
     if (isActive(filters, "asvs")) setAsvOpen(true);
     if (isActive(filters, "size")) setSizeOpen(true);
+    if (isActive(filters, "presence")) setPresenceOpen(true);
     if (isActive(filters, "strength")) setStrengthOpen(true);
   }, [filters]);
 
@@ -169,18 +206,19 @@ export default function NetworkSidebar(p: SidebarProps) {
           : `${visibleClusters.length} of ${p.clusters.length}`);
       case "layer": return layerLabel(filters.layers);
       case "cross": return "crossing only";
-      case "hubs": return hub ? `Hubs (${hub.measure_label}, μ+${hub.k}σ)` : "Hubs";
+      case "c2": return "Criterion 2 only";
       case "function": return `Function: ${functionLabel(filters.fn ?? "")}`;
       case "taxon": return filters.taxon ? `${filters.taxon.value} (${filters.taxon.rank})` : "Taxon";
       case "asvs": {
         const valid = (filters.asvs?.ids.length ?? 0) - p.unknownAsvIds.length;
         return `ASVs: ${valid}${filters.asvs?.neighbors ? " +neighbours" : ""}`;
       }
+      case "presence": return `present in ≥ ${filters.presence ?? 1} samples`;
       case "size": return filters.size
         ? `size: ${filters.size.dir === "top" ? "largest" : "smallest"} ${filters.size.pct} %`
         : "size";
       case "strength": return filters.strength
-        ? `links: ${filters.strength.dir === "top" ? "strongest" : "weakest"} ${filters.strength.pct} % (|r|)`
+        ? `links: ${filters.strength.dir === "top" ? "strongest" : "weakest"} ${filters.strength.pct} % (r)`
         : "strength";
     }
   };
@@ -204,31 +242,34 @@ export default function NetworkSidebar(p: SidebarProps) {
 
   return (
     <aside data-testid="network-sidebar"
-      className="w-72 border-r border-slate-700 flex flex-col gap-3 p-3 overflow-auto">
-      <div>
-        <div className="flex items-center gap-1">
-          <span className="text-slate-100 font-medium truncate">
-            {dataset.region ?? dataset.dataset_id}
-          </span>
-          <button data-testid="dataset-info-open" onClick={() => setInfoOpen((v) => !v)}
-            aria-label="dataset facts"
-            className={`text-xs px-1 rounded ${infoOpen
-              ? "text-cyan-300" : "text-slate-500 hover:text-slate-300"}`}>ⓘ</button>
+      className="w-72 border-r border-line flex flex-col gap-3 p-3 overflow-auto">
+      <div className="space-y-2">
+        <div>
+          <div className="flex items-center gap-1">
+            <h2 className="text-base font-semibold text-fg truncate">
+              {dataset.region ?? dataset.dataset_id}
+            </h2>
+            <button data-testid="dataset-info-open" onClick={() => setInfoOpen((v) => !v)}
+              aria-label="dataset details" aria-expanded={infoOpen}
+              className={`rounded-md px-1 text-xs ${infoOpen
+                ? "bg-accent-soft text-accent" : "text-fg-muted hover:text-fg hover:bg-control"}`}>ⓘ</button>
+          </div>
+          <div className="text-xs text-fg-muted" data-testid="dataset-marker">
+            Marker {dataset.marker ?? "?"}{timeWord ? ` · ${timeWord}` : ""}
+          </div>
         </div>
-        <div className="text-xs text-slate-400">
-          Marker {dataset.marker ?? "?"} · {dataset.n_sample} samples{timeWord ? ` · ${timeWord}` : ""}
-        </div>
+        <DatasetFacts dataset={dataset} caps={caps} />
         {infoOpen && (
           <div data-testid="dataset-info"
-            className="mt-1.5 rounded border border-slate-700 bg-slate-950/60 p-2 space-y-2">
+            className="rounded-md border border-line bg-raised p-2 space-y-2">
             {caps && <DataAvailability caps={caps} />}
             {thr && (
-              <div className="text-[10px] text-slate-500 tabular-nums" data-testid="dataset-info-run">
+              <div className="text-2xs text-fg-muted tabular-nums" data-testid="dataset-info-run">
                 {thr.recorded
                   ? <><span title={thr.run_id ? `run id: ${thr.run_id}` : undefined}>{fmtRun(thr.run_id)}</span>
                       {" "}· computed <span className="whitespace-nowrap">{thr.computed_at ? fmtUtc(thr.computed_at) : "—"}</span></>
                   : <>run not recorded — thresholds are defaults</>}
-                <br />CON |r| ≥ {thr.con_tr} · p &lt; {thr.con_alpha} · CCM NMI ≥ {thr.ccmn_tr} ·{" "}
+                <br />CON r ≥ {thr.con_tr} · p &lt; {thr.con_alpha} · CCM{" "}
                 {thr.num_permutations} permutations
               </div>
             )}
@@ -237,22 +278,17 @@ export default function NetworkSidebar(p: SidebarProps) {
       </div>
 
       <div>
-        <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">Views</div>
+        <SectionHeading className="mb-1">Views</SectionHeading>
         <div className="flex flex-wrap gap-1">
-          <button data-testid="net-tab" onClick={p.views.onShowNet}
-            className={`text-xs px-2 py-1 rounded ${!p.views.anyViewOpen
-              ? "bg-cyan-700 text-white" : "bg-slate-700 text-slate-200 hover:bg-slate-600"}`}>
+          <ToggleButton data-testid="net-tab" pressed={!p.views.anyViewOpen} onClick={p.views.onShowNet}>
             ◉ Network
-          </button>
+          </ToggleButton>
           {p.views.items.map((v) => (
-            <button key={v.key} data-testid={v.testid} onClick={v.onOpen}
-              title={v.disabledReason ?? undefined}
-              className={`text-xs px-2 py-1 rounded ${v.open
-                ? "bg-cyan-700 text-white"
-                : "bg-slate-700 text-slate-200 hover:bg-slate-600"}${
-                v.disabledReason ? " opacity-50" : ""}`}>
+            <ToggleButton key={v.key} data-testid={v.testid} onClick={v.onOpen} pressed={v.open}
+              title={v.disabledReason ?? undefined} aria-disabled={v.disabledReason ? true : undefined}
+              className={v.disabledReason ? "text-fg-disabled border-dashed" : ""}>
               {v.icon} {v.label}
-            </button>
+            </ToggleButton>
           ))}
         </div>
       </div>
@@ -264,17 +300,17 @@ export default function NetworkSidebar(p: SidebarProps) {
                 && clusterMatch == null) p.onPickAsv(results[0].id);
           }}
           placeholder="search ASV, taxon or cluster …"
-          className="w-full px-2 py-1 rounded bg-slate-800 border border-slate-600 text-sm text-slate-100" />
+          className="w-full px-2 py-1 rounded-md bg-control border border-line-strong text-sm text-fg placeholder:text-fg-muted" />
         {(results.length > 0 || taxMatches.length > 0 || clusterMatch != null) && (
-          <ul className="mt-1 max-h-40 overflow-auto border border-slate-700 rounded">
+          <ul className="mt-1 max-h-40 overflow-auto border border-line rounded-md bg-raised">
             {clusterMatch != null && (
               <li>
                 <button data-testid="cluster-result" onClick={() => p.onPickCluster(clusterMatch)}
-                  className="w-full text-left px-2 py-1 hover:bg-slate-800 text-sm">
+                  className="w-full text-left px-2 py-1 hover:bg-control text-sm">
                   <span data-testid="cluster-swatch" className="inline-block w-3 h-3 rounded-sm mr-1 align-middle"
-                    style={{ background: p.clusterColor.get(clusterMatch) ?? "#888" }} />
-                  <span className="text-slate-100">{modules.label(clusterMatch)}</span>{" "}
-                  <span className="text-slate-400">
+                    style={{ background: p.clusterColor.get(clusterMatch) ?? "var(--text-disabled)" }} />
+                  <span className="text-fg">{modules.label(clusterMatch)}</span>{" "}
+                  <span className="text-fg-muted">
                     {p.countByCluster.get(clusterMatch) ?? 0} ASVs — mark all
                   </span>
                 </button>
@@ -283,10 +319,10 @@ export default function NetworkSidebar(p: SidebarProps) {
             {taxMatches.map((t) => (
               <li key={`${t.rank}:${t.value}`}>
                 <button data-testid="tax-result" onClick={() => p.onPickTaxon(t.rank, t.value)}
-                  className="w-full text-left px-2 py-1 hover:bg-slate-800 text-sm">
-                  <span className="text-amber-300">◌ {t.value}</span>{" "}
-                  <span className="text-slate-400">
-                    {t.rank} · {t.n} ASV{t.n === 1 ? "" : "s"} — mark all
+                  className="w-full text-left px-2 py-1 hover:bg-control text-sm">
+                  <span className="text-warn">◌ {t.value}</span>{" "}
+                  <span className="text-fg-muted">
+                    {t.rank} · {t.n} ASV{t.n === 1 ? "" : "s"} in the network — mark all
                   </span>
                 </button>
               </li>
@@ -294,59 +330,146 @@ export default function NetworkSidebar(p: SidebarProps) {
             {results.map((n) => (
               <li key={n.id}>
                 <button data-testid="asv-result" onClick={() => p.onPickAsv(n.id)}
-                  className="w-full text-left px-2 py-1 hover:bg-slate-800 text-sm">
-                  <span className="inline-block w-2 h-2 rounded-full mr-1.5"
-                    style={{ background: p.clusterColor.get(n.cluster) ?? "#888" }} />
-                  <span className="text-slate-100">{n.id}</span>{" "}
-                  <span className="text-slate-400">{n.genus}</span>
+                  className="w-full text-left px-2 py-1 hover:bg-control text-sm">
+                  <span className="inline-block w-2 h-2 rounded-full mr-2"
+                    style={{ background: p.clusterColor.get(n.cluster) ?? "var(--text-disabled)" }} />
+                  <span className="text-fg">{n.id}</span>{" "}
+                  <span className="text-fg-muted">{n.genus}</span>
                 </button>
               </li>
             ))}
           </ul>
         )}
+
+        {q && (
+          <div className="mt-1 space-y-1" data-testid="search-dataset">
+            {ganz.loading && (
+              <p className="text-2xs text-fg-muted" data-testid="search-dataset-loading">
+                searching the whole dataset …
+              </p>
+            )}
+            {ganz.error != null && (
+              <ErrorNotice error={ganz.error} inline testid="search-error"
+                what="The search over the whole dataset failed." />
+            )}
+            {ganz.result && netzLeer && ganz.result.in_network.n_asv > 0 && (
+              <p className="text-xs text-warn leading-snug" data-testid="search-hidden">
+                {ganz.result.in_network.n_asv} matching ASV{ganz.result.in_network.n_asv === 1 ? " is" : "s are"} in
+                the network but hidden by the active filters.{" "}
+                <TextButton data-testid="search-hidden-clear" onClick={p.onClearAll}>clear all</TextButton>
+              </p>
+            )}
+            {ganz.result && ganz.result.outside_network.n_asv > 0 && (() => {
+              const r = ganz.result;
+              const aussen = r.outside_network;
+              const gruppen: typeof aussen.taxa = [];
+              for (const t of aussen.taxa) {
+                const ids = t.asvs.map((a) => a.id);
+                if (t.n_asv === t.asvs.length && gruppen.some((g) =>
+                  ids.every((id) => g.asvs.some((x) => x.id === id)))) continue;
+                gruppen.push(t);
+              }
+              const inGruppe = new Set(aussen.taxa.flatMap((t) => t.asvs.map((a) => a.id)));
+              const nurKennung = aussen.asvs.filter((a) => a.id_match && !inGruppe.has(a.id));
+              const zeile = (a: (typeof aussen.asvs)[number]) => (
+                <li key={a.id}>
+                  <button data-testid="search-outside-asv" data-asv={a.id} onClick={() => p.onOpenAsv(a.id)}
+                    className="w-full text-left px-2 py-1 hover:bg-control text-xs">
+                    <span className="font-mono text-fg">{a.id}</span>{" "}
+                    <span className="text-fg-muted">
+                      {a.label !== "unassigned" ? `${a.label} · ` : ""}found in {a.n_samples_present} of {r.n_samples} samples
+                    </span>{" "}
+                    <span className="text-accent">→ open</span>
+                  </button>
+                </li>
+              );
+              return (
+                <div className="rounded-md border border-line bg-raised" data-testid="search-outside">
+                  <SectionHeading as="h4" className="px-2 pt-1">
+                    in this dataset, no link in the network
+                  </SectionHeading>
+                  <ul className="max-h-48 overflow-auto pb-1">
+                    {gruppen.map((t) => {
+                      const gk = `${t.rank}:${t.value}`;
+                      const eins = t.n_asv === 1 && t.asvs.length === 1;
+                      const offen = offeneGruppe === gk;
+                      return (
+                        <li key={gk}>
+                          <button data-testid="search-outside-taxon" data-n={t.n_asv}
+                            aria-expanded={eins ? undefined : offen}
+                            onClick={() => (eins ? p.onOpenAsv(t.asvs[0].id) : setOffeneGruppe(offen ? null : gk))}
+                            className="w-full text-left px-2 py-1 hover:bg-control text-sm">
+                            <span className="text-warn">◌ {t.value}</span>{" "}
+                            <span className="text-fg-muted">
+                              · {t.n_asv} ASV{t.n_asv === 1 ? "" : "s"} <span className="text-fg-muted">({t.rank})</span>
+                            </span>{" "}
+                            <span className="text-accent">{eins ? "→ open" : offen ? "▾" : "▸ open"}</span>
+                          </button>
+                          {offen && (
+                            <ul className="ml-3 border-l border-line" data-testid="search-outside-members">
+                              {t.asvs.map(zeile)}
+                              {t.n_asv > t.asvs.length && (
+                                <li className="px-2 text-2xs text-fg-muted">
+                                  {t.asvs.length} of {t.n_asv} shown — type more to narrow down
+                                </li>
+                              )}
+                            </ul>
+                          )}
+                        </li>
+                      );
+                    })}
+                    {nurKennung.map(zeile)}
+                  </ul>
+                  {aussen.n_taxa > aussen.taxa.length && (
+                    <p className="px-2 pb-1 text-2xs text-fg-muted">
+                      {aussen.taxa.length} of {aussen.n_taxa} names shown — type more to narrow down
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
+            {ganz.result?.sentence && netzLeer && (
+              <p className="text-2xs text-fg-muted leading-snug" data-testid="search-none">
+                {ganz.result.sentence}
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       <div>
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-[10px] uppercase tracking-wide text-slate-500">Filter</span>
-          {anyActive && (
-            <button data-testid="filter-clear-all" onClick={p.onClearAll}
-              className="text-xs text-slate-400 hover:text-cyan-300 underline">clear all</button>
-          )}
-        </div>
+        <SectionHeading className="mb-1" aside={anyActive && (
+            <TextButton data-testid="filter-clear-all" onClick={p.onClearAll} className="text-xs">
+              clear all</TextButton>
+          )}>Filter</SectionHeading>
         {anyActive && (
           <div className="flex flex-wrap gap-1 mb-2" data-testid="filter-chips">
             {p.order.map((k) => (
               <span key={k} data-testid={`filter-chip-${k}`}
-                className="inline-flex items-center gap-1 text-xs rounded-full border border-cyan-800 bg-cyan-950/50 px-2 py-0.5 text-cyan-200">
+                className="inline-flex items-center gap-1 text-xs rounded-full border border-accent/60 bg-accent-soft px-2 py-1 text-accent">
                 {chipLabel(k)}
-                <span className="tabular-nums text-cyan-300"
+                <span className="tabular-nums text-accent"
                   data-testid={`filter-chip-${k}-n`}>{p.chipCounts.get(k) ?? "…"}</span>
                 <button data-testid={`filter-chip-${k}-remove`} onClick={() => p.onClearKind(k)}
-                  className="text-cyan-400 hover:text-white" aria-label={`remove ${k} filter`}>×</button>
+                  className="text-accent hover:text-fg" aria-label={`remove ${k} filter`}>×</button>
               </span>
             ))}
           </div>
         )}
 
-        <div className="rounded border border-slate-700 bg-slate-950/40 px-2 py-1.5 mb-2">
-          <div className="flex items-center justify-between mb-1">
-            <div className="text-[10px] uppercase tracking-wide text-slate-500 flex items-center">
-              Modules
-
-            </div>
-            <div className="flex gap-1">
-              <button data-testid="cluster-all" onClick={() => p.onFilters({ hidden: new Set() })}
-                className="text-xs px-1.5 py-0.5 rounded bg-slate-700 text-slate-300 hover:bg-slate-600">all</button>
-              <button data-testid="cluster-none" onClick={() => p.onFilters({ hidden: new Set(p.clusters) })}
-                className="text-xs px-1.5 py-0.5 rounded bg-slate-700 text-slate-300 hover:bg-slate-600">none</button>
-            </div>
-          </div>
+        <div className={BOX}>
+          <SectionHeading className="mb-1" aside={<>
+              <Button variant="ghost" data-testid="cluster-all"
+                onClick={() => p.onFilters({ hidden: new Set() })}>all</Button>
+              <Button variant="ghost" data-testid="cluster-none"
+                onClick={() => p.onFilters({ hidden: new Set(p.clusters) })}>none</Button>
+            </>}>Modules</SectionHeading>
           <div ref={modListRef} onScroll={measureModList} data-testid="cluster-list"
             className="relative flex flex-col gap-1 max-h-64 overflow-auto">
             {p.clusters.map((c) => (
-              <div key={c} className="flex items-center gap-2 text-sm text-slate-200">
+              <div key={c} className="flex items-center gap-2 text-sm text-fg">
                 <input type="checkbox" data-testid={`cluster-check-${c}`}
+                  aria-label={`show ${modules.label(c)}`}
                   checked={!filters.hidden.has(c)}
                   onChange={(e) => {
                     const next = new Set(filters.hidden);
@@ -354,22 +477,24 @@ export default function NetworkSidebar(p: SidebarProps) {
                     p.onFilters({ hidden: next });
                   }} />
                 <span data-testid="cluster-swatch" className="inline-block w-3 h-3 rounded-sm shrink-0"
-                  style={{ background: p.clusterColor.get(c) ?? "#888" }} />
+                  data-neutral={p.colorMode === "function" ? "1" : "0"}
+                  style={{ background: p.colorMode === "function" ? NEUTRAL_SWATCH
+                                                                 : (p.clusterColor.get(c) ?? "var(--text-disabled)") }} />
                 <button data-testid={`cluster-open-${c}`} onClick={() => p.onOpenClusterPanel(c)}
                   className="flex-1 text-left hover:underline">{modules.label(c)}</button>
-                <span className="text-xs text-slate-500 tabular-nums">
+                <span className="text-xs text-fg-muted tabular-nums">
                   {p.countByCluster.get(c) ?? 0}
                 </span>
               </div>
             ))}
           </div>
           {modBelow > 0 && (
-            <div className="mt-0.5 text-[10px] text-slate-500" data-testid="cluster-more">
+            <div className="mt-1 text-2xs text-fg-muted" data-testid="cluster-more">
               +{modBelow} more — scroll
             </div>
           )}
           {net?.partition?.clusters_are_components && (
-            <p className="mt-1 text-[11px] text-amber-400/90 leading-snug" data-testid="partition-note">
+            <p className="mt-1 text-xs text-warn leading-snug" data-testid="partition-note">
               These {net.partition.n_clusters} clusters are exactly the{" "}
               {net.partition.n_components} unconnected parts of this network — no link crosses a
               cluster border.
@@ -377,111 +502,118 @@ export default function NetworkSidebar(p: SidebarProps) {
           )}
         </div>
 
-        <div className="flex gap-1 mb-2" data-testid="grain-control">
-          <button data-testid="grain-asvs" onClick={() => p.onTaxaMode(false)}
-            className={`flex-1 px-2 py-1 rounded text-xs ${!p.taxaMode
-              ? "bg-cyan-700 text-white" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}>
-            ASVs
-          </button>
-          <button data-testid="grain-taxa" onClick={() => p.onTaxaMode(true)}
-            className={`flex-1 px-2 py-1 rounded text-xs ${p.taxaMode
-              ? "bg-cyan-700 text-white" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}>
-            Taxa
-          </button>
+        <div className="mb-2" data-testid="grain-control">
+          <Segmented full label="Points" value={p.taxaMode ? "taxa" : "asvs"}
+            onChange={(v) => p.onTaxaMode(v === "taxa")}
+            options={[{ value: "asvs", label: "ASVs", testid: "grain-asvs" },
+                      { value: "taxa", label: "Taxa", testid: "grain-taxa" }]} />
         </div>
         {p.taxaMode && (
-          <p className="mb-2 text-[10px] text-slate-500 leading-snug" data-testid="taxa-note">
+          <p className="mb-2 text-2xs text-fg-muted leading-snug" data-testid="taxa-note">
             One point per taxon (all seven ranks equal); a line counts member pairs with a link.
           </p>
         )}
 
         <div className="mb-2" data-testid="link-length-control">
           <div className="flex gap-2 items-center">
-            <span className="text-[10px] uppercase tracking-wide text-slate-500">link length</span>
+            <span className="text-xs text-fg-muted">Link length</span>
             <input type="range" data-testid="link-length" aria-label="link length"
               min={60} max={900} step={20} value={lenDraft}
               onChange={(e) => setLenDraft(Number(e.target.value))}
-              className="flex-1 accent-cyan-600" />
-            <span className="w-8 text-right text-xs tabular-nums text-slate-400">{lenDraft}</span>
+              className="flex-1 accent-accent-fill" />
+            <span className="w-8 text-right text-xs tabular-nums text-fg-muted">{lenDraft}</span>
             <button data-testid="link-length-reset" onClick={() => setLenDraft(p.linkLengthDefault)}
               disabled={lenDraft === p.linkLengthDefault} title="back to the default length"
-              className="text-xs text-slate-400 hover:text-white disabled:opacity-30">↺</button>
+              aria-label="back to the default length"
+              className="rounded-md px-1 text-xs text-fg-muted hover:text-fg hover:bg-control disabled:text-fg-disabled disabled:hover:bg-transparent">↺</button>
           </div>
         </div>
 
         <div className="mb-2" data-testid="color-control">
-          <div className="flex gap-1 items-center">
-            <span className="text-[10px] uppercase tracking-wide text-slate-500 mr-1">colour</span>
-            <button data-testid="color-module" aria-pressed={p.colorMode === "module"}
-              onClick={() => p.onColorMode("module")}
-              className={`flex-1 px-2 py-1 rounded text-xs ${p.colorMode === "module"
-                ? "bg-cyan-700 text-white" : "bg-slate-700 text-slate-300 hover:bg-slate-600"}`}>
-              by module
-            </button>
-            <button data-testid="color-function" aria-pressed={p.colorMode === "function"}
-              disabled={!net?.traits?.available}
-              title={net?.traits?.available ? undefined
-                : (net?.traits?.absent_reason ?? "no literature annotation for this dataset")}
-              onClick={() => p.onColorMode("function")}
-              className={`flex-1 px-2 py-1 rounded text-xs ${p.colorMode === "function"
-                ? "bg-cyan-700 text-white"
-                : net?.traits?.available ? "bg-slate-700 text-slate-300 hover:bg-slate-600"
-                : "bg-slate-800 text-slate-500 cursor-not-allowed"}`}>
-              by function
-            </button>
-
+          <div>
+            <Segmented full label="Colour" value={p.colorMode} onChange={p.onColorMode}
+              options={[{ value: "module", label: "by module", testid: "color-module" },
+                        { value: "function", label: "by function", testid: "color-function",
+                          disabled: !net?.traits?.available,
+                          reason: net?.traits?.available ? undefined
+                            : (net?.traits?.absent_reason ?? "no literature annotation for this dataset") }]} />
           </div>
+          {p.colorMode === "function" && (
+            <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-2xs" data-testid="function-key">
+              {p.functionClasses.filter((c) => !c.other).map((c) => (
+                <span key={c.label} className="inline-flex items-center gap-1 text-fg"
+                  data-testid="function-key-class" data-label={c.label} data-color={c.color}>
+                  <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: c.color }} />
+                  {c.label} <span className="text-fg-muted tabular-nums">{c.n}</span>
+                </span>
+              ))}
+              {p.functionClasses.some((c) => c.other) && (
+                <span className="inline-flex items-center gap-1 text-fg" data-testid="function-key-other"
+                  title={p.functionClasses.filter((c) => c.other).map((c) => c.label).join(", ")}>
+                  <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: functionOther() }} />
+                  other classes <span className="text-fg-muted tabular-nums">
+                    {p.functionClasses.filter((c) => c.other).reduce((a, c) => a + c.n, 0)}</span>
+                </span>
+              )}
+              <span className="inline-flex items-center gap-1 text-fg-muted" data-testid="function-key-none">
+                <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: FUNCTION_NONE }} />
+                {p.taxaMode ? "not annotated or mixed classes" : "not annotated"}
+              </span>
+            </div>
+          )}
           {p.colorMode === "function" && net?.traits?.statement && (
-            <p className="mt-1 text-[10px] text-slate-400" data-testid="legend-function-coverage">
+            <p className="mt-1 text-2xs text-fg-muted" data-testid="legend-function-coverage">
               {net.traits.statement}
             </p>
           )}
           {p.colorMode === "function" && net?.traits?.note && (
-            <p className="mt-0.5 text-[10px] text-slate-500 leading-snug" data-testid="function-note">
+            <p className="mt-1 text-2xs text-fg-muted leading-snug" data-testid="function-note">
               {net.traits.note.split(". ")[0].replace(/\.?$/, ".")}
             </p>
           )}
         </div>
 
-        <div className="rounded border border-slate-700 bg-slate-950/40 px-2 py-1.5 mb-2" data-testid="layer-control">
-          <div className="text-[10px] uppercase tracking-wide text-slate-500 flex items-center">
-            Links
-
-          </div>
+        <div className={BOX} data-testid="layer-control">
+          <SectionHeading>Links</SectionHeading>
           <div className="mt-1 flex flex-col gap-1">
             {(() => {
               const L = filters.layers;
               const toggle = (k: "con" | "ccm" | "rejected") =>
                 p.onFilters({ layers: { ...L, [k]: !L[k] } });
-              const cls = (on: boolean, enabled = true) =>
-                `px-2 py-1 rounded text-sm text-left tabular-nums ${on ? "bg-cyan-700 text-white"
-                  : enabled ? "bg-slate-700 text-slate-300 hover:bg-slate-600"
-                  : "bg-slate-800 text-slate-500 cursor-not-allowed"}`;
-              const mark = (on: boolean) => (on ? "☑" : "☐");
+              const cls = (_on: boolean, enabled = true) =>
+                `flex items-center gap-2 rounded px-2 py-1 text-xs text-left tabular-nums ${enabled
+                  ? "text-fg hover:bg-control" : "text-fg-disabled cursor-not-allowed"}`;
+              const mark = (on: boolean) => (
+                <span aria-hidden className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center
+                  rounded-[3px] border text-2xs leading-none ${on
+                    ? "border-accent bg-accent-fill text-on-accent" : "border-line-strong"}`}>
+                  {on ? "✓" : ""}
+                </span>
+              );
               const recorded = !!net?.layers?.ccm_tested_recorded;
               const unit = p.taxaMode ? "taxa" : "ASVs";
               return (
                 <>
                   <button data-testid="layer-all" aria-pressed={L.con} onClick={() => toggle("con")}
                     className={cls(L.con)}>
-                    {mark(L.con)} Links (con) ·{" "}
+                    {mark(L.con)}<span>Links (con) ·{" "}
                     <span data-testid="layer-n-con">
                       {p.taxaLayers?.n_con ?? net?.layers?.n_con ?? "…"}</span> links ·{" "}
                     <span data-testid="layer-asv-con">
-                      {p.taxaLayers?.n_asv_con ?? net?.layers?.n_asv_con ?? "…"}</span> {unit}
+                      {p.taxaLayers?.n_asv_con ?? net?.layers?.n_asv_con ?? "…"}</span> {unit}</span>
                   </button>
                   <button data-testid="layer-ccm" aria-pressed={L.ccm} onClick={() => toggle("ccm")}
                     className={cls(L.ccm)}>
-                    {mark(L.ccm)} Direction (ccm) ·{" "}
+                    {mark(L.ccm)}<span>Direction (ccm) ·{" "}
                     <span data-testid="layer-n-ccm">
                       {p.taxaLayers?.n_con_with_ccm ?? net?.layers?.n_con_with_ccm ?? "…"}</span>{" "}
                     links ·{" "}
                     <span data-testid="layer-asv-ccm">
-                      {p.taxaLayers?.n_asv_ccm ?? net?.layers?.n_asv_ccm ?? "…"}</span> {unit}
+                      {p.taxaLayers?.n_asv_ccm ?? net?.layers?.n_asv_ccm ?? "…"}</span> {unit}</span>
                   </button>
                   <button data-testid="layer-rejected" aria-pressed={L.rejected} disabled={!recorded}
                     onClick={() => toggle("rejected")} className={cls(L.rejected, recorded)}>
-                    {mark(L.rejected)} ⇢ Rejected (ccm) ·{" "}
+                    {mark(L.rejected)}<span>⇢ Rejected (ccm) ·{" "}
                     <span data-testid="layer-n-rejected">
                       {recorded
                         ? (p.taxaLayers?.n_con_with_rejected ?? net?.layers?.n_con_with_rejected ?? "…")
@@ -490,29 +622,29 @@ export default function NetworkSidebar(p: SidebarProps) {
                     <span data-testid="layer-asv-rejected">
                       {recorded
                         ? (p.taxaLayers?.n_asv_rejected ?? net?.layers?.n_asv_rejected ?? "…")
-                        : "—"}</span> {unit}
+                        : "—"}</span> {unit}</span>
                   </button>
                 </>
               );
             })()}
             {net?.layers && (net.layers.ccm_tested_recorded ? (
-              <p className="text-[10px] text-slate-500 tabular-nums leading-snug" data-testid="layer-tested-note">
+              <p className="text-2xs text-fg-muted tabular-nums leading-snug" data-testid="layer-tested-note">
                 OTTER tested {net.layers.n_ccm_tested} directions (each link both ways);{" "}
                 {net.layers.n_ccm_rejected} rejected at p ≥ 0.05.
               </p>
             ) : (
-              <p className="text-[10px] text-slate-500 leading-snug" data-testid="layer-tested-note">
+              <p className="text-2xs text-fg-muted leading-snug" data-testid="layer-tested-note">
                 Rejected directions not recorded for this dataset (no PV table in its run).
               </p>
             ))}
             {net?.layers && !net.layers.ccm_tested_recorded && (
-              <p data-testid="rejected-not-recorded" className="text-[10px] text-amber-400 leading-snug">
+              <p data-testid="rejected-not-recorded" className="text-xs text-warn leading-snug">
                 rejected directions not recorded for this dataset
               </p>
             )}
           </div>
           {filters.layers.rejected && (
-            <p data-testid="rejected-caveat" className="mt-1 text-xs text-amber-400 leading-snug">
+            <p data-testid="rejected-caveat" className="mt-1 text-xs text-warn leading-snug">
               Dashed arrows: directions OTTER tested and <strong>rejected</strong> (p ≥ 0.05 in
               its permutation test) — no arrow in the kept network; where the line itself is
               drawn, the rejected direction bends beside it. Same CCM caveat: predictive value,
@@ -520,7 +652,7 @@ export default function NetworkSidebar(p: SidebarProps) {
             </p>
           )}
           {filters.layers.ccm && !layersDefault(filters.layers) && (
-            <p data-testid="ccm-caveat" className="mt-1 text-xs text-amber-400 leading-snug">
+            <p data-testid="ccm-caveat" className="mt-1 text-xs text-warn leading-snug">
               CCM measures directed predictive value (NMI), <strong>without</strong> a convergence
               test — no evidence of causation.
             </p>
@@ -528,12 +660,11 @@ export default function NetworkSidebar(p: SidebarProps) {
         </div>
 
         {functionOpen && (
-          <div className="rounded border border-slate-700 bg-slate-950/40 px-2 py-1.5 mb-2"
-            data-testid="filter-function-section">
-            <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">Function filter</div>
+          <div className={BOX} data-testid="filter-function-section">
+            <SectionHeading className="mb-1">Function filter</SectionHeading>
             {net?.traits?.available ? (
               [...p.functionClasses.map((c) => ({ ...c, key: c.label })),
-                { label: "not annotated", key: "", color: "#94a3b8",
+                { label: "not annotated", key: "", color: FUNCTION_NONE,
                   n: net.nodes.filter((n) => !n.trait_group).length }]
                 .filter((c) => c.key !== "" || c.n > 0).map((c) => {
                 const on = filters.fn === c.key;
@@ -544,16 +675,16 @@ export default function NetworkSidebar(p: SidebarProps) {
                       p.onFilters({ fn: on ? null : c.key });
                       if (!on) p.onColorMode("function");
                     }}
-                    className={`w-full flex items-center gap-1.5 px-1.5 py-0.5 rounded text-xs text-left ${on
-                      ? "bg-cyan-800/70 text-white" : "text-slate-300 hover:bg-slate-800"}`}>
+                    className={`w-full flex items-center gap-2 px-2 py-1 rounded text-xs text-left ${on
+                      ? "bg-accent-soft text-accent font-medium" : "text-fg hover:bg-control"}`}>
                     <span className="inline-block w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: c.color }} />
                     <span className="flex-1 truncate">{c.label}</span>
-                    <span className="text-slate-500 tabular-nums">{c.n}</span>
+                    <span className="text-fg-muted tabular-nums">{c.n}</span>
                   </button>
                 );
               })
             ) : (
-              <p className="text-[10px] text-amber-400 leading-snug" data-testid="filter-function-absent">
+              <p className="text-xs text-warn leading-snug" data-testid="filter-function-absent">
                 {net?.traits?.absent_reason ?? "no literature annotation for this dataset"}
               </p>
             )}
@@ -561,13 +692,12 @@ export default function NetworkSidebar(p: SidebarProps) {
         )}
 
         {taxonOpen && (
-          <div className="rounded border border-slate-700 bg-slate-950/40 px-2 py-1.5 mb-2"
-            data-testid="filter-taxon-section">
-            <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">Taxon filter</div>
+          <div className={BOX} data-testid="filter-taxon-section">
+            <SectionHeading className="mb-1">Taxon filter</SectionHeading>
             <div className="flex gap-1">
               <select data-testid="filter-tax-rank" value={taxRank}
                 onChange={(e) => setTaxRank(e.target.value)}
-                className="px-1 py-0.5 rounded bg-slate-800 border border-slate-600 text-xs text-slate-100">
+                className="px-1 py-1 rounded bg-control border border-line-strong text-xs text-fg">
                 {TAX_RANKS.map((r) => <option key={r} value={r}>{r}</option>)}
               </select>
               <input data-testid="filter-tax-value" list="manta-tax-values" value={taxValue}
@@ -577,7 +707,7 @@ export default function NetworkSidebar(p: SidebarProps) {
                     p.onFilters({ taxon: { rank: taxRank, value: e.target.value } });
                 }}
                 placeholder="value …"
-                className="flex-1 min-w-0 px-1 py-0.5 rounded bg-slate-800 border border-slate-600 text-xs text-slate-100" />
+                className="flex-1 min-w-0 px-1 py-1 rounded bg-control border border-line-strong text-xs text-fg" />
               <datalist id="manta-tax-values">
                 {taxValues.map((v) => <option key={v} value={v} />)}
               </datalist>
@@ -586,72 +716,85 @@ export default function NetworkSidebar(p: SidebarProps) {
         )}
 
         {asvOpen && (
-          <div className="rounded border border-slate-700 bg-slate-950/40 px-2 py-1.5 mb-2"
-            data-testid="filter-asv-section">
-            <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">ASV selection</div>
+          <div className={BOX} data-testid="filter-asv-section">
+            <SectionHeading className="mb-1">ASV selection</SectionHeading>
             <textarea data-testid="filter-asv-input" value={asvText}
               onChange={(e) => setAsvText(e.target.value)}
               placeholder={"one identifier per line\nor comma-separated"}
               rows={3}
-              className="w-full px-1.5 py-1 rounded bg-slate-800 border border-slate-600 text-xs text-slate-100 font-mono" />
+              className="w-full px-2 py-1 rounded bg-control border border-line-strong text-xs text-fg font-mono" />
             <div className="flex flex-wrap gap-1 mt-1">
-              <button data-testid="filter-asv-apply" onClick={() => applyAsvText(asvText)}
-                className="text-xs px-1.5 py-0.5 rounded bg-slate-700 text-slate-200 hover:bg-slate-600">
+              <Button data-testid="filter-asv-apply" onClick={() => applyAsvText(asvText)}>
                 apply
-              </button>
-              <button data-testid="filter-asv-starred"
+              </Button>
+              <Button data-testid="filter-asv-starred"
                 onClick={() => getStarred(dataset.dataset_id).then((d) => {
                   const ids = d.asvs.map((a) => a.id);
                   setStarredNote(ids.length ? null
                     : d.note ?? "nothing starred by this account in this dataset");
                   setAsvText(ids.join("\n"));
                   applyAsvText(ids.join("\n"));
-                }).catch(() => setStarredNote("could not load the starred list"))}
-                className="text-xs px-1.5 py-0.5 rounded bg-slate-700 text-slate-200 hover:bg-slate-600">
+                }).catch(() => setStarredNote("could not load the starred list"))}>
                 ★ my starred
-              </button>
-              <button data-testid="filter-asv-from-search"
+              </Button>
+              <Button data-testid="filter-asv-from-search"
                 onClick={() => {
                   const ids = results.map((n) => n.id);
                   setAsvText(ids.join("\n"));
                   applyAsvText(ids.join("\n"));
                 }}
-                disabled={results.length === 0}
-                className="text-xs px-1.5 py-0.5 rounded bg-slate-700 text-slate-200 hover:bg-slate-600 disabled:opacity-40">
+                disabled={results.length === 0} reason="no search hits to take">
                 take search hits
-              </button>
+              </Button>
             </div>
-            <label className="flex items-center gap-1.5 mt-1 text-xs text-slate-300 cursor-pointer">
+            <label className="flex items-center gap-2 mt-1 text-xs text-fg cursor-pointer">
               <input type="checkbox" data-testid="filter-asv-neighbors"
                 checked={filters.asvs?.neighbors ?? false}
                 onChange={(e) => filters.asvs
                   && p.onFilters({ asvs: { ...filters.asvs, neighbors: e.target.checked } })} />
               + neighbours
             </label>
-            {starredNote && <p className="mt-1 text-[10px] text-slate-500">{starredNote}</p>}
+            {starredNote && <p className="mt-1 text-2xs text-fg-muted">{starredNote}</p>}
             {p.unknownAsvIds.length > 0 && (
-              <p data-testid="filter-asv-unknown" className="mt-1 text-[10px] text-amber-400 break-all">
+              <p data-testid="filter-asv-unknown" className="mt-1 text-xs text-warn break-all">
                 not in this network, ignored: {p.unknownAsvIds.join(", ")}
               </p>
             )}
           </div>
         )}
 
-        {sizeOpen && (
-          <div className="rounded border border-slate-700 bg-slate-950/40 px-2 py-1.5 mb-2"
-            data-testid="filter-size-section">
-            <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">
-              Node size (total read count)
+        {presenceOpen && (
+          <div className={BOX} data-testid="filter-presence-section">
+            <SectionHeading className="mb-1">Present in at least … samples</SectionHeading>
+            <div className="flex items-center gap-2 text-xs text-fg">
+              <input data-testid="filter-presence-n" type="range" min={1}
+                max={Math.max(1, p.nSamples)} step={1}
+                aria-label="minimum number of samples"
+                aria-valuetext={`${filters.presence ?? PRESENCE_START} samples`}
+                value={filters.presence ?? Math.min(PRESENCE_START, Math.max(1, p.nSamples))}
+                onChange={(e) => p.onFilters({ presence: Number(e.target.value) })}
+                className="flex-1" />
+              <span className="tabular-nums w-16 text-right" data-testid="filter-presence-value">
+                {filters.presence != null ? `≥ ${filters.presence} of ${p.nSamples}` : "off"}
+              </span>
             </div>
-            <div className="flex items-center gap-2 text-xs text-slate-300">
-              <select data-testid="filter-size-dir" value={filters.size?.dir ?? "top"}
+          </div>
+        )}
+
+        {sizeOpen && (
+          <div className={BOX} data-testid="filter-size-section">
+            <SectionHeading className="mb-1">Node size (total read count)</SectionHeading>
+            <div className="flex items-center gap-2 text-xs text-fg">
+              <select data-testid="filter-size-dir" aria-label="node size direction"
+                value={filters.size?.dir ?? "top"}
                 onChange={(e) => p.onFilters({ size: { dir: e.target.value as "top" | "bottom",
                                                        pct: filters.size?.pct ?? 20 } })}
-                className="px-1 py-0.5 rounded bg-slate-800 border border-slate-600 text-xs text-slate-100">
+                className="px-1 py-1 rounded bg-control border border-line-strong text-xs text-fg">
                 <option value="top">largest</option>
                 <option value="bottom">smallest</option>
               </select>
               <input data-testid="filter-size-pct" type="range" min={5} max={100} step={5}
+                aria-label="node size percent" aria-valuetext={`${filters.size?.pct ?? 20} %`}
                 value={filters.size?.pct ?? 20}
                 onChange={(e) => p.onFilters({ size: { dir: filters.size?.dir ?? "top",
                                                        pct: Number(e.target.value) } })}
@@ -664,20 +807,19 @@ export default function NetworkSidebar(p: SidebarProps) {
         )}
 
         {strengthOpen && (
-          <div className="rounded border border-slate-700 bg-slate-950/40 px-2 py-1.5 mb-2"
-            data-testid="filter-strength-section">
-            <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">
-              Link strength (|r| of the co-occurrence)
-            </div>
-            <div className="flex items-center gap-2 text-xs text-slate-300">
-              <select data-testid="filter-strength-dir" value={filters.strength?.dir ?? "top"}
+          <div className={BOX} data-testid="filter-strength-section">
+            <SectionHeading className="mb-1">Link strength (r of the co-occurrence)</SectionHeading>
+            <div className="flex items-center gap-2 text-xs text-fg">
+              <select data-testid="filter-strength-dir" aria-label="link strength direction"
+                value={filters.strength?.dir ?? "top"}
                 onChange={(e) => p.onFilters({ strength: { dir: e.target.value as "top" | "bottom",
                                                            pct: filters.strength?.pct ?? 20 } })}
-                className="px-1 py-0.5 rounded bg-slate-800 border border-slate-600 text-xs text-slate-100">
+                className="px-1 py-1 rounded bg-control border border-line-strong text-xs text-fg">
                 <option value="top">strongest</option>
                 <option value="bottom">weakest</option>
               </select>
               <input data-testid="filter-strength-pct" type="range" min={5} max={100} step={5}
+                aria-label="link strength percent" aria-valuetext={`${filters.strength?.pct ?? 20} %`}
                 value={filters.strength?.pct ?? 20}
                 onChange={(e) => p.onFilters({ strength: { dir: filters.strength?.dir ?? "top",
                                                            pct: Number(e.target.value) } })}
@@ -689,51 +831,56 @@ export default function NetworkSidebar(p: SidebarProps) {
           </div>
         )}
 
-        <div className="relative">
-          <button data-testid="filter-add" onClick={() => setAddOpen((v) => !v)}
-            className="text-xs px-2 py-1 rounded border border-slate-600 text-slate-300 hover:border-slate-400">
+        <div className="relative" ref={addRef}>
+          <Button data-testid="filter-add" aria-expanded={addOpen} onClick={() => setAddOpen((v) => !v)}>
             + add filter
-          </button>
+          </Button>
           {addOpen && (
-            <div data-testid="filter-add-menu"
-              className="absolute z-20 mt-1 w-56 rounded border border-slate-600 bg-slate-900 shadow-xl py-1 text-sm">
+            <div data-testid="filter-add-menu" data-popup=""
+              className="absolute z-20 mt-1 w-56 rounded-md border border-line bg-overlay shadow-xl py-1 text-sm">
               <button data-testid="filter-add-cross"
                 onClick={() => { p.onFilters({ crossOnly: !filters.crossOnly }); setAddOpen(false); }}
-                className="w-full text-left px-2 py-1 hover:bg-slate-800 text-slate-200">
+                className="w-full text-left px-2 py-1 hover:bg-control text-fg">
                 {filters.crossOnly ? "✓ " : ""}only module-crossing links
               </button>
-              <button data-testid="filter-add-hubs"
-                onClick={() => { p.onFilters({ hubsOnly: !filters.hubsOnly }); setAddOpen(false); }}
-                className="w-full text-left px-2 py-1 hover:bg-slate-800 text-slate-200">
-                {filters.hubsOnly ? "✓ " : ""}only hubs
-                {hub && <span className="text-slate-500"> ({hub.measure_label}, μ+{hub.k}σ)</span>}
+              <button data-testid="filter-add-c2" disabled={!c2}
+                onClick={() => { p.onFilters({ c2Only: !filters.c2Only }); setAddOpen(false); }}
+                title={c2?.mark}
+                className="w-full text-left px-2 py-1 hover:bg-control text-fg disabled:text-fg-muted">
+                {filters.c2Only ? "✓ " : ""}only criterion 2
+                {c2 && <span className="text-fg-muted"> ({c2.n_pass} of {c2.n_testable})</span>}
               </button>
               <button data-testid="filter-add-function"
                 onClick={() => { setFunctionOpen(true); setAddOpen(false); }}
-                className="w-full text-left px-2 py-1 hover:bg-slate-800 text-slate-200">
+                className="w-full text-left px-2 py-1 hover:bg-control text-fg">
                 function …
               </button>
               <button data-testid="filter-add-taxon"
                 onClick={() => { setTaxonOpen(true); setAddOpen(false); }}
-                className="w-full text-left px-2 py-1 hover:bg-slate-800 text-slate-200">
+                className="w-full text-left px-2 py-1 hover:bg-control text-fg">
                 taxon …
               </button>
               <button data-testid="filter-add-asvs"
                 onClick={() => { setAsvOpen(true); setAddOpen(false); }}
-                className="w-full text-left px-2 py-1 hover:bg-slate-800 text-slate-200">
+                className="w-full text-left px-2 py-1 hover:bg-control text-fg">
                 ASV selection …
+              </button>
+              <button data-testid="filter-add-presence"
+                onClick={() => { setPresenceOpen(true); setAddOpen(false); }}
+                className="w-full text-left px-2 py-1 hover:bg-control text-fg">
+                present in ≥ N samples …
               </button>
               <button data-testid="filter-add-size" disabled={p.sizeAbsent}
                 title={p.sizeAbsent
                   ? "not applicable: this dataset carries no read counts (transformed values)"
                   : undefined}
                 onClick={() => { setSizeOpen(true); setAddOpen(false); }}
-                className="w-full text-left px-2 py-1 hover:bg-slate-800 text-slate-200 disabled:opacity-40">
+                className="w-full text-left px-2 py-1 hover:bg-control text-fg disabled:text-fg-disabled disabled:hover:bg-transparent">
                 node size …
               </button>
               <button data-testid="filter-add-strength"
                 onClick={() => { setStrengthOpen(true); setAddOpen(false); }}
-                className="w-full text-left px-2 py-1 hover:bg-slate-800 text-slate-200">
+                className="w-full text-left px-2 py-1 hover:bg-control text-fg">
                 link strength …
               </button>
             </div>
@@ -742,75 +889,91 @@ export default function NetworkSidebar(p: SidebarProps) {
       </div>
 
       <div className="mt-auto space-y-2">
-        <div className="text-[10px] leading-snug">
+        <div className="text-2xs leading-snug">
           <div className="flex items-center gap-1">
             <button data-testid="legend-toggle" onClick={() => setLegendOpen((v) => !v)}
               aria-expanded={legendOpen}
-              className={`uppercase tracking-wide ${legendOpen
-                ? "text-slate-300" : "text-slate-500 hover:text-slate-300"}`}>
-              legend
+              className={`rounded-md px-1 text-xs font-semibold ${legendOpen
+                ? "text-fg" : "text-fg-muted hover:text-fg hover:bg-control"}`}>
+              {legendOpen ? "▾" : "▸"} Legend
             </button>
-
           </div>
           {legendOpen && (
-            <div data-testid="network-legend" className="mt-0.5">
+            <div data-testid="network-legend" className="mt-1">
               {p.legend.map((row) => (
                 <div key={row.key} data-testid={LEGEND_TESTID[row.key] ?? `legend-${row.key}`}
-                  className={`flex items-baseline gap-1.5 py-px ${row.dim ? "opacity-40" : ""}`}>
-                  <span className="w-3 shrink-0 text-slate-400">{row.icon}</span>
-                  <span className={`w-[3.2rem] shrink-0 text-slate-400${row.struck ? " line-through" : ""}`}>
+                  data-dim={row.dim ? "1" : "0"}
+                  className="flex items-baseline gap-2 py-px">
+                  <span className={`w-3 shrink-0 text-fg-muted${row.dim ? " opacity-50" : ""}`} aria-hidden
+                    style={row.color ? { color: row.color } : undefined}>{row.icon}</span>
+                  <span className={`w-[3.2rem] shrink-0 text-fg-muted${row.struck ? " line-through" : ""}`}>
                     {row.term}
                   </span>
-                  <span className={`text-slate-300${row.struck ? " line-through" : ""}`}>{row.desc}</span>
+                  <span className={`${row.dim ? "text-fg-muted italic" : "text-fg"}${row.struck ? " line-through" : ""}`}>{row.desc}</span>
                 </div>
               ))}
+              {c2 && !p.taxaMode && c2.n_network > 0 && (
+                <p data-testid="c2-selection" className="mt-1 text-fg-muted leading-snug">{c2.selection_note}</p>
+              )}
               {p.widthText && (
-                <p data-testid="edge-width-text" className="mt-0.5 text-slate-500">{p.widthText}</p>
+                <p data-testid="edge-width-text" className="mt-1 text-fg-muted">{p.widthText}</p>
               )}
               {p.sizeAbsent && (
-                <p data-testid="size-absent-reason" className="mt-0.5 text-slate-500 leading-snug">
+                <p data-testid="size-absent-reason" className="mt-1 text-fg-muted leading-snug">
                   Size not computed for this dataset: its values are a transform of unknown form.
                 </p>
               )}
-              <div data-testid="legend-thresholds" className="mt-0.5 text-slate-500 tabular-nums">
+              <div data-testid="legend-thresholds" className="mt-1 text-fg-muted tabular-nums">
                 {p.thresholds}
               </div>
               {p.colorMode === "function" && (
-                <div data-testid="legend-function" className="mt-0.5">
+                <div data-testid="legend-function" className="mt-1">
                   {p.functionClasses.map((c) => (
                     <div key={c.label} data-testid="legend-function-class" data-label={c.label}
-                      className="flex items-center gap-1.5 py-px">
+                      className="flex items-center gap-2 py-px">
                       <span className="inline-block w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: c.color }} />
-                      <span className="text-slate-300">{c.label}</span>
-                      <span className="text-slate-500 tabular-nums">{c.n}</span>
+                      <span className="text-fg">{c.label}</span>
+                      <span className="text-fg-muted tabular-nums">{c.n}</span>
                     </div>
                   ))}
-                  <div className="flex items-center gap-1.5 py-px">
-                    <span className="inline-block w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: "#94a3b8" }} />
-                    <span className="text-slate-500">not annotated</span>
+                  <div className="flex items-center gap-2 py-px">
+                    <span className="inline-block w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: FUNCTION_NONE }} />
+                    <span className="text-fg-muted">{p.taxaMode ? "not annotated or mixed classes" : "not annotated"}</span>
                   </div>
                 </div>
               )}
             </div>
           )}
-          <div className="mt-1 text-slate-400 tabular-nums" data-testid="legend-counts">
+          {(p.countsState ?? "ready") !== "ready" ? (
+            <div className="mt-1 text-fg-muted tabular-nums" data-testid="legend-counts">
+              <span data-testid="counts-pending">
+                {p.countsState === "error" ? "— (network not loaded)" : "loading …"}
+              </span>
+            </div>
+          ) : (
+          <div className="mt-1 text-fg-muted tabular-nums" data-testid="legend-counts">
             <span data-testid="node-count">{p.counts.nodes}</span>{" "}
             {p.taxaMode ? "taxa" : "ASVs"} ·{" "}
             <span data-testid="edge-count">{p.counts.edges}</span> edges ·{" "}
-            <span data-testid="ccm-count" className="text-violet-300">{p.counts.ccm}</span> with CCM ·{" "}
+            <span data-testid="ccm-count" className="text-accent">{p.counts.ccm}</span> with CCM ·{" "}
             {p.counts.rejected != null && net?.layers?.ccm_tested_recorded && (
               <><span data-testid="rejected-count">{p.counts.rejected}</span> with a rejected direction ·{" "}</>
             )}
-            <span data-testid="cross-count" className="text-amber-400">{p.counts.cross}</span> crossing modules
-            {hub && !p.taxaMode && <> · <span data-testid="hub-count">{hub.n_marked}</span> hub{hub.n_marked === 1 ? "" : "s"}</>}
+            <span data-testid="cross-count" className="text-warn">{p.counts.cross}</span> crossing modules
+            {c2 && !p.taxaMode && (() => {
+              const n = p.counts.c2 ?? c2.n_pass;
+              return <> · <span data-testid="c2-count">{n}</span> meet criterion 2
+                {n !== c2.n_pass && <span data-testid="c2-count-total"> (of {c2.n_pass} in the network)</span>}</>;
+            })()}
           </div>
+          )}
         </div>
 
-        <div className="text-[10px] text-slate-500" data-testid="position-note">
+        <div className="text-2xs text-fg-muted" data-testid="position-note">
           Node position: layout, not a measurement
         </div>
 
-        <ProvenanceFooter datasetId={dataset.dataset_id} />
+        <ProvenanceFooter datasetId={dataset.dataset_id} refreshKey={p.reloadKey} />
       </div>
     </aside>
   );

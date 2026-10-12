@@ -81,5 +81,21 @@ for _name, _fn in _EXPOSED:
                  description=_DESCRIPTIONS[_name], annotations=_ANNOTATIONS[_name])
 
 
+
+def _schema_drift() -> list[str]:
+    mcp = {t.name: t.parameters for t in app._tool_manager.list_tools()}
+    abweichend = []
+    for spec in registry.TOOL_SPECS:
+        eigenschaften = (mcp.get(spec["name"]) or {}).get("properties", {})
+        for feld, regel in spec["parameters"].get("properties", {}).items():
+            for schluessel in ("enum", "minimum", "maximum"):
+                if schluessel in regel and eigenschaften.get(feld, {}).get(schluessel) != regel[schluessel]:
+                    abweichend.append(f"{spec['name']}.{feld}.{schluessel}")
+    return abweichend
+
+
+assert not _schema_drift(), f"MCP schema and registry disagree: {_schema_drift()}"
+
+
 if __name__ == "__main__":
     asyncio.run(app.run_stdio_async())

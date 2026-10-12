@@ -7,16 +7,19 @@ import shutil
 import statistics
 import sys
 import tempfile
-from contextlib import asynccontextmanager
+import time
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import (Depends, FastAPI, File, Form, Header, HTTPException, Query, Request,
                      Response, UploadFile)
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
-from neo4j import GraphDatabase
-from pydantic import BaseModel
+from neo4j import GraphDatabase, unit_of_work
+from neo4j.exceptions import Neo4jError
+from pydantic import BaseModel, Field, field_validator
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "manta_mcp"))
 
@@ -28,12 +31,15 @@ import audit
 import auth
 import import_job
 import mailer
+import otter_estimate
 import settings
 import semantics
+import transcripts
 
 NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "")
+QUERY_TIMEOUT_S = float(os.environ.get("MANTA_QUERY_TIMEOUT", "120"))
 
 STATION_COORDS = {"F4": [6.9648, 79.0118], "MVCO": [-70.5667, 41.325]}
 
@@ -74,12 +80,22 @@ PRODUCTION_DEFAULTS = semantics.PRODUCTION_DEFAULTS
 THRESHOLD_KEYS = semantics.THRESHOLD_KEYS
 
 
+SAMPLE_ORDER = "date, same_day_index, ordinal_index, sample_id"
+
+
 def _q(query, **params):
+    @unit_of_work(timeout=QUERY_TIMEOUT_S)
     def _read_rows(tx):
         return [r.data() for r in tx.run(query, params)]
 
-    with driver().session(default_access_mode="READ") as s:
-        return s.execute_read(_read_rows)
+    try:
+        with driver().session(default_access_mode="READ") as s:
+            return s.execute_read(_read_rows)
+    except Neo4jError as e:
+        if "TransactionTimedOut" in (e.code or ""):
+            raise HTTPException(503, f"The database query ran longer than {QUERY_TIMEOUT_S:g} s "
+                                     f"and was stopped by the database.") from e
+        raise
 
 
 def _w(query, **params):
@@ -112,14 +128,16 @@ def visible_dataset(dataset_id: str, user: auth.User | None = Depends(auth.anyon
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(max_length=auth.MAX_USERNAME_LEN)
+    password: str = Field(max_length=auth.MAX_PASSWORD_LEN)
 
 
 @app.post("/auth/login")
 def auth_login(req: LoginRequest, request: Request, response: Response):
     try:
-        token = auth.login(req.username, req.password)
+        token = auth.login(req.username, req.password, ip=_client_ip(request))
+    except auth.TooManyAttempts as e:
+        raise HTTPException(429, str(e)) from e
     except PermissionError as e:
         raise HTTPException(401, str(e)) from e
     auth.set_cookie(response, token, auth.cookie_secure(request))
@@ -159,7 +177,8 @@ class UserPatch(BaseModel):
 @app.get("/admin/users", dependencies=[Depends(auth.admin)])
 def admin_users():
     return {"users": auth.list_users(), "roles": list(auth.ROLES),
-            "visibilities": list(access.VISIBILITIES)}
+            "visibilities": list(access.VISIBILITIES),
+            "min_password_len": auth.MIN_PASSWORD_LEN}
 
 
 @app.post("/admin/users", dependencies=[Depends(auth.admin)])
@@ -178,12 +197,10 @@ def admin_patch_user(username: str, patch: UserPatch, me: auth.User = Depends(au
     if entzug and username == me.username:
         raise HTTPException(400, "You cannot take away your own rights here.")
     try:
-        if patch.password is not None:
-            auth.set_password(username, patch.password)
-        if patch.role is not None:
-            auth.set_role(username, patch.role)
-        if patch.disabled is not None:
-            auth.set_disabled(username, patch.disabled)
+        auth.update_user(username, password=patch.password, role=patch.role,
+                         disabled=patch.disabled)
+    except auth.UnknownUser as e:
+        raise HTTPException(404, str(e)) from e
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     return {"ok": True, "username": username}
@@ -196,9 +213,18 @@ def admin_delete_user(username: str, me: auth.User = Depends(auth.admin)):
         raise HTTPException(400, "You cannot delete your own account here.")
     try:
         auth.delete_user(username)
-    except ValueError as e:
+    except auth.UnknownUser as e:
         raise HTTPException(404, str(e)) from e
-    return {"deleted": username}
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    try:
+        _w("MATCH (s:Star {username:$u}) DELETE s", u=username)
+        _w("MATCH (n:Note {username:$u}) DELETE n", u=username)
+        aufgeraeumt = True
+    except Exception:
+        aufgeraeumt = False
+    audit.note(me.username, "account deleted", username)
+    return {"deleted": username, "stars_and_notes_removed": aufgeraeumt}
 
 
 @app.post("/admin/users/{username}/revoke", dependencies=[Depends(auth.admin)])
@@ -296,6 +322,8 @@ class AgentSettings(BaseModel):
     openai_api_key: str | None = None
     openai_models: str | None = None
     openai_timeout: str | None = None
+    provider_hosts: str | None = None
+    admins_read_transcripts: str | None = None
 
 
 @app.get("/admin/settings/agent", dependencies=[Depends(auth.admin)])
@@ -369,17 +397,9 @@ class RouteList(BaseModel):
     routes: list[dict]
 
 
-PUBLIC_URL = (os.environ.get("MANTA_PUBLIC_URL") or "").strip().rstrip("/")
-
-
 def _public_base(request: Request) -> str:
-    if PUBLIC_URL:
-        return PUBLIC_URL
-    proto = (request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
-             or request.url.scheme)
-    host = (request.headers.get("x-forwarded-host", "").split(",")[0].strip()
-            or request.headers.get("host", "").strip())
-    return f"{proto}://{host}" if host else str(request.base_url).rstrip("/")
+    del request
+    return (settings.get("public_url") or "").strip().rstrip("/")
 
 
 def _client_ip(request: Request) -> str:
@@ -408,8 +428,11 @@ def signup(req: SignupRequest, request: Request):
         raise HTTPException(400, str(e)) from e
 
     empfaenger, herkunft = access_requests.recipients_for(antrag["topic"])
-    betreff, text = access_requests.notification(antrag, _public_base(request))
-    status = mailer.send(betreff, text, empfaenger, reply_to=antrag["email"])
+    try:
+        betreff, text = access_requests.notification(antrag, _public_base(request))
+        status = mailer.send(betreff, text, empfaenger, reply_to=antrag["email"])
+    except Exception as e:
+        status = f"error: {type(e).__name__}: {e}"[:300]
     access_requests.set_mail_result(antrag["id"], status, empfaenger)
     return {"ok": True, "id": antrag["id"], "routed": herkunft}
 
@@ -479,8 +502,10 @@ def set_visibility(dataset_id: str, patch: VisibilityPatch, me: auth.User = Depe
     if v != patch.visibility.strip().lower():
         raise HTTPException(400, f"unknown visibility {patch.visibility!r}, "
                                  f"allowed: {list(access.VISIBILITIES)}")
-    rows = _w("MATCH (d:Dataset {dataset_id:$d}) SET d.visibility=$v "
-              "RETURN d.dataset_id AS dataset_id, d.visibility AS visibility", d=dataset_id, v=v)
+    with _exclusive(dataset_id, "a visibility change"):
+        rows = _w("MATCH (d:Dataset {dataset_id:$d}) SET d.visibility=$v "
+                  "RETURN d.dataset_id AS dataset_id, d.visibility AS visibility",
+                  d=dataset_id, v=v)
     if not rows:
         raise HTTPException(404, f"unknown dataset_id {dataset_id!r}")
     audit.note(me.username, "visibility changed", f"{dataset_id} -> {v}")
@@ -507,15 +532,66 @@ def _require_free_dataset_id(dataset_id: str, replace: bool) -> None:
                                  f"existing dataset first.")
 
 
-def _wipe_for_replace(dataset_id: str, replace: bool) -> None:
-    if replace:
+DATASET_ID_RE = re.compile(r"[a-z0-9_]{3,64}")
+
+
+def _check_new_dataset(dataset_id: str, region: str | None, marker: str | None) -> None:
+    if not DATASET_ID_RE.fullmatch(dataset_id or ""):
+        raise HTTPException(422, "dataset_id: 3 to 64 characters, lower-case letters, digits "
+                                 "and underscore only")
+    region = (region or "").strip()
+    if not region or len(region) > MAX_REGION_CHARS or any(ch < " " for ch in region):
+        raise HTTPException(422, f"region must be 1 to {MAX_REGION_CHARS} characters without "
+                                 f"line breaks")
+    if not (marker or "").strip() or len(marker) > 20 or any(ch < " " for ch in marker):
+        raise HTTPException(422, "marker must be a short name such as 18S or 16S")
+
+
+def _reserve(dataset_id: str, what: str) -> None:
+    try:
+        import_job.reserve(dataset_id, what)
+    except import_job.DatasetBusy as e:
+        raise HTTPException(409, str(e)) from e
+
+
+@contextmanager
+def _exclusive(dataset_id: str, what: str):
+    _reserve(dataset_id, what)
+    try:
+        yield
+    finally:
+        import_job.release(dataset_id)
+
+
+def _replace_hook(dataset_id: str, replace: bool, who: str):
+    if not replace:
+        return None
+
+    def wipe():
+        alt = _q("MATCH (d:Dataset {dataset_id:$d}) RETURN d.visibility AS visibility",
+                 d=dataset_id)
         _w("MATCH (n {dataset_id:$d}) DETACH DELETE n", d=dataset_id)
+        if not alt:
+            return None
+        audit.note(who, "dataset replaced (old data deleted)", dataset_id)
+        sichtbar = alt[0]["visibility"]
+
+        def zurueck():
+            if sichtbar:
+                _w("MATCH (d:Dataset {dataset_id:$d}) SET d.visibility = $v",
+                   d=dataset_id, v=sichtbar)
+        return zurueck
+    return wipe
 
 
 MIN_SAMPLES_FOR_NETWORK = 8
 
 MAX_REGION_CHARS = 200
 MAX_NOTE_CHARS = 20_000
+
+LIMITS = {"ncores_max": 64, "fft_coeffs_max": 64,
+          "num_permutations_max": 10_000, "num_samples_max": 10_000,
+          "note_max_chars": MAX_NOTE_CHARS, "region_max_chars": MAX_REGION_CHARS}
 
 DEFAULT_PRIMERS = {
     "18S": ("GCGGTAATTCCAGCTCCAA", "ACTTTCGTTCTTGATYRR"),
@@ -524,17 +600,31 @@ DEFAULT_PRIMERS = {
 
 
 @app.post("/import", dependencies=[Depends(auth.admin)])
-def start_import(req: ImportRequest, replace: bool = Query(False)):
-    _require_free_dataset_id(req.dataset_id, replace)
-    _require_tools("dada2")
-    if not import_job.ensure_fixture():
-        raise HTTPException(400, import_job.NO_INPUT)
+def start_import(req: ImportRequest, replace: bool = Query(False),
+                 me: auth.User = Depends(auth.admin)):
+    if (req.lat is None) != (req.lon is None):
+        raise HTTPException(400, "lat and lon must be given together")
+    if req.lat is not None and not (-90 <= req.lat <= 90 and -180 <= req.lon <= 180):
+        raise HTTPException(400, f"implausible coordinate lat={req.lat}, lon={req.lon}")
+    _check_new_dataset(req.dataset_id, req.region, req.marker)
+    _reserve(req.dataset_id, "an import request")
     try:
-        job_id = import_job.start_import(req.dataset_id, marker=req.marker,
-                                         region=req.region, station=req.station,
-                                         lat=req.lat, lon=req.lon)
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
+        _require_free_dataset_id(req.dataset_id, replace)
+        _require_tools("dada2")
+        if not import_job.ensure_fixture():
+            raise HTTPException(400, import_job.NO_INPUT)
+        try:
+            job_id = import_job.start_import(
+                req.dataset_id, marker=req.marker, region=req.region, station=req.station,
+                lat=req.lat, lon=req.lon, reserved=True,
+                replace_wipe=_replace_hook(req.dataset_id, replace, me.username))
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+    except BaseException:
+        import_job.release(req.dataset_id)
+        raise
+    audit.note(me.username, "dataset import started",
+               f"{req.dataset_id} (demo fixture){' replace' if replace else ''} job={job_id}")
     return {"job_id": job_id, "dataset_id": req.dataset_id}
 
 
@@ -561,8 +651,34 @@ OTTER_OUT_FALLBACK_TABLES = {
 
 def _upload_rows(tmp: Path, name: str) -> list[list[str]]:
     import csv as _csv
-    with (tmp / name).open(newline="") as fh:
-        return [r for r in _csv.reader(fh, delimiter=";") if r]
+    try:
+        with (tmp / name).open(newline="", encoding="utf-8-sig") as fh:
+            return [r for r in _csv.reader(fh, delimiter=";") if r]
+    except UnicodeDecodeError:
+        raise HTTPException(400, f"{name} is not UTF-8 encoded — save it again as "
+                                 f"'CSV UTF-8' and upload it once more") from None
+
+
+FASTQ_PAIR_RE = re.compile(r"^(.+)_R([12])_001\.fastq\.gz$")
+
+_BAD_UPLOAD_NAMES = {"", ".", ".."}
+
+
+def _upload_name(filename: str | None) -> str | None:
+    name = Path(filename or "").name
+    if name in _BAD_UPLOAD_NAMES or "\\" in name:
+        if not (filename or "").strip():
+            return None
+        raise HTTPException(400, f"unusable file name in the upload: {filename!r}")
+    if name.startswith("."):
+        return None
+    return name
+
+
+def _save_upload(src, ziel: Path) -> None:
+    src.seek(0)
+    with open(ziel, "wb") as out:
+        shutil.copyfileobj(src, out, 1 << 20)
 
 
 def _abundance_labels(tmp: Path) -> list[str]:
@@ -582,6 +698,13 @@ _axis_from_labels = import_job.axis_from_labels
 
 
 def _upload_axis(tmp: Path, labels: list[str]) -> str:
+    unmoeglich = import_job.impossible_dates(labels)
+    echte = sum(1 for s in labels if import_job.calendar_day(s))
+    if unmoeglich and len(unmoeglich) + echte == len(labels):
+        raise HTTPException(400, f"abundance.csv: {unmoeglich[0]!r} looks like a date but is "
+                                 f"not a real calendar day"
+                                 + (f" (and {len(unmoeglich) - 1} more)" if len(unmoeglich) > 1
+                                    else ""))
     return "ordinal" if import_job.synthetic_dates(tmp) else _axis_from_labels(labels)
 
 
@@ -605,9 +728,12 @@ def _validate_otter_out_upload(tmp: Path) -> str:
     manifest_path = tmp / OTTER_OUT_MANIFEST
     if manifest_path.exists():
         try:
-            manifest = _json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest = _json.loads(manifest_path.read_text(encoding="utf-8-sig"))
         except ValueError:
             raise HTTPException(400, f"{OTTER_OUT_MANIFEST} is not valid JSON")
+        if not isinstance(manifest, dict):
+            raise HTTPException(400, f"{manifest_path.name} must be a JSON object that names "
+                                     f"the network tables")
         for kind, fallback in OTTER_OUT_FALLBACK_TABLES.items():
             base = Path(str(manifest.get(kind) or fallback)).name
             if base not in names:
@@ -642,14 +768,18 @@ async def start_import_upload(
     num_permutations: int | None = Form(None),
     num_samples: int | None = Form(None),
     files: list[UploadFile] = File(...),
+    me: auth.User = Depends(auth.admin),
 ):
-    await run_in_threadpool(_require_free_dataset_id, dataset_id, replace)
-    tmp = Path(tempfile.mkdtemp(prefix="manta_upload_"))
-    for f in files:
-        name = Path(f.filename or "").name
-        if name:
-            (tmp / name).write_bytes(await f.read())
+    _check_new_dataset(dataset_id, region, marker)
+    _reserve(dataset_id, "an upload request")
+    tmp: Path | None = None
     try:
+        await run_in_threadpool(_require_free_dataset_id, dataset_id, replace)
+        tmp = Path(tempfile.mkdtemp(prefix="manta_upload_"))
+        for f in files:
+            name = _upload_name(f.filename)
+            if name:
+                await run_in_threadpool(_save_upload, f.file, tmp / name)
         names = {p.name for p in tmp.iterdir()}
         has_otter_out = (OTTER_OUT_MANIFEST in names or
                          any(n in names for n in OTTER_OUT_FALLBACK_TABLES.values()))
@@ -686,27 +816,36 @@ async def start_import_upload(
             if missing:
                 raise HTTPException(400, f"OTTER result recognised, but these files are missing: {sorted(missing)}")
             _require_tools("otterout")
-            time_axis = _validate_otter_out_upload(tmp)
-            _wipe_for_replace(dataset_id, replace)
+            time_axis = await run_in_threadpool(_validate_otter_out_upload, tmp)
             job_id = import_job.start_import(dataset_id, marker=marker, region=region,
                                              otter_out_dir=tmp, station=station, lat=lat, lon=lon,
-                                             time_axis=time_axis)
+                                             time_axis=time_axis, reserved=True,
+                                             replace_wipe=_replace_hook(dataset_id, replace,
+                                                                        me.username))
         elif has_tables:
             _require_tools("tables")
-            time_axis = _validate_tables_upload(tmp)
-            _wipe_for_replace(dataset_id, replace)
+            time_axis = await run_in_threadpool(_validate_tables_upload, tmp)
+            _require_memory(*import_job.abundance_size(tmp), thresholds)
             job_id = import_job.start_import(dataset_id, marker=marker, region=region,
                                              tables_dir=tmp, station=station, lat=lat, lon=lon,
-                                             time_axis=time_axis, thresholds=thresholds or None)
+                                             time_axis=time_axis, thresholds=thresholds or None,
+                                             reserved=True,
+                                             replace_wipe=_replace_hook(dataset_id, replace,
+                                                                        me.username))
         else:
             _require_tools("dada2")
-            _wipe_for_replace(dataset_id, replace)
             job_id = import_job.start_import(dataset_id, marker=marker, region=region, rdata_dir=tmp,
                                              station=station, lat=lat, lon=lon,
-                                             thresholds=thresholds or None)
-    except HTTPException:
-        shutil.rmtree(tmp, ignore_errors=True)
+                                             thresholds=thresholds or None, reserved=True,
+                                             replace_wipe=_replace_hook(dataset_id, replace,
+                                                                        me.username))
+    except BaseException:
+        import_job.release(dataset_id)
+        if tmp is not None:
+            shutil.rmtree(tmp, ignore_errors=True)
         raise
+    audit.note(me.username, "dataset import started",
+               f"{dataset_id} (upload){' replace' if replace else ''} job={job_id}")
     return {"job_id": job_id, "dataset_id": dataset_id}
 
 
@@ -717,7 +856,16 @@ IMPORT_TOOLS_HINT = ("This MANTA instance contains only the interface and the AP
 
 @app.get("/import/tools", dependencies=[Depends(auth.admin)])
 def import_tools():
-    return {**import_job.tool_status(), "hint": IMPORT_TOOLS_HINT}
+    return {**import_job.tool_status(), "hint": IMPORT_TOOLS_HINT, "limits": LIMITS}
+
+
+def _require_memory(n_asv: int, n_samples: int, thresholds: dict | None) -> dict:
+    t = thresholds or {}
+    est = otter_estimate.estimate(n_asv, n_samples, t.get("num_permutations"),
+                                  t.get("num_samples"))
+    if not est["fits"]:
+        raise HTTPException(422, est["refusal"])
+    return est
 
 
 def _require_tools(entry: str) -> None:
@@ -760,7 +908,6 @@ async def start_import_fastq(
     station: str | None = Form(None),
     lat: float | None = Form(None),
     lon: float | None = Form(None),
-    top_n: int = Form(500),
     fwd_primer: str | None = Form(None),
     rev_primer: str | None = Form(None),
     trunc_f: int = Form(260),
@@ -780,39 +927,62 @@ async def start_import_fastq(
     replace: bool = Form(False),
     files: list[UploadFile] = File(...),
     metadata: UploadFile | None = File(None),
+    me: auth.User = Depends(auth.admin),
 ):
-    await run_in_threadpool(_require_free_dataset_id, dataset_id, replace)
-    _require_tools("fastq")
-    pre = await run_in_threadpool(fastq_preflight)
-    if not pre["ok"]:
-        raise HTTPException(503, f"FASTQ import is not possible on this machine — {pre['error']}")
-
-    tmp = Path(tempfile.mkdtemp(prefix="manta_fastq_"))
-    fq = tmp / "fastq"
-    fq.mkdir()
+    _check_new_dataset(dataset_id, region, marker)
+    if not 1 <= ncores <= LIMITS["ncores_max"]:
+        raise HTTPException(422, f"ncores must be between 1 and {LIMITS['ncores_max']}.")
+    if min(trunc_f, trunc_r, min_overlap) < 0 or min(maxee_f, maxee_r) <= 0:
+        raise HTTPException(422, "trunc_f, trunc_r and min_overlap must not be negative, "
+                                 "maxee_f and maxee_r must be greater than 0.")
+    _reserve(dataset_id, "a FASTQ upload request")
+    tmp: Path | None = None
     try:
-        n_r1 = n_r2 = 0
+        await run_in_threadpool(_require_free_dataset_id, dataset_id, replace)
+        _require_tools("fastq")
+        pre = await run_in_threadpool(fastq_preflight)
+        if not pre["ok"]:
+            raise HTTPException(503, f"FASTQ import is not possible on this machine — {pre['error']}")
+
+        tmp = Path(tempfile.mkdtemp(prefix="manta_fastq_"))
+        fq = tmp / "fastq"
+        fq.mkdir()
+        paare: dict[str, set[str]] = {}
+        gewaehlt: list[tuple[UploadFile, str]] = []
         for f in files:
-            name = Path(f.filename or "").name
-            if not name.endswith((".fastq.gz", ".fq.gz")):
+            name = _upload_name(f.filename)
+            if not name:
                 continue
-            (fq / name).write_bytes(await f.read())
-            n_r1 += "_R1_" in name
-            n_r2 += "_R2_" in name
-        if n_r1 == 0 or n_r1 != n_r2:
-            raise HTTPException(400, f"paired _R1_/_R2_ files expected, found: "
-                                     f"{n_r1}x R1 and {n_r2}x R2")
+            m = FASTQ_PAIR_RE.match(name)
+            if m is None:
+                if name.lower().endswith((".gz", ".fastq", ".fq")):
+                    raise HTTPException(400, f"{name!r} does not follow the read-file pattern "
+                                             f"<sample>_R1_001.fastq.gz / "
+                                             f"<sample>_R2_001.fastq.gz that the DADA2 stage "
+                                             f"reads")
+                continue
+            paare.setdefault(m.group(1), set()).add(m.group(2))
+            gewaehlt.append((f, name))
+        ohne_partner = sorted(k for k, v in paare.items() if v != {"1", "2"})
+        if not paare or ohne_partner:
+            raise HTTPException(400, "paired <sample>_R1_001.fastq.gz / _R2_001.fastq.gz files "
+                                     "expected" + (f"; without partner: {ohne_partner[:10]}"
+                                                   if ohne_partner else ""))
+        n_r1 = len(paare)
         if n_r1 < MIN_SAMPLES_FOR_NETWORK:
             raise HTTPException(400, f"{n_r1} samples are not enough for a network. OTTER "
                                      f"correlates time series; at least {MIN_SAMPLES_FOR_NETWORK} "
                                      f"time points are needed, and the default parametrisation "
                                      f"is designed for about 100.")
 
+        for f, name in gewaehlt:
+            await run_in_threadpool(_save_upload, f.file, fq / name)
+
         time_axis = "ordinal"
         meta_path = None
         if metadata is not None and metadata.filename:
             meta_path = tmp / "metadata.csv"
-            meta_path.write_bytes(await metadata.read())
+            await run_in_threadpool(_save_upload, metadata.file, meta_path)
             time_axis = "dates"
 
         if (lat is None) != (lon is None):
@@ -829,7 +999,7 @@ async def start_import_fastq(
             fwd_primer, rev_primer = DEFAULT_PRIMERS[marker]
 
         dada2_env = {
-            "MANTA_TOP_N": str(top_n), "MANTA_NCORES": str(max(1, ncores)),
+            "MANTA_NCORES": str(max(1, ncores)),
             "MANTA_FWD_PRIMER": fwd_primer, "MANTA_REV_PRIMER": rev_primer,
             "MANTA_TRUNC_F": str(trunc_f), "MANTA_TRUNC_R": str(trunc_r),
             "MANTA_MAXEE_F": str(maxee_f), "MANTA_MAXEE_R": str(maxee_r),
@@ -843,14 +1013,19 @@ async def start_import_fastq(
                       "louvain_res": louvain_res, "fft_coeffs": fft_coeffs,
                       "num_permutations": num_permutations, "num_samples": num_samples}
         _validate_thresholds(thresholds)
-        _wipe_for_replace(dataset_id, replace)
         job_id = import_job.start_import(dataset_id, marker=marker, region=region,
                                          station=station, lat=lat, lon=lon,
                                          fastq_dir=fq, dada2_env=dada2_env, time_axis=time_axis,
-                                         thresholds=thresholds)
-    except HTTPException:
-        shutil.rmtree(tmp, ignore_errors=True)
+                                         thresholds=thresholds, reserved=True,
+                                         replace_wipe=_replace_hook(dataset_id, replace,
+                                                                    me.username))
+    except BaseException:
+        import_job.release(dataset_id)
+        if tmp is not None:
+            shutil.rmtree(tmp, ignore_errors=True)
         raise
+    audit.note(me.username, "dataset import started",
+               f"{dataset_id} (FASTQ){' replace' if replace else ''} job={job_id}")
     return {"job_id": job_id, "dataset_id": dataset_id, "n_samples": n_r1,
             "time_axis": time_axis, "taxonomy": bool(taxonomy_ref), "thresholds": thresholds}
 
@@ -873,16 +1048,42 @@ def _validate_thresholds(t: dict) -> None:
         raise HTTPException(422, "con_alpha must be in (0, 1].")
     if not 0.0 <= t["ccmn_tr"] < 1.0:
         raise HTTPException(422, "ccmn_tr must be in [0, 1).")
-    if t["fft_coeffs"] < 2:
-        raise HTTPException(422, "fft_coeffs must be at least 2.")
+    if not 2 <= t["fft_coeffs"] <= LIMITS["fft_coeffs_max"]:
+        raise HTTPException(422, f"fft_coeffs must be between 2 and {LIMITS['fft_coeffs_max']}.")
     if t["num_permutations"] < 1 or t["num_samples"] < 1:
         raise HTTPException(422, "num_permutations and num_samples must be at least 1.")
+    if t["num_permutations"] > LIMITS["num_permutations_max"]:
+        raise HTTPException(422, f"num_permutations is limited to "
+                                 f"{LIMITS['num_permutations_max']}.")
+    if t["num_samples"] > LIMITS["num_samples_max"]:
+        raise HTTPException(422, f"num_samples is limited to {LIMITS['num_samples_max']}.")
+    if not t["louvain_res"] > 0:
+        raise HTTPException(422, "louvain_res must be greater than 0.")
 
 
-@app.post("/datasets/{dataset_id}/recompute", dependencies=[Depends(auth.admin), Depends(visible_dataset)])
-def recompute(dataset_id: str, req: RecomputeRequest):
-    ds = _q("MATCH (d:Dataset {dataset_id:$d}) RETURN d.marker AS marker, d.region AS region, "
-            "d.station AS station, d.lat AS lat, d.lon AS lon, "
+RECOMPUTED_TAG = "_recomputed_"
+
+
+def _recompute_target(dataset_id: str, now: datetime) -> str:
+    tag = now.strftime("%Y%m%d")
+    for n in range(1, 100):
+        suffix = f"{RECOMPUTED_TAG}{tag}" + (f"_{n}" if n > 1 else "")
+        kandidat = dataset_id[:64 - len(suffix)] + suffix
+        if import_job.busy(kandidat) is None and not _q(
+                "MATCH (n {dataset_id:$d}) RETURN 1 AS x LIMIT 1", d=kandidat):
+            return kandidat
+    raise HTTPException(409, f"{dataset_id!r} was recomputed too often today — delete older "
+                             f"recomputations or try again tomorrow.")
+
+
+def _recompute_label(region: str | None, dataset_id: str, now: datetime) -> str:
+    zusatz = f" · recomputed {now.strftime('%Y-%m-%d')}"
+    basis = (region or dataset_id).strip()
+    return basis[:MAX_REGION_CHARS - len(zusatz)] + zusatz
+
+
+def _recompute_source(dataset_id: str) -> dict:
+    ds = _q("MATCH (d:Dataset {dataset_id:$d}) RETURN d.region AS region, "
             "coalesce(d.time_axis,'ordinal') AS time_axis, "
             "COUNT { MATCH (a:ASV {dataset_id: d.dataset_id}) } AS n_asv, "
             "COUNT { MATCH (s:Sample {dataset_id: d.dataset_id}) } AS n_sample", d=dataset_id)
@@ -892,21 +1093,58 @@ def recompute(dataset_id: str, req: RecomputeRequest):
     if d["n_sample"] < MIN_SAMPLES_FOR_NETWORK:
         raise HTTPException(400, f"{d['n_sample']} samples are not enough for a network "
                                  f"(at least {MIN_SAMPLES_FOR_NETWORK}).")
+    return d
 
+
+@app.get("/datasets/{dataset_id}/recompute/estimate",
+         dependencies=[Depends(auth.admin), Depends(visible_dataset)])
+def recompute_estimate(dataset_id: str, num_permutations: int = Query(
+                           PRODUCTION_DEFAULTS["num_permutations"]),
+                       num_samples: int = Query(PRODUCTION_DEFAULTS["num_samples"])):
+    d = _recompute_source(dataset_id)
+    now = datetime.now(timezone.utc)
+    est = otter_estimate.estimate(d["n_asv"], d["n_sample"], num_permutations, num_samples)
+    return {"dataset_id": dataset_id, "new_dataset_id": _recompute_target(dataset_id, now),
+            "new_label": _recompute_label(d["region"], dataset_id, now), "estimate": est}
+
+
+@app.post("/datasets/{dataset_id}/recompute", dependencies=[Depends(auth.admin), Depends(visible_dataset)])
+def recompute(dataset_id: str, req: RecomputeRequest, me: auth.User = Depends(auth.admin)):
     t = req.model_dump()
     run_id = t.pop("run_id") or f"thr_{req.con_tr}_{req.con_alpha}_p{req.num_permutations}"
     _validate_thresholds(t)
-    _require_tools("recompute")
+    _reserve(dataset_id, "a recompute request")
+    neu: str | None = None
+    try:
+        d = _recompute_source(dataset_id)
+        est = _require_memory(d["n_asv"], d["n_sample"], t)
+        _require_tools("recompute")
+        now = datetime.now(timezone.utc)
+        neu = _recompute_target(dataset_id, now)
+        _reserve(neu, "a recompute request")
+        label = _recompute_label(d["region"], dataset_id, now)
+        job_id = import_job.start_recompute(
+            dataset_id, neu, label, run_id=run_id, thresholds=t, time_axis=d["time_axis"],
+            at=now.isoformat(timespec="seconds"), reserved=True, estimate=est,
+            discard_new=_discard_dataset(neu))
+    except BaseException:
+        import_job.release(dataset_id)
+        if neu is not None:
+            import_job.release(neu)
+        raise
+    audit.note(me.username, "network recomputed",
+               f"{dataset_id} -> new dataset {neu} run={run_id} job={job_id}")
+    return {"job_id": job_id, "dataset_id": dataset_id, "new_dataset_id": neu,
+            "new_label": label, "run_id": run_id, "thresholds": t,
+            "n_asv": d["n_asv"], "n_samples": d["n_sample"], "estimate": est,
+            "note": "A new dataset is computed; the original stays as it is — samples, network, "
+                    "module names, notes and stars."}
 
-    job_id = import_job.start_recompute(
-        dataset_id, run_id=run_id, thresholds=t, marker=d["marker"], region=d["region"],
-        station=d["station"], lat=d["lat"], lon=d["lon"], time_axis=d["time_axis"])
-    n = d["n_asv"] or 0
-    minutes = round(n * (n - 1) / 2 * 0.011 / 60)
-    return {"job_id": job_id, "dataset_id": dataset_id, "run_id": run_id, "thresholds": t,
-            "n_asv": n, "estimated_minutes": minutes,
-            "warning": "The current network of this dataset will be replaced. "
-                       "Samples and time series stay unchanged."}
+
+def _discard_dataset(dataset_id: str):
+    def weg():
+        _w("MATCH (n {dataset_id:$d}) DETACH DELETE n", d=dataset_id)
+    return weg
 
 
 @app.get("/imports", dependencies=[Depends(auth.admin)])
@@ -927,27 +1165,49 @@ def import_status(job_id: str):
 @app.delete("/datasets/{dataset_id}",
             dependencies=[Depends(auth.admin), Depends(visible_dataset)])
 def delete_dataset(dataset_id: str, me: auth.User = Depends(auth.admin)):
-    if not _q("MATCH (d:Dataset {dataset_id:$d}) RETURN d.dataset_id AS id", d=dataset_id):
-        raise HTTPException(404, f"unknown dataset_id {dataset_id!r} — nothing deleted")
-    _w("MATCH (n {dataset_id:$d}) DETACH DELETE n", d=dataset_id)
+    with _exclusive(dataset_id, "a delete request"):
+        if not _q("MATCH (d:Dataset {dataset_id:$d}) RETURN d.dataset_id AS id", d=dataset_id):
+            raise HTTPException(404, f"unknown dataset_id {dataset_id!r} — nothing deleted")
+        abgeleitet = [r["id"] for r in _q(
+            "MATCH (n:Dataset) WHERE n.recomputed_from = $d RETURN n.dataset_id AS id "
+            "ORDER BY id", d=dataset_id)]
+        _w("MATCH (n {dataset_id:$d}) DETACH DELETE n", d=dataset_id)
     audit.note(me.username, "dataset deleted", dataset_id)
-    return {"deleted": dataset_id}
+    return {"deleted": dataset_id, "kept_derived": abgeleitet}
+
+
+MAX_QUESTION_CHARS = 4000
+MAX_HISTORY_TURNS = 80
+MAX_HISTORY_CONTENT_CHARS = 20_000
+
+
+class HistoryTurn(BaseModel):
+    role: str
+    content: str = ""
+    tools: list[dict] | None = None
+
+    @field_validator("content")
+    @classmethod
+    def _kappen(cls, v: str) -> str:
+        return v[:MAX_HISTORY_CONTENT_CHARS]
 
 
 class AgentAsk(BaseModel):
-    question: str
+    question: str = Field(max_length=MAX_QUESTION_CHARS)
     dataset_id: str | None = None
     model: str | None = None
     asv_id: str | None = None
     cluster: int | None = None
     provider_url: str | None = None
-    history: list[dict] | None = None
+    history: list[HistoryTurn] | None = Field(None, max_length=MAX_HISTORY_TURNS)
     concept: str | None = None
+    conversation_id: str | None = Field(None, max_length=64)
 
 
 @app.get("/agent/status")
 def agent_status():
-    return agent.available()
+    return {**agent.available(),
+            "limits": {"question_chars": MAX_QUESTION_CHARS, "history_turns": MAX_HISTORY_TURNS}}
 
 
 @app.get("/agent/tools")
@@ -970,11 +1230,18 @@ def agent_tool_run(name: str, req: ToolRun):
             "error": result.get("error") if isinstance(result, dict) else None}
 
 
-@app.post("/agent/ask", dependencies=[Depends(auth.user)])
-def agent_ask(req: AgentAsk,
+@app.post("/agent/ask")
+def agent_ask(req: AgentAsk, me: auth.User = Depends(auth.user),
               provider_key: str | None = Header(default=None, alias="X-MANTA-Provider-Key")):
     if not req.question.strip():
         raise HTTPException(422, "question must not be empty")
+    try:
+        weiter = transcripts.check_conversation(me, req.conversation_id, req.dataset_id)
+    except transcripts.UnknownConversation as e:
+        raise HTTPException(404, "unknown conversation") from e
+    except transcripts.OtherDataset as e:
+        raise HTTPException(409, "This conversation belongs to another dataset. "
+                                 "Start a new conversation here.") from e
     provider = None
     if req.provider_url or provider_key:
         if not req.provider_url:
@@ -993,18 +1260,124 @@ def agent_ask(req: AgentAsk,
         if req.model not in installed:
             raise HTTPException(400, f"Model {req.model!r} is not installed. "
                                      f"Available: {installed}")
+    verlauf = [t.model_dump() for t in req.history] if req.history else None
+    ereignisse: list[dict] = []
+    gefragt = time.time()
+
+    def protokolliere(status: str, ergebnis: dict | None = None, fehler: str = "") -> dict:
+        modell = ((ergebnis or {}).get("model")
+                  or next((e.get("model") for e in ereignisse if e.get("kind") == "prompt"), None)
+                  or req.model or "")
+        if provider is not None:
+            wer = transcripts.provider_info("own", provider.base_url)
+        elif agent.is_remote(modell):
+            wer = transcripts.provider_info("operator", agent.remote_base_url())
+        else:
+            wer = transcripts.provider_info("local", agent.ollama_url())
+        return transcripts.record_turn(
+            user=me, conversation_id=weiter, dataset_id=req.dataset_id,
+            question=req.question.strip(), asked_at=gefragt, finished_at=time.time(),
+            status=status, result=ergebnis, events=ereignisse, error=fehler, provider=wer,
+            model=modell,
+            request={"model_requested": req.model, "dataset_id": req.dataset_id,
+                     "asv_id": req.asv_id, "cluster": req.cluster, "concept": req.concept,
+                     "history_turns": len(verlauf or []), "own_key": provider is not None},
+            extra_secrets=(provider_key,))
+
     try:
-        return agent.run(req.question.strip(), req.dataset_id, model=req.model,
-                         asv_id=req.asv_id, cluster=req.cluster, provider=provider,
-                         history=req.history, concept=req.concept)
+        antwort = agent.run(req.question.strip(), req.dataset_id, model=req.model,
+                            asv_id=req.asv_id, cluster=req.cluster, provider=provider,
+                            history=verlauf, concept=req.concept, trace=ereignisse)
     except agent.AgentError as e:
-        raise HTTPException(503, str(e)) from e
+        kennung = protokolliere("error", fehler=str(e))
+        return _agent_failure(e, kennung)
+    except Exception as e:
+        protokolliere("error", fehler=f"internal error ({type(e).__name__})")
+        raise
+    kennung = protokolliere("step_limit" if antwort.get("truncated") else "answered", antwort)
+    return {**antwort, **kennung, "admins_can_read": transcripts.admins_can_read()}
+
+
+
+@app.get("/agent/conversations")
+def agent_conversations(q: str | None = Query(None, max_length=200),
+                        dataset_id: str | None = Query(None, max_length=200),
+                        me: auth.User = Depends(auth.user)):
+    return {"admins_can_read": transcripts.admins_can_read(),
+            "conversations": transcripts.list_own(me, q=q, dataset_id=dataset_id)}
+
+
+@app.get("/agent/conversations/{conversation_id}")
+def agent_conversation(conversation_id: str, me: auth.User = Depends(auth.user)):
+    gespraech = transcripts.conversation(conversation_id)
+    if gespraech is None or not transcripts.can_read(me, gespraech.pop("owner_row")):
+        raise HTTPException(404, "unknown conversation")
+    gespraech["own"] = gespraech["conversation"]["username"] == me.username
+    return gespraech
+
+
+@app.get("/agent/turns/{turn_id}")
+def agent_turn(turn_id: int, me: auth.User = Depends(auth.user)):
+    zug = transcripts.turn(turn_id)
+    if zug is None or not transcripts.can_read(me, zug.pop("owner_row")):
+        raise HTTPException(404, "unknown turn")
+    return zug["turn"]
+
+
+@app.get("/admin/transcripts", dependencies=[Depends(auth.admin)])
+def admin_transcripts(q: str | None = Query(None, max_length=200),
+                      user: str | None = Query(None, max_length=64)):
+    if not transcripts.admins_can_read():
+        return {"enabled": False, "conversations": []}
+    return {"enabled": True, "conversations": transcripts.list_all(q=q, username=user)}
+
+
+def _agent_failure(e: agent.AgentError, kennung: dict | None = None) -> JSONResponse:
+    return JSONResponse(status_code=503,
+                        content={"detail": str(e), "kind": getattr(e, "kind", "assistant"),
+                                 **(kennung or {})})
 
 
 class DatasetPatch(BaseModel):
     region: str | None = None
     lat: float | None = None
     lon: float | None = None
+    move_station: bool = False
+
+
+def _station_of(dataset_id: str) -> tuple[str | None, list[str]]:
+    rows = _q("MATCH (d:Dataset {dataset_id:$d}) "
+              "OPTIONAL MATCH (:Sample {dataset_id:$d})-[:AT_STATION]->(st:Station) "
+              "RETURN d.station AS name, collect(DISTINCT st.station_id) AS sids", d=dataset_id)
+    if not rows:
+        return None, []
+    sids = sorted(rows[0]["sids"])
+    if len(sids) > 1:
+        raise HTTPException(409, f"the samples of {dataset_id!r} are linked to several stations "
+                                 f"({', '.join(sids)}) — this needs a repair, not an edit")
+    sid = sids[0] if sids else ((rows[0]["name"] or "").strip() or None)
+    if sid is None:
+        return None, []
+    andere = sorted({r["d"] for r in _q(
+        "MATCH (s:Sample)-[:AT_STATION]->(:Station {station_id:$sid}) "
+        "WHERE s.dataset_id <> $d RETURN DISTINCT s.dataset_id AS d", sid=sid, d=dataset_id)})
+    return sid, andere
+
+
+def _move_station(dataset_id: str, sid: str, lat: float, lon: float) -> list[str]:
+    def tx(t):
+        t.run("MERGE (st:Station {station_id:$sid}) ON CREATE SET st.name = $sid "
+              "SET st.location = point({latitude:$lat, longitude:$lon, crs:'WGS-84'})",
+              sid=sid, lat=lat, lon=lon).consume()
+        t.run("MATCH (st:Station {station_id:$sid}) MATCH (s:Sample {dataset_id:$d}) "
+              "MERGE (s)-[:AT_STATION]->(st)", sid=sid, d=dataset_id).consume()
+        return [r["moved"] for r in t.run(
+            "MATCH (s:Sample)-[:AT_STATION]->(:Station {station_id:$sid}) "
+            "WITH DISTINCT s.dataset_id AS ds "
+            "MATCH (d:Dataset {dataset_id:ds}) SET d.lat = $lat, d.lon = $lon, d.station = $sid "
+            "RETURN d.dataset_id AS moved ORDER BY d.dataset_id", sid=sid, lat=lat, lon=lon)]
+    with driver().session(default_access_mode="WRITE") as sess:
+        return sess.execute_write(tx)
 
 
 @app.patch("/datasets/{dataset_id}", dependencies=[Depends(auth.admin), Depends(visible_dataset)])
@@ -1029,17 +1402,33 @@ def rename_dataset(dataset_id: str, patch: DatasetPatch, me: auth.User = Depends
         params["lat"] = round(patch.lat, 4); params["lon"] = round(patch.lon, 4)
     if not felder:
         raise HTTPException(422, "nothing to change: give region or lat/lon")
-    rows = _w(f"MATCH (d:Dataset {{dataset_id:$d}}) SET {', '.join(felder)} "
-              "RETURN d.dataset_id AS dataset_id, d.region AS region, d.lat AS lat, d.lon AS lon",
-              **params)
+    verschoben: list[str] = []
+    with _exclusive(dataset_id, "an edit request"):
+        if patch.lat is not None:
+            sid, andere = _station_of(dataset_id)
+            if sid is not None:
+                if andere and not patch.move_station:
+                    raise HTTPException(409, (
+                        f"station {sid!r} is shared with {len(andere)} other dataset(s) "
+                        f"({', '.join(andere)}); moving it moves them too. Send the same "
+                        f"request with move_station: true to move all of them."))
+                verschoben = _move_station(dataset_id, sid, params["lat"], params["lon"])
+        rows = _w(f"MATCH (d:Dataset {{dataset_id:$d}}) SET {', '.join(felder)} "
+                  "RETURN d.dataset_id AS dataset_id, d.region AS region, d.lat AS lat, "
+                  "d.lon AS lon", **params)
     if not rows:
         raise HTTPException(404, f"unknown dataset_id {dataset_id!r}")
-    audit.note(me.username, "dataset edited", f"{dataset_id}: {', '.join(felder)}")
-    return rows[0]
+    was = " and ".join(n for n, ja in (("region", patch.region is not None),
+                                       ("coordinate", patch.lat is not None)) if ja)
+    andere_mit = [d for d in verschoben if d != dataset_id]
+    audit.note(me.username, "dataset edited", f"{dataset_id}: {was}"
+               + (f"; station moved, {len(andere_mit)} other dataset(s) with it"
+                  if andere_mit else ""))
+    return {**rows[0], "moved_with_station": verschoben}
 
 
 class NotePatch(BaseModel):
-    note: str
+    note: str = Field(max_length=MAX_NOTE_CHARS)
 
 
 def _check_note(text: str) -> None:
@@ -1071,8 +1460,11 @@ def cluster_at_sample(dataset_id: str, louvain_label: int, sample_id: str):
     if not rows:
         if not _q("MATCH (s:Sample {sample_id:$s, dataset_id:$d}) RETURN s", d=dataset_id, s=sample_id):
             raise HTTPException(404, f"sample {sample_id!r} not in dataset_id={dataset_id!r}")
+        if not _q("MATCH (a:ASV {dataset_id:$d}) WHERE a.louvain_label = $l RETURN a.id LIMIT 1",
+                  d=dataset_id, l=louvain_label):
+            raise HTTPException(404, f"no cluster {louvain_label} in dataset_id={dataset_id!r}")
         return {"dataset_id": dataset_id, "louvain_label": louvain_label, "sample": sample_id,
-                "members": [], "cluster_total": 0.0,
+                "members": [], "cluster_total": 0.0, "caveat": _sum_caveat(dataset_id),
                 "note": "No member of this cluster was detected in this sample."}
     total = sum(r["count"] or 0.0 for r in rows)
     st = rows[0]["sample_total"] or 0.0
@@ -1081,6 +1473,7 @@ def cluster_at_sample(dataset_id: str, louvain_label: int, sample_id: str):
         "cluster_total": total,
         "sample_total": st,
         "quantity": semantics.quantity(_q, dataset_id),
+        "caveat": _sum_caveat(dataset_id),
         "members": [{"id": r["id"], "genus": r["genus"], "count": r["count"],
                      "rank": r["rank"],
                      "n_samples_present": r["n_samples_present"],
@@ -1090,6 +1483,10 @@ def cluster_at_sample(dataset_id: str, louvain_label: int, sample_id: str):
                     for r in rows],
         "note": None,
     }
+
+
+def _sum_caveat(dataset_id: str) -> str | None:
+    return None if _value_kind(dataset_id) == "reads" else semantics.CLUSTER_TIMESERIES_CAVEAT
 
 
 class StarPatch(BaseModel):
@@ -1144,34 +1541,61 @@ def starred(dataset_id: str):
               "RETURN a.id AS id, a.genus AS genus, a.louvain_label AS cluster, s.at AS at "
               "ORDER BY coalesce(s.at,'') DESC, a.id", d=dataset_id, u=u)
     cls = _q("MATCH (s:Star {dataset_id:$d, username:$u, kind:'cluster'}) "
+             "WHERE EXISTS { MATCH (c:Cluster {dataset_id:$d}) "
+             "WHERE c.louvain_label = toInteger(s.key) } "
              "RETURN toInteger(s.key) AS louvain_label, s.at AS at "
              "ORDER BY coalesce(s.at,'') DESC, louvain_label", d=dataset_id, u=u)
     return {"dataset_id": dataset_id, "asvs": asvs, "clusters": cls,
             "n": len(asvs) + len(cls), "note": None}
 
 
-@app.put("/datasets/{dataset_id}/asv/{asv_id}/note", dependencies=[Depends(auth.user), Depends(visible_dataset)])
-def set_asv_note(dataset_id: str, asv_id: str, patch: NotePatch):
-    _check_note(patch.note)
-    rows = _w("MATCH (a:ASV {id:$id, dataset_id:$d}) SET a.note = $n, a.note_at = $t "
-              "RETURN a.note AS note, a.note_at AS note_at",
-              d=dataset_id, id=asv_id, n=patch.note.strip(),
-              t=datetime.now(timezone.utc).isoformat(timespec="seconds"))
-    if not rows:
-        raise HTTPException(404, f"ASV {asv_id!r} not in dataset_id={dataset_id!r}")
+
+def _note_for(dataset_id: str, kind: str, key: str, run_id: str | None = None) -> dict:
+    u = access.current().username
+    if u is None:
+        return {"text": None, "at": None}
+    rows = _q("MATCH (n:Note {dataset_id:$d, username:$u, kind:$kind, key:$k}) "
+              "WHERE $run IS NULL OR n.run_id = $run "
+              "RETURN n.text AS text, n.at AS at LIMIT 1",
+              d=dataset_id, u=u, kind=kind, k=key, run=run_id)
+    return rows[0] if rows else {"text": None, "at": None}
+
+
+def _set_note(dataset_id: str, username: str, kind: str, key: str, text: str,
+              run_id: str | None = None) -> dict:
+    text = text.strip()
+    if not text:
+        _w("MATCH (n:Note {dataset_id:$d, username:$u, kind:$kind, key:$k}) DELETE n",
+           d=dataset_id, u=username, kind=kind, k=key)
+        return {"note": None, "note_at": None}
+    t = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    rows = _w("MERGE (n:Note {dataset_id:$d, username:$u, kind:$kind, key:$k}) "
+              "SET n.text = $text, n.at = $t, n.run_id = $run "
+              "RETURN n.text AS note, n.at AS note_at",
+              d=dataset_id, u=username, kind=kind, k=key, text=text, t=t, run=run_id)
     return rows[0]
+
+
+@app.put("/datasets/{dataset_id}/asv/{asv_id}/note", dependencies=[Depends(auth.user), Depends(visible_dataset)])
+def set_asv_note(dataset_id: str, asv_id: str, patch: NotePatch,
+                 u: auth.User = Depends(auth.user)):
+    _check_note(patch.note)
+    if not _q("MATCH (a:ASV {id:$id, dataset_id:$d}) RETURN a.id", d=dataset_id, id=asv_id):
+        raise HTTPException(404, f"ASV {asv_id!r} not in dataset_id={dataset_id!r}")
+    return _set_note(dataset_id, u.username, "asv", asv_id, patch.note)
 
 
 @app.put("/datasets/{dataset_id}/cluster/{louvain_label}/note", dependencies=[Depends(auth.user), Depends(visible_dataset)])
-def set_cluster_note(dataset_id: str, louvain_label: int, patch: NotePatch):
+def set_cluster_note(dataset_id: str, louvain_label: int, patch: NotePatch,
+                     u: auth.User = Depends(auth.user)):
     _check_note(patch.note)
-    rows = _w("MATCH (c:Cluster {louvain_label:$l, dataset_id:$d}) SET c.note = $n, c.note_at = $t "
-              "RETURN c.note AS note, c.note_at AS note_at",
-              d=dataset_id, l=louvain_label, n=patch.note.strip(),
-              t=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    rows = _q("MATCH (c:Cluster {louvain_label:$l, dataset_id:$d}) "
+              "RETURN c.run_id AS run_id ORDER BY c.run_id DESC LIMIT 1",
+              d=dataset_id, l=louvain_label)
     if not rows:
         raise HTTPException(404, f"no cluster {louvain_label} in dataset_id={dataset_id!r}")
-    return rows[0]
+    return _set_note(dataset_id, u.username, "cluster", str(louvain_label), patch.note,
+                     run_id=rows[0]["run_id"])
 
 
 
@@ -1232,6 +1656,82 @@ def taxon(dataset_id: str, asv: str = Query(..., min_length=1)):
     }
 
 
+
+SEARCH_MIN_TAXON_CHARS = 2
+SEARCH_MAX_LIMIT = 100
+SEARCH_MAX_TAXA = 8
+
+
+def _search_row(r: dict) -> dict:
+    path = r["path"]
+    genus = path.get("genus")
+    return {"id": r["id"], "label": semantics.taxon_label(path),
+            "genus": genus if genus not in semantics.TAXONOMY_PLACEHOLDERS else None,
+            "cluster": r["cluster"], "n_samples_present": r["n_samples_present"],
+            "id_match": r["id_hit"], "matched_ranks": r["hit_ranks"]}
+
+
+@app.get("/datasets/{dataset_id}/search", dependencies=[Depends(visible_dataset)])
+def search(dataset_id: str, q: str = Query(..., min_length=1, max_length=200),
+           limit: int = Query(25, ge=1, le=SEARCH_MAX_LIMIT)):
+    text = q.strip()
+    if not text:
+        raise HTTPException(422, "The search text must not be empty.")
+    ql = text.lower()
+    taxon_ok = len(ql) >= SEARCH_MIN_TAXON_CHARS
+    ranks = list(TAXONOMY)
+    path_proj = ", ".join(f".`{r}`" for r in ranks)
+    rows = _q(
+        "MATCH (a:ASV {dataset_id:$d}) "
+        "WITH a, toLower(a.id) CONTAINS $ql AS id_hit, "
+        "     [r IN $ranks WHERE $taxon_ok AND NOT coalesce(a[r], '') IN $ph "
+        "        AND toLower(coalesce(a[r], '')) CONTAINS $ql | r] AS hit_ranks "
+        "WHERE id_hit OR size(hit_ranks) > 0 "
+        f"RETURN a.id AS id, a.louvain_label AS cluster, id_hit, hit_ranks, a {{{path_proj}}} AS path, "
+        "       COUNT { (a)<-[h:HAS_ABUNDANCE]-(:Sample {dataset_id:$d}) WHERE h.count > 0 } "
+        "         AS n_samples_present "
+        "ORDER BY a.id",
+        d=dataset_id, ql=ql, ranks=ranks, taxon_ok=taxon_ok,
+        ph=list(semantics.TAXONOMY_PLACEHOLDERS))
+    n_samples = _q("MATCH (s:Sample {dataset_id:$d}) RETURN count(s) AS n", d=dataset_id)[0]["n"]
+
+    def nach_vorkommen(x: dict):
+        return (-x["n_samples_present"], x["id"])
+
+    im_netz = sorted((r for r in rows if r["cluster"] is not None), key=nach_vorkommen)
+    draussen = sorted((r for r in rows if r["cluster"] is None), key=nach_vorkommen)
+
+    gruppen: dict[tuple[str, str], list[dict]] = {}
+    for r in draussen:
+        for rank in r["hit_ranks"]:
+            gruppen.setdefault((rank, r["path"][rank]), []).append(r)
+    taxa = sorted(gruppen.items(), key=lambda kv: (-len(kv[1]), kv[0][1].lower(), kv[0][0]))
+
+    sentence = None
+    if not rows:
+        sentence = (f"Nothing in this dataset matches “{text}”: no ASV id contains it"
+                    + (", and no taxon name at any rank." if taxon_ok else
+                       f" (taxon names are searched from {SEARCH_MIN_TAXON_CHARS} characters on)."))
+    return {
+        "dataset_id": dataset_id,
+        "query": text,
+        "n_samples": n_samples,
+        "taxon_searched": taxon_ok,
+        "min_taxon_chars": SEARCH_MIN_TAXON_CHARS,
+        "limit": limit,
+        "in_network": {"n_asv": len(im_netz), "asvs": [_search_row(r) for r in im_netz[:limit]]},
+        "outside_network": {
+            "n_asv": len(draussen),
+            "asvs": [_search_row(r) for r in draussen[:limit]],
+            "n_taxa": len(taxa),
+            "taxa": [{"rank": rank, "value": value, "n_asv": len(mitglieder),
+                      "asvs": [_search_row(r) for r in mitglieder[:limit]]}
+                     for (rank, value), mitglieder in taxa[:SEARCH_MAX_TAXA]],
+        },
+        "sentence": sentence,
+    }
+
+
 @app.get("/datasets/{dataset_id}/modules", dependencies=[Depends(visible_dataset)])
 def modules(dataset_id: str):
     return {"modules": list(semantics.module_labels(_q, dataset_id).values())}
@@ -1250,11 +1750,15 @@ def datasets():
                coalesce(d.value_kind, 'unknown') AS value_kind,
                COUNT { MATCH (a:ASV {dataset_id: d.dataset_id}) } AS n_asv,
                COUNT { MATCH (a:ASV {dataset_id: d.dataset_id}) WHERE a.louvain_label IS NOT NULL } AS n_network,
-               COUNT { MATCH (s:Sample {dataset_id: d.dataset_id}) } AS n_sample
+               COUNT { MATCH (s:Sample {dataset_id: d.dataset_id}) } AS n_sample,
+               d.recomputed_from AS recomputed_from, d.recomputed_at AS recomputed_at
         ORDER BY d.dataset_id
         """
     )
+    sichtbar = {r["dataset_id"] for r in rows}
     for r in rows:
+        r["derived"] = _derived(r["dataset_id"], r.pop("recomputed_from"),
+                                r.pop("recomputed_at"), sichtbar)
         station = r.pop("ds_station", None)
         if not station:
             st = _q("MATCH (s:Sample {dataset_id:$d}) WHERE s.station IS NOT NULL "
@@ -1274,6 +1778,16 @@ def datasets():
     return {"datasets": rows}
 
 
+def _derived(dataset_id: str, von: str | None, at: str | None, sichtbar: set[str]) -> dict | None:
+    if not von:
+        return None
+    runs = _q("MATCH (r:Run {dataset_id:$d}) RETURN r.con_tr AS con_tr, r.con_alpha AS con_alpha, "
+              "r.num_permutations AS num_permutations, r.n_asv_in_network_run AS n_asv "
+              "ORDER BY coalesce(r.computed_at, '') DESC, r.run_id LIMIT 1", d=dataset_id)
+    return {"from": von if von in sichtbar else None, "from_available": von in sichtbar,
+            "at": at, "params": runs[0] if runs else None}
+
+
 def _thresholds(dataset_id: str) -> dict:
     return semantics.thresholds(_q, dataset_id)
 
@@ -1285,8 +1799,17 @@ def _network_scope(dataset_id: str) -> dict:
               "ORDER BY coalesce(r.computed_at, '') DESC, r.run_id LIMIT 1", d=dataset_id)
     n_asv = _q("MATCH (a:ASV {dataset_id:$d}) RETURN count(a) AS n", d=dataset_id)
     total = n_asv[0]["n"] if n_asv else 0
+    basis = "run_record"
+    if not rows:
+        fft = _q("MATCH (r:Run {dataset_id:$d}) WHERE r.fft_harmonics IS NOT NULL "
+                 "RETURN r.run_id AS run_id, "
+                 "COUNT { MATCH (a:ASV {dataset_id:$d}) WHERE a.fft_amplitudes IS NOT NULL } "
+                 "AS n_in ORDER BY r.run_id LIMIT 1", d=dataset_id)
+        if fft and fft[0]["n_in"]:
+            rows, basis = fft, "fft_table"
     if not rows:
         return {"recorded": False, "n_in_run": None, "n_dataset": total, "subset": None,
+                "basis": None,
                 "note": ("It is not recorded how many ASVs went into the network run for this "
                          "dataset. So it cannot be said whether an ASV outside the network was "
                          "tested and failed the threshold, or was never part of the run.")}
@@ -1294,7 +1817,7 @@ def _network_scope(dataset_id: str) -> dict:
     subset = n_in < total
     return {
         "recorded": True, "n_in_run": n_in, "n_dataset": total, "subset": subset,
-        "run_id": rows[0]["run_id"],
+        "run_id": rows[0]["run_id"], "basis": basis,
         "note": (f"The network was computed on {n_in} of the {total} ASVs of this dataset. The "
                  f"other {total - n_in} were not part of the run and were therefore never tested "
                  f"for a correlation." if subset else
@@ -1331,33 +1854,67 @@ def _reads_origin(entry_point: str | None, dada2_provenance: str | None) -> str:
     if entry_point in _DELIVERED_ENTRIES:
         return ("All values are whole numbers, consistent with read counts, as delivered in the "
                 "uploaded files; MANTA did not process the reads behind them.")
+    if dada2_provenance == "recorded":
+        return ("All values are whole numbers, consistent with read counts from a DADA2 run "
+                "whose parameters are recorded; how they entered MANTA was not recorded.")
+    if dada2_provenance == "absent":
+        return ("All values are whole numbers, consistent with read counts from a DADA2 run "
+                "whose parameters were not recorded; how they entered MANTA was not recorded.")
     return ("All values are whole numbers, consistent with read counts; their origin was not "
             "recorded.")
+
+
+def _transformed_detail(dataset_id: str) -> str:
+    rows = _q("""
+        MATCH (s:Sample {dataset_id:$d})-[r:HAS_ABUNDANCE]->()
+        WITH s, sum(CASE WHEN r.count <> round(r.count) THEN 1 ELSE 0 END) AS frac_s,
+             count(r) AS n_s
+        RETURN sum(frac_s) AS frac, sum(n_s) AS n,
+               sum(CASE WHEN frac_s > 0 THEN 1 ELSE 0 END) AS samples_frac, count(s) AS samples
+        """, d=dataset_id)
+    r = rows[0] if rows else {}
+    frac, n = r.get("frac") or 0, r.get("n") or 0
+    if n and frac == n:
+        return ("Not one value in this dataset is a whole number, so something converted them "
+                "before we received them. Shares are still comparable within a sample; calling "
+                "them reads would be a guess.")
+    return (f"{frac:,} of {n:,} values (in {r.get('samples_frac') or 0} of "
+            f"{r.get('samples') or 0} samples) are not whole numbers; the rest look like read "
+            f"counts. Something converted at least part of the values before we received them, "
+            f"so the values as a whole cannot be called reads. Shares are still comparable "
+            f"within a sample.")
 
 
 def _capabilities(dataset_id: str) -> dict:
     ds = _q("MATCH (d:Dataset {dataset_id:$d}) RETURN coalesce(d.time_axis,'ordinal') AS time_axis, "
             "coalesce(d.value_kind,'unknown') AS value_kind, "
-            "coalesce(d.env_ignored_columns, []) AS env_ignored, "
+            "d.env_ignored_columns AS env_ignored, "
             "d.entry_point AS entry_point, d.dada2_provenance AS dada2_provenance, "
-            "d.source_doi AS source_doi, d.citation AS citation", d=dataset_id)
+            "d.source_doi AS source_doi, d.citation AS citation, "
+            "d.taxonomy_scope AS taxonomy_scope", d=dataset_id)
     if not ds:
         raise HTTPException(404, f"unknown dataset_id {dataset_id!r}")
     axis, kind = ds[0]["time_axis"], ds[0]["value_kind"]
     doi, cite = ds[0]["source_doi"], ds[0]["citation"]
     env_ignored = ds[0]["env_ignored"]
+    nicht_erfasst = env_ignored is None
 
-    ranks = ", ".join(
-        f"sum(CASE WHEN a.{t} IS NOT NULL AND NOT a.{t} IN $ph THEN 1 ELSE 0 END) AS {t}"
-        for t in TAXONOMY)
     counts = _q(
-        f"""
-        MATCH (a:ASV {{dataset_id:$d}})
+        """
+        MATCH (a:ASV {dataset_id:$d})
         RETURN count(a) AS n_asv,
                sum(CASE WHEN a.sequence IS NOT NULL THEN 1 ELSE 0 END) AS n_sequence,
                sum(CASE WHEN a.louvain_label IS NOT NULL THEN 1 ELSE 0 END) AS n_network,
-               {ranks}
-        """, d=dataset_id, ph=TAXONOMY_PLACEHOLDERS)[0]
+               sum(CASE WHEN a.kingdom IS NULL THEN 1 ELSE 0 END) AS n_no_lineage,
+               sum(CASE WHEN a.kingdom IS NULL AND a.louvain_label IS NULL THEN 1 ELSE 0 END)
+                   AS n_no_lineage_off_network
+        """, d=dataset_id)[0]
+    werte = _q("MATCH (a:ASV {dataset_id:$d}) RETURN "
+               + ", ".join(f"a.{t} AS {t}" for t in TAXONOMY), d=dataset_id)
+    for t in TAXONOMY:
+        vorhanden = [w[t] for w in werte if w[t] is not None and str(w[t]).strip()]
+        counts[t] = sum(1 for v in vorhanden if not semantics.is_taxon_placeholder(v))
+        counts[f"{t}_placeholder"] = len(vorhanden) - counts[t]
 
     env_sel = ", ".join(f"sum(CASE WHEN s.`{p}` IS NOT NULL THEN 1 ELSE 0 END) AS `{p}`"
                         for p in ENV_PROPS)
@@ -1367,6 +1924,10 @@ def _capabilities(dataset_id: str) -> dict:
 
     n_asv = counts["n_asv"] or 0
     deepest = [t for t in TAXONOMY if (counts[t] or 0) > 0]
+    nur_netz = (bool(deepest) and (counts["n_no_lineage"] or 0) > 0
+                and counts["n_no_lineage"] == counts["n_no_lineage_off_network"]
+                and ds[0]["taxonomy_scope"] != "all_asvs")
+    tiefster = deepest[-1] if deepest else None
     items = [
         {
             "key": "time_axis",
@@ -1389,9 +1950,8 @@ def _capabilities(dataset_id: str) -> dict:
                       else "unknown"),
             "detail": (_reads_origin(ds[0]["entry_point"], ds[0]["dada2_provenance"])
                        if kind == "reads" else
-                       "Not one value in this dataset is a whole number, so something converted "
-                       "them before we received them. Shares are still comparable within a "
-                       "sample; calling them reads would be a guess."),
+                       _transformed_detail(dataset_id) if kind == "transformed" else
+                       "The kind of values was not determined at import."),
         },
         {
             "key": "taxonomy",
@@ -1401,11 +1961,21 @@ def _capabilities(dataset_id: str) -> dict:
             "n": counts[deepest[-1]] if deepest else 0,
             "total": n_asv,
             "per_rank": {t: counts[t] or 0 for t in TAXONOMY},
+            "per_rank_placeholder": {t: counts[f"{t}_placeholder"] for t in TAXONOMY},
+            "lineage_network_only": nur_netz,
             "detail": ("No reference database was used in the run for this dataset, so the ASVs "
                        "carry no names — only their sequence identifies them."
                        if not deepest else
-                       "Assigned against a reference database; ranks left empty were not "
-                       "resolvable, which is normal for many marine eukaryotes."),
+                       ("Assigned against a reference database. "
+                        + (f"Of the {tiefster} entries, {counts[f'{tiefster}_placeholder']} are "
+                           f"placeholders (uc, _X, _sp.) rather than names and are not counted. "
+                           if counts[f"{tiefster}_placeholder"] else "")
+                        + (f"{counts['n_no_lineage']} ASVs outside the network carry no lineage "
+                           f"at all: for this dataset the lineage was loaded for the network ASVs "
+                           f"only. That is a gap of the import, not of the reference database."
+                           if nur_netz else
+                           "Ranks left empty were not resolvable, which is normal for many "
+                           "marine eukaryotes."))),
         },
         {
             "key": "sequence",
@@ -1423,10 +1993,10 @@ def _capabilities(dataset_id: str) -> dict:
             "key": "network",
             "label": "CON network",
             "available": (counts["n_network"] or 0) > 0,
-            "value": f"{counts['n_network']} of {n_asv} ASVs",
+            "value": f"{counts['n_network'] or 0} ASVs",
             "n": counts["n_network"] or 0, "total": n_asv,
-            "detail": (_network_scope(dataset_id)["note"]
-                       + " ASVs outside the network keep their time series either way."),
+            "detail": ("ASVs outside the network have no link in it; their time series, taxonomy "
+                       "and detail page are complete either way."),
         },
         {
             "key": "environment",
@@ -1441,12 +2011,19 @@ def _capabilities(dataset_id: str) -> dict:
                         "from the sequences. Samples without a value stay empty — nothing is "
                         "interpolated."
                         if env_have else
-                        "No environmental columns were supplied with this dataset, so there is "
-                        "nothing to plot and nothing to overlay on the diversity curve. The chain "
-                        "carries environmental data end to end; this import brought none.")
+                        ("This dataset carries no environmental values. Whether its import "
+                         "supplied other columns was not recorded (it predates that record), so "
+                         "it cannot be said whether any were left out."
+                         if nicht_erfasst else
+                         "No environmental columns were supplied with this dataset, so there is "
+                         "nothing to plot and nothing to overlay on the diversity curve. The "
+                         "chain carries environmental data end to end; this import brought "
+                         "none."))
                        + (f" Columns supplied but not taken over, because they are not "
                           f"environmental variables MANTA knows: {', '.join(env_ignored)}. "
-                          f"Recognised names are: {', '.join(ENV_PROPS)}." if env_ignored else "")),
+                          f"Recognised names are: {', '.join(ENV_PROPS)}." if env_ignored else "")
+                       + (" Columns supplied but not taken over were not recorded for this "
+                          "import." if nicht_erfasst and env_have else "")),
             "ignored_columns": env_ignored,
         },
         {
@@ -1538,7 +2115,8 @@ def _network_nodes(dataset_id):
         RETURN a.id AS id, {", ".join(f"a.{t} AS {t}" for t in TAXONOMY)},
                a.louvain_label AS cluster, a.louvain_label_color AS color,
                a.read_count_total AS size, a.max_abundance_month AS peak_month,
-               COUNT {{ (a)<-[:HAS_ABUNDANCE]-(:Sample) }} AS n_samples_present,
+               COUNT {{ (a)<-[h:HAS_ABUNDANCE]-(:Sample {{dataset_id:$d}}) WHERE h.count > 0 }}
+                 AS n_samples_present,
                a.trait_function AS trait_function, a.trait_rank AS trait_rank,
                {", ".join(f"a.{c} AS {c}" for c in CENTRALITIES)}
         ORDER BY a.id
@@ -1695,11 +2273,18 @@ def network(dataset_id: str, edge: str = Query("con", pattern="^(con|ccm)$"), ma
         "clusters_are_components": _crossing == 0,
     }
 
+    n_samples = _q("MATCH (s:Sample {dataset_id:$d}) RETURN count(s) AS n", d=dataset_id)
+    thr = _thresholds(dataset_id)
+    c2 = semantics.criterion2(_q, dataset_id)
+    for n in nodes:
+        n["criterion2"] = c2["nodes"].get(n["id"])
     return {"dataset_id": dataset_id, "marker": marker, "edge": edge, "directed": directed,
             "partition": partition,
-            "hubs": semantics.hub_set(_q, dataset_id),
+            "n_samples": n_samples[0]["n"] if n_samples else 0,
+            "criterion2": semantics.criterion2_summary(c2),
             "edge_width_legend": semantics.EDGE_WIDTH_LEGEND,
-            "thresholds": _thresholds(dataset_id), "layers": _layers(dataset_id),
+            "edge_width_scale": semantics.edge_width_scale(thr),
+            "thresholds": thr, "layers": _layers(dataset_id),
             "traits": semantics.trait_run(_q, dataset_id),
             "env_links": _env_links(dataset_id),
             "value_declaration": {
@@ -1707,16 +2292,6 @@ def network(dataset_id: str, edge: str = Query("con", pattern="^(con|ccm)$"), ma
                 "applies_to": "nodes[].size",
             },
             "nodes": nodes, "edges": edges}
-
-
-@app.get("/datasets/{dataset_id}/hub-criterion", dependencies=[Depends(visible_dataset)])
-def hub_criterion(dataset_id: str,
-                  measure: str = Query(semantics.HUB_MEASURE_DEFAULT),
-                  k: float = Query(semantics.HUB_K_DEFAULT)):
-    try:
-        return semantics.hub_set(_q, dataset_id, measure=measure, k=k)
-    except ValueError as e:
-        raise HTTPException(422, str(e)) from e
 
 
 def _asv_brief(dataset_id: str, asv_id: str) -> dict | None:
@@ -1850,6 +2425,7 @@ def edge_detail(dataset_id: str, source: str, target: str,
         "co_detected_in": (both[0]["n"] if both else 0),
         "n_samples": (n_samples[0]["n"] if n_samples else 0),
         "pattern": pattern,
+        "ccm_p_resolution": semantics.ccm_p_resolution(_q, dataset_id),
         "thresholds": _thresholds(dataset_id),
         "source_publication": {"citation": semantics.SOURCE_PUBLICATION,
                                "doi": semantics.SOURCE_PUBLICATION_DOI},
@@ -1881,20 +2457,6 @@ def _series(dataset_id, asv_id):
     return semantics.series(_q, dataset_id, asv_id)
 
 
-def _peak_environment(node: dict, series: list[dict], axis: str, specs: list[dict]) -> dict:
-    items = [{"key": v["key"], "label": v["label"], "unit": v["unit"],
-              "unit_note": v.get("unit_note"),
-              "value": node[f"peak_{v['key']}"]}
-             for v in specs if node.get(f"peak_{v['key']}") is not None]
-    at = max(series, key=lambda r: (r.get("count") or 0.0), default=None) if series else None
-    return {
-        "items": items,
-        "at_date": ((at or {}).get("date") if items and axis == TIME_AXIS_DATES else None),
-        "at_sample": ((at or {}).get("sample") if items else None),
-        "caveat": ("Measured in the single sample where this ASV reached its largest value — a "
-                   "snapshot, not a preferred range and not an optimum. One sample out of "
-                   "all of them, picked because it is the largest."),
-    }
 
 
 @app.get("/datasets/{dataset_id}/asv/{asv_id}", dependencies=[Depends(visible_dataset)])
@@ -1906,8 +2468,7 @@ def asv_detail(dataset_id: str, asv_id: str):
                a.louvain_label AS cluster, a.louvain_label_color AS color,
                a.read_count_total AS read_count_total, a.max_abundance_month AS peak_month,
                a.sequence AS sequence, a.seq_hash AS seq_hash,
-               a.note AS note, a.note_at AS note_at,
-               {", ".join(f"a.peak_{p} AS peak_{p}" for p in ENV_PROPS)},
+               a.fft_amplitudes IS NOT NULL AS has_fft,
                {", ".join(f"a.{c} AS {c}" for c in CENTRALITIES)}
         """,
         d=dataset_id, id=asv_id,
@@ -1957,11 +2518,16 @@ def asv_detail(dataset_id: str, asv_id: str):
     for n in ccm_n:
         raus, rein = n.pop("raus"), n.pop("rein")
         n["direction"] = ("both" if raus and rein else "out" if raus else "in" if rein else None)
+    meine_notiz = _note_for(dataset_id, "asv", asv_id)
 
     return {
         "id": node["id"], "dataset_id": dataset_id,
         "starred": asv_id in _user_star_keys(dataset_id, "asv"),
-        "network_scope": _network_scope(dataset_id),
+        "network_scope": (scope := _network_scope(dataset_id)),
+        "in_network_run": (True if node["cluster"] is not None or node["has_fft"] else
+                           False if scope.get("basis") == "fft_table" else
+                           True if scope.get("recorded") and scope.get("subset") is False else
+                           None),
         "frequency": semantics.frequency(_q, dataset_id, series, with_rank=True),
         "capabilities": _capabilities(dataset_id),
         "lineage": {t: node[t] for t in TAXONOMY},
@@ -1969,12 +2535,9 @@ def asv_detail(dataset_id: str, asv_id: str):
         "sequence": node["sequence"],
         "seq_length": len(node["sequence"]) if node["sequence"] else None,
         "seq_hash": node["seq_hash"],
-        "note": node["note"], "note_at": node["note_at"],
+        "note": meine_notiz["text"], "note_at": meine_notiz["at"],
         "centralities": {c: node[c] for c in CENTRALITIES},
-        "peak_environment": _peak_environment(node, series, axis,
-                                              semantics.environment_vars(_q, dataset_id)),
         "environment_profile": semantics.environment_profile(_q, dataset_id, asv_id),
-        "pool": semantics.pool_share(_q, dataset_id, asv_id),
         "spectrum": semantics.spectrum(_q, dataset_id, asv_id),
         "abundance": {
             "series": series,
@@ -1990,8 +2553,7 @@ def asv_detail(dataset_id: str, asv_id: str):
             **seasonal,
         },
         "neighbors": {"con": con_n, "ccm": ccm_n},
-        "hub_glow": asv_id in set(semantics.hub_set(_q, dataset_id)["ids"]),
-        "hub_tooltip": semantics.HUB_NODE_TOOLTIP,
+        "criterion2": semantics.criterion2_asv(semantics.criterion2(_q, dataset_id), asv_id),
         "funktion": "Not derivable from amplicon data.",
         "trait": semantics.asv_trait(_q, dataset_id, asv_id),
         "trait_run": semantics.trait_run(_q, dataset_id),
@@ -2061,9 +2623,10 @@ def cluster(dataset_id: str, louvain_label: int):
         WITH s, sum(all.count) AS live_total
         WITH s, coalesce(s.analysed_reads_total, live_total) AS sample_total
         OPTIONAL MATCH (s)-[r:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) WHERE a.louvain_label = $l
+        WITH s, sample_total, sum(coalesce(r.count, 0.0)) AS sum_count
         RETURN s.sample_id AS sample, toString(s.date) AS date,
-               sum(coalesce(r.count, 0.0)) AS sum_count, coalesce(sample_total, 0.0) AS sample_total
-        ORDER BY date, sample
+               sum_count, coalesce(sample_total, 0.0) AS sample_total
+        ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id
         """,
         d=dataset_id, l=louvain_label,
     )
@@ -2087,7 +2650,7 @@ def cluster(dataset_id: str, louvain_label: int):
         WHERE (a.louvain_label = $l) <> (b.louvain_label = $l)
         WITH CASE WHEN a.louvain_label = $l THEN b.louvain_label ELSE a.louvain_label END AS partner,
              count(*) AS kanten
-        RETURN partner, kanten ORDER BY kanten DESC, partner LIMIT 10
+        RETURN partner, kanten ORDER BY kanten DESC, partner
         """, d=dataset_id, l=louvain_label)
     gerichtet = {r["partner"]: r for r in _q("""
         MATCH (a:ASV {dataset_id:$d})-[r:INFLUENCES {dataset_id:$d}]->(b:ASV {dataset_id:$d})
@@ -2122,12 +2685,12 @@ def cluster(dataset_id: str, louvain_label: int):
             month_h[str(m["peak_month"])] = month_h.get(str(m["peak_month"]), 0) + 1
 
     axis = _time_axis(dataset_id)
-    hub_ids = set(semantics.hub_set(_q, dataset_id)["ids"])
+    c2 = semantics.criterion2(_q, dataset_id)
     for m in members:
-        m["hub"] = m["id"] in hub_ids
+        m["criterion2"] = c2["nodes"].get(m["id"])
     return {
         "dataset_id": dataset_id, "louvain_label": louvain_label,
-        "hub_tooltip": semantics.HUB_NODE_TOOLTIP,
+        "criterion2": semantics.criterion2_module(c2, louvain_label),
         "starred": str(louvain_label) in _user_star_keys(dataset_id, "cluster"),
         "frequency": semantics.frequency(_q, dataset_id, collective, with_rank=False),
         "environment_profile": semantics.cluster_environment_profile(_q, dataset_id, louvain_label),
@@ -2145,13 +2708,21 @@ def cluster(dataset_id: str, louvain_label: int):
         "source_publication": {"citation": semantics.SOURCE_PUBLICATION,
                                "doi": semantics.SOURCE_PUBLICATION_DOI},
         "seasonal": _seasonal_stats(collective, "share") if axis == TIME_AXIS_DATES else None,
-        "note": (_q("MATCH (c:Cluster {louvain_label:$l, dataset_id:$d}) "
-                    "RETURN c.note AS n, c.note_at AS t, c.run_id AS run_id "
-                    "ORDER BY c.run_id DESC LIMIT 1",
-                    d=dataset_id, l=louvain_label) or [{"n": None, "t": None, "run_id": None}])[0],
+        "note": _cluster_note(dataset_id, louvain_label),
         "cohesion": cohesion,
         "bridge_partners": partners,
     }
+
+
+def _cluster_note(dataset_id: str, louvain_label: int) -> dict:
+    lauf = _q("MATCH (c:Cluster {louvain_label:$l, dataset_id:$d}) "
+              "RETURN c.run_id AS run_id ORDER BY c.run_id DESC LIMIT 1",
+              d=dataset_id, l=louvain_label)
+    run_id = lauf[0]["run_id"] if lauf else None
+    if run_id is None:
+        return {"n": None, "t": None, "run_id": None}
+    n = _note_for(dataset_id, "cluster", str(louvain_label), run_id=run_id)
+    return {"n": n["text"], "t": n["at"], "run_id": run_id}
 
 
 def _ela_single_linkage(states, tippings):
@@ -2237,7 +2808,7 @@ def ela(dataset_id: str):
         "MATCH (x:Sample {dataset_id:$d})-[r:HAS_ELA_ENERGY]->"
         "(:ElaRun {dataset_id:$d, ela_run_id:$run}) "
         "RETURN x.sample_id AS sample, toString(x.date) AS date, r.energy AS energy, "
-        "r.basin AS basin ORDER BY x.date, sample",
+        "r.basin AS basin ORDER BY x.date, x.same_day_index, x.ordinal_index, x.sample_id",
         d=dataset_id, run=ela_run)
     observed = {
         "samples": observed_samples,
@@ -2260,12 +2831,12 @@ def ela(dataset_id: str):
         "value_declaration": {
             **semantics.value_declaration(_q, dataset_id,
                 f"presence/absence per sample (relative value >= {r0['ath']}), "
-                f"pairwise maximum-entropy model over {r0['n_species_model']} model taxa"),
+                f"pairwise maximum-entropy model over {r0['n_species_model']} ASVs"),
             "applies_to": "states[].energy, states[].barrier, tipping_points[].energy, "
                           "observed.samples[].energy and disconnectivity merge energies",
         },
         "caveats": [
-            "The model sees only the binarised co-occurrence of the model taxa — no "
+            "The model sees only the binarised co-occurrence of its ASVs — no "
             "abundance heights, no time order, no environmental covariates (base model).",
             "recurrence is the share of bootstrap refits reproducing a state; it measures "
             "fitting uncertainty, not sampling uncertainty.",
@@ -2275,8 +2846,8 @@ def ela(dataset_id: str):
             "the passes listed above (single linkage over pass energies) — no new "
             "measurement enters the figure.",
             "Observed-community energies are model evaluations, not measurements — lower "
-            "means more stable IN THE FITTED MODEL; a state's cluster label names the "
-            "majority Louvain cluster of its active taxa, and mixed states stay visible "
+            "means more stable IN THE FITTED MODEL; a state's module label names the "
+            "majority module of its active ASVs, and mixed states stay visible "
             "as mixed.",
         ],
         "absent_reason": None,
@@ -2351,7 +2922,7 @@ def wheel(dataset_id: str, year: str | None = Query(None)):
         WITH s, coalesce(sum(all.count), 0.0) AS live_total
         RETURN s.sample_id AS sample, toString(s.date) AS date,
                coalesce(s.analysed_reads_total, live_total) AS total
-        ORDER BY date, sample
+        ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id
         """, d=dataset_id)
     if year is not None:
         samples = [s for s in samples if str(s["date"]).startswith(year)]
@@ -2383,6 +2954,8 @@ def wheel(dataset_id: str, year: str | None = Query(None)):
             "louvain_label": l, "n_members": n_members.get(l, 0),
             "window": act["window"],
             "window_months": [month_no[m] for m in act["window"]],
+            "windows": act["windows"],
+            "windows_months": [[month_no[m] for m in r] for r in act["windows"]],
             "peak": act["peak"],
             "peak_month": month_no.get(act["peak"]),
             "by_month": [{"month": c["month"], "mean": c["mean"], "n": c["n"]} for c in climo],
@@ -2394,7 +2967,7 @@ def wheel(dataset_id: str, year: str | None = Query(None)):
     env_rows = _q(
         "MATCH (s:Sample {dataset_id:$d}) RETURN toString(s.date) AS date, "
         + ", ".join(f"s.{v['key']} AS {v['key']}" for v in semantics.ENVIRONMENT_VARS)
-        + " ORDER BY date, s.sample_id", d=dataset_id)
+        + " ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id", d=dataset_id)
     if year is not None:
         env_rows = [r for r in env_rows if str(r["date"]).startswith(year)]
     env_vars, env_monthly = [], {}

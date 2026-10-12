@@ -44,7 +44,7 @@ def main() -> int:
     samples = q(
         f"MATCH (s:Sample {{dataset_id:$dataset}}) "
         f"RETURN s.sample_id AS sample, toString(s.date) AS date, {env_props} "
-        f"ORDER BY date, sample"
+        f"ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id"
     )
     if level == "asv":
         asvs = [r["asv"] for r in q(
@@ -94,7 +94,7 @@ def main() -> int:
             "source": ("neo4j HAS_ABUNDANCE.count, missing cells = 0" if level == "asv"
                        else f"neo4j sum(HAS_ABUNDANCE.count) per Louvain cluster — only the "
                             f"{n_members} network ASVs with MEMBER_OF, not the whole dataset"),
-            "order": "samples by (date, sample_id), columns by id",
+            "order": "samples by (date, same_day_index, ordinal_index, sample_id), columns by id",
         },
     }
     suffix = ".input.json" if level == "asv" else ".cluster.input.json"

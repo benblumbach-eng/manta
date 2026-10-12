@@ -15,6 +15,8 @@ MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", 
 
 Runner = Callable[..., list[dict]]
 
+SAMPLE_ORDER_BY = "ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id"
+
 SOURCE_PUBLICATION = "Oldenburg et al. 2024, Beyond blooms, Commun Earth Environ 5:643"
 SOURCE_PUBLICATION_DOI = "10.1038/s43247-024-01782-0"
 
@@ -156,7 +158,7 @@ def series(q: Runner, dataset_id: str, asv_id: str) -> list[dict]:
         RETURN s.sample_id AS sample, toString(s.date) AS date, own_count AS count,
                coalesce(s.analysed_reads_total, live_total) AS sample_total,
                n_present AS n_present, n_greater AS n_greater
-        ORDER BY date, sample
+        ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id
         """,
         d=dataset_id, id=asv_id,
     )
@@ -240,7 +242,7 @@ def seasonal_stats(rows, key):
 
 def sample_years(q: Runner, dataset_id: str) -> list[dict]:
     rows = q("MATCH (s:Sample {dataset_id:$d}) RETURN toString(s.date) AS date "
-             "ORDER BY date, s.sample_id", d=dataset_id)
+             "ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id", d=dataset_id)
     months: dict[str, set] = {}
     counts: dict[str, int] = {}
     for r in rows:
@@ -264,8 +266,10 @@ PEAK_WINDOW_REFERENCE = (
     "prokaryotic ASVs reached their peak within the same 30-day window each year. Named as the "
     "origin of the question; not a result of this dataset.")
 PEAK_WINDOW_NOTE = (
-    "The TIMING of a maximum survives any order-preserving rescaling of the values; its height does "
-    "not — so this count holds also where the value kind is unknown. Pure counting on stored values.")
+    "The TIMING of a maximum survives any order-preserving rescaling of this series itself; its "
+    "height does not. Where the values were converted upstream by an undocumented method, that "
+    "conversion acts on whole samples and can move the peak to another sample — the window then "
+    "describes the converted values, which cannot be checked here. Pure counting on stored values.")
 
 
 _MONTH_DAYS = (31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
@@ -406,9 +410,9 @@ def frequency(q: Runner, dataset_id: str, rows: list[dict], *, with_rank: bool =
 
     def _where(row):
         if row is None:
-            return {"date": None, "index": None}
+            return {"date": None, "index": None, "sample": None}
         return {"date": row.get("date") if axis == TIME_AXIS_DATES else None,
-                "index": order.get(id(row))}
+                "index": order.get(id(row)), "sample": row.get("sample")}
 
     qty = quantity(q, dataset_id)
     out = {
@@ -432,8 +436,7 @@ def frequency(q: Runner, dataset_id: str, rows: list[dict], *, with_rank: bool =
             "rank_pool": n_pool,
         },
         "seasonal": seasonal_stats(rows, "share") if axis == TIME_AXIS_DATES else None,
-        "oscillation": (oscillation([{"date": r.get("date"), "share": r.get("share")} for r in rows],
-                                    int(thresholds(q, dataset_id)["fft_coeffs"]))
+        "oscillation": (share_oscillation(q, dataset_id, rows)
                         if axis == TIME_AXIS_DATES else None),
     }
     if with_rank:
@@ -444,8 +447,10 @@ def frequency(q: Runner, dataset_id: str, rows: list[dict], *, with_rank: bool =
 
 def bray_curtis(x: dict, y: dict) -> "float | None":
     sx, sy = sum(x.values()), sum(y.values())
-    if sx <= 0 or sy <= 0:
+    if sx <= 0 and sy <= 0:
         return None
+    if sx <= 0 or sy <= 0:
+        return 1.0
     px = {k: v / sx for k, v in x.items()}
     py = {k: v / sy for k, v in y.items()}
     return 1.0 - sum(min(v, py.get(k, 0.0)) for k, v in px.items())
@@ -502,10 +507,12 @@ def fourier_pattern(values: list[float], num_coefficients: int) -> list[float]:
 
 
 OSCILLATION_METHOD = (
-    "Peaks per calendar year in MANTA's own reconstruction of the series from OTTER's Fourier "
-    "slice (coefficients 1..fft_coeffs-1 over the whole series, the part CON compared; "
-    "semantics.fourier_pattern) — a local maximum of that curve, assigned to the year of its "
-    "sample. This is NOT Priest et al.'s method: they keep only statistically significant Fourier "
+    "Peaks per calendar year in MANTA's own reconstruction of this series' SHARES (stored value / "
+    "sample total) from the same Fourier slice OTTER uses for co-occurrence (coefficients "
+    "1..fft_coeffs-1 over the whole series; semantics.fourier_pattern) — a local maximum of that "
+    "curve, assigned to the year of its sample. It is applied to the shares, not to the input "
+    "CON correlated (the run's raw or Hellinger-transformed values), so the counts are not what "
+    "CON saw. This is NOT Priest et al.'s method: they keep only statistically significant Fourier "
     "components; OTTER emits no coefficients and MANTA runs no significance test on them. Years "
     "with fewer than six samples are listed but not counted.")
 OSCILLATION_REFERENCE = (
@@ -515,6 +522,11 @@ OSCILLATION_REFERENCE = (
     "the question; the count here follows a different, declared recipe and is not comparable "
     "one-to-one.")
 OSCILLATION_MIN_SAMPLES = 6
+
+
+def share_oscillation(q: Runner, dataset_id: str, rows: list[dict]) -> dict:
+    return oscillation([{"date": r.get("date"), "share": r.get("share")} for r in rows],
+                       int(thresholds(q, dataset_id)["fft_coeffs"]))
 
 
 def oscillation(points: list[dict], fft_coeffs: int) -> dict:
@@ -561,9 +573,10 @@ CLUSTER_TIMESERIES_QUERY = (
     "WITH s, coalesce(s.analysed_reads_total, live_total) AS sample_total "
     "OPTIONAL MATCH (s)-[r:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) WHERE a.louvain_label IS NOT NULL "
     "WITH s, sample_total, a.louvain_label AS l, sum(r.count) AS v "
+    "WITH s, sample_total, collect({label: l, value: v}) AS per_module "
     "RETURN s.sample_id AS sample, toString(s.date) AS date, sample_total AS sample_total, "
-    "collect({label: l, value: v}) AS per_module "
-    "ORDER BY date, sample")
+    "per_module "
+    "ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id")
 CLUSTER_TIMESERIES_METHOD = (
     "Per sample, the sum of the stored values of each module's member ASVs — the same quantity "
     "cluster_at_sample returns for one sample, here for every sample and every module; a Cypher "
@@ -619,6 +632,58 @@ SPECTRUM_CAVEAT = (
     "the same run only in shape, not in absolute size).")
 
 
+NETWORK_SCOPE_UNRECORDED = (
+    "It is not recorded how many ASVs went into the network run for this dataset. So it cannot "
+    "be said whether an ASV outside the network was tested and failed the threshold, or was never "
+    "part of the run.")
+
+
+def network_run_scope(q: Runner, dataset_id: str, asv_id: "str | None" = None) -> dict:
+    n_asv = q("MATCH (a:ASV {dataset_id:$d}) RETURN count(a) AS n", d=dataset_id)
+    total = n_asv[0]["n"] if n_asv else 0
+    lauf = q("MATCH (r:Run {dataset_id:$d}) WHERE r.n_asv_in_network_run IS NOT NULL "
+             "RETURN r.n_asv_in_network_run AS n_in, r.run_id AS run_id "
+             "ORDER BY coalesce(r.computed_at, '') DESC, r.run_id LIMIT 1", d=dataset_id)
+    fft = q("MATCH (r:Run {dataset_id:$d}) WHERE r.fft_harmonics IS NOT NULL "
+            "RETURN r.run_id AS run_id, "
+            "COUNT { MATCH (a:ASV {dataset_id:$d}) WHERE a.fft_amplitudes IS NOT NULL } AS n_in "
+            "ORDER BY coalesce(r.computed_at, '') DESC, r.run_id LIMIT 1", d=dataset_id)
+    if lauf:
+        basis, n_in, run_id = "run_record", lauf[0]["n_in"], lauf[0]["run_id"]
+    elif fft:
+        basis, n_in, run_id = "fft_table", fft[0]["n_in"], fft[0]["run_id"]
+    else:
+        out = {"recorded": False, "basis": None, "n_in_run": None, "n_dataset": total,
+               "subset": None, "note": NETWORK_SCOPE_UNRECORDED}
+        if asv_id is not None:
+            netz = q("MATCH (a:ASV {dataset_id:$d, id:$a}) RETURN a.louvain_label AS l",
+                     d=dataset_id, a=asv_id)
+            out["in_run"] = True if (netz and netz[0]["l"] is not None) else None
+        return out
+    subset = n_in < total
+    quelle = ("" if basis == "run_record" else
+              " (counted from the run's own FFT table, which lists every ASV that entered it)")
+    out = {"recorded": True, "basis": basis, "n_in_run": n_in, "n_dataset": total,
+           "subset": subset, "run_id": run_id,
+           "note": (f"The network was computed on {n_in} of the {total} ASVs of this dataset"
+                    f"{quelle}. The other {total - n_in} were not part of the run and were "
+                    f"therefore never tested for a correlation." if subset else
+                    f"All {total} ASVs of this dataset were part of the network run{quelle}.")}
+    if asv_id is not None:
+        a = q("MATCH (a:ASV {dataset_id:$d, id:$a}) "
+              "RETURN a.louvain_label AS l, a.fft_amplitudes IS NOT NULL AS fft",
+              d=dataset_id, a=asv_id)
+        if not a:
+            out["in_run"] = None
+        elif a[0]["l"] is not None or not subset:
+            out["in_run"] = True
+        elif fft:
+            out["in_run"] = bool(a[0]["fft"])
+        else:
+            out["in_run"] = None
+    return out
+
+
 def spectrum(q: Runner, dataset_id: str, asv_id: str) -> dict | None:
     rows = q("MATCH (a:ASV {id:$id, dataset_id:$d}) "
              "OPTIONAL MATCH (r:Run {dataset_id:$d}) "
@@ -649,6 +714,17 @@ def ccm_tested_recorded(q: Runner, dataset_id: str) -> bool:
     return bool(rows)
 
 
+def ccm_tested_directions(q: Runner, dataset_id: str) -> "int | None":
+    rows = q("MATCH (r:Run {dataset_id:$d}) WHERE r.ccm_tested_directions IS NOT NULL "
+             "RETURN r.ccm_tested_directions AS n "
+             "ORDER BY coalesce(r.computed_at, '') DESC, r.run_id LIMIT 1", d=dataset_id)
+    n = rows[0].get("n") if rows else None
+    try:
+        return int(n) if n is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 def ccm_direction(q: Runner, dataset_id: str, von: str, nach: str) -> dict | None:
     for rel, decision in (("INFLUENCES", "kept"), ("CCM_REJECTED", "rejected")):
         rows = q(f"MATCH (:ASV {{id:$x, dataset_id:$d}})-[r:{rel} {{dataset_id:$d}}]->"
@@ -660,12 +736,14 @@ def ccm_direction(q: Runner, dataset_id: str, von: str, nach: str) -> dict | Non
 
 
 MODULE_NAME_MAX = 40
+MODULE_NAME_FORBIDDEN = frozenset("<>\"'&`")
 
 
 def clean_module_name(text: str | None) -> str | None:
     if text is None:
         return None
-    s = "".join(" " if ch < " " else ch for ch in str(text)).strip()
+    s = "".join(" " if ch < " " else ch for ch in str(text) if ch not in MODULE_NAME_FORBIDDEN)
+    s = " ".join(s.split())
     return s[:MODULE_NAME_MAX].strip() or None
 
 
@@ -719,15 +797,37 @@ def ccm_permutation_caveat(q: Runner, dataset_id: str) -> str:
     n_null = _ccm_null_size(t.get("num_permutations"), t.get("num_samples"))
     if n_null is None:
         return satz + "."
-    n_below = -(-n_null // CCM_PRUNE_ALPHA_DENOM)
+    getestet = ccm_tested_directions(q, dataset_id)
     satz += (f" — at most {n_null} null values ({t['num_permutations']} permutations x "
-             f"{t['num_samples']} sampled pairs, both directions), so p is a multiple of "
-             f"1/{n_null}; coarser in practice, because OTTER caps the null at the number of "
-             f"edges tested")
+             f"{t['num_samples']} sampled pairs, both directions)")
+    if getestet is None or getestet <= 0:
+        return satz + (f", fewer if fewer directions were tested (not recorded for this "
+                       f"dataset), so p can be no finer than 1/{n_null}.")
+    n_eff = min(n_null, getestet)
+    satz += (f", and OTTER caps the null at the {getestet} directions tested, so p is a multiple "
+             f"of 1/{n_eff}")
+    n_below = -(-n_eff // CCM_PRUNE_ALPHA_DENOM)
     if n_below <= 3:
-        werte = " and ".join("0.0" if k == 0 else f"{k / n_null:g}" for k in range(n_below))
+        werte = " and ".join("0.0" if k == 0 else f"{k / n_eff:g}" for k in range(n_below))
         satz += f". Below the p < 0.05 cut only {werte} can occur at all"
     return satz + "."
+
+
+def ccm_p_resolution(q: Runner, dataset_id: str) -> dict:
+    t = thresholds(q, dataset_id)
+    n_null = _ccm_null_size(t.get("num_permutations"), t.get("num_samples"))
+    getestet = ccm_tested_directions(q, dataset_id)
+    hedge = "" if t["recorded"] else ", OTTER's default — not recorded for this dataset"
+    if n_null is None:
+        return {"denominator": None, "exact": False,
+                "short": "CCM p resolution not recorded for this dataset",
+                "statement": ccm_permutation_caveat(q, dataset_id)}
+    exakt = getestet is not None and getestet > 0
+    nenner = min(n_null, getestet) if exakt else n_null
+    kurz = (f"CCM p in steps of 1/{nenner}{'' if exakt else ' or coarser'} "
+            f"({t['num_permutations']} permutations{hedge})")
+    return {"denominator": nenner, "exact": exakt, "short": kurz,
+            "statement": ccm_permutation_caveat(q, dataset_id)}
 
 
 CLUSTER_NETWORK_DEFINITION = (
@@ -805,7 +905,7 @@ def interannual_variability(q: Runner, dataset_id: str, metric: str = "jaccard")
         return {**base, "clusters": [], "absent_reason": metrics[metric]["reason"]}
 
     samples = q("MATCH (s:Sample {dataset_id:$d}) RETURN s.sample_id AS sample, toString(s.date) AS date "
-                "ORDER BY date, sample", d=dataset_id)
+                "ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id", d=dataset_id)
     rows = q("MATCH (s:Sample {dataset_id:$d})-[r:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) "
              "WHERE a.louvain_label IS NOT NULL AND r.count > 0 "
              "RETURN s.sample_id AS sample, a.louvain_label AS cluster, a.id AS asv, r.count AS count "
@@ -865,8 +965,10 @@ def cluster_series(q: Runner, dataset_id: str, louvain_label: int) -> list[dict]
         "WITH s, sum(all.count) AS live_total "
         "WITH s, coalesce(s.analysed_reads_total, live_total) AS sample_total "
         "OPTIONAL MATCH (s)-[r:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) WHERE a.louvain_label = $l "
-        "RETURN s.sample_id AS sample, toString(s.date) AS date, sum(coalesce(r.count, 0.0)) AS sum_count, "
-        "coalesce(sample_total, 0.0) AS sample_total ORDER BY date, sample",
+        "WITH s, sample_total, sum(coalesce(r.count, 0.0)) AS sum_count "
+        "RETURN s.sample_id AS sample, toString(s.date) AS date, sum_count AS sum_count, "
+        "coalesce(sample_total, 0.0) AS sample_total "
+        "ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id",
         d=dataset_id, l=louvain_label)
     for r in rows:
         tot = r["sample_total"] or 0.0
@@ -916,10 +1018,13 @@ def taxon_group(q: Runner, dataset_id: str, asv_id: str) -> dict | None:
                            "no assignment is not a taxon, and two of them are not the same one.")}
     where = " AND ".join(f"coalesce(a.`{r}`, '') = ${r}" for r in TAXONOMY_RANKS)
     params = {r: (path[r] or "") for r in TAXONOMY_RANKS}
+    params["reads"] = value_kind(q, dataset_id) == "reads"
     members = q(f"MATCH (a:ASV {{dataset_id:$d}}) WHERE {where} "
+                f"OPTIONAL MATCH (a)<-[h:HAS_ABUNDANCE]-(:Sample {{dataset_id:$d}}) "
+                f"WITH a, sum(h.count) AS summe, count(h) AS n_present "
                 f"RETURN a.id AS id, a.louvain_label AS cluster, "
-                f"a.read_count_total AS read_count_total, "
-                f"COUNT {{ (a)<-[:HAS_ABUNDANCE]-(:Sample) }} AS n_samples_present "
+                f"CASE WHEN $reads THEN summe ELSE null END AS read_count_total, "
+                f"n_present AS n_samples_present "
                 f"ORDER BY a.id", d=dataset_id, **params)
     return {"asv_id": asv_id, "path": path, "label": taxon_label(path), "groupable": True,
             "members": members, "n_asv": len(members),
@@ -935,18 +1040,23 @@ def taxon_series(q: Runner, dataset_id: str, member_ids: list[str]) -> dict:
         rows = q("MATCH (s:Sample {dataset_id:$d}) "
                  "OPTIONAL MATCH (s)-[r:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) "
                  "WHERE a.id IN $ids AND r.count > 0 "
-                 "RETURN s.sample_id AS sample, toString(s.date) AS date, count(r) AS n_members_present "
-                 "ORDER BY date, sample", d=dataset_id, ids=member_ids)
+                 "WITH s, count(r) AS n_members_present "
+                 "RETURN s.sample_id AS sample, toString(s.date) AS date, "
+                 "n_members_present AS n_members_present "
+                 "ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id",
+                 d=dataset_id, ids=member_ids)
         return {"rows": rows, "absent_reason": TAXON_SUM_ABSENT, "value_kind": kind}
     rows = q("MATCH (s:Sample {dataset_id:$d}) "
              "OPTIONAL MATCH (s)-[all:HAS_ABUNDANCE]->(:ASV {dataset_id:$d}) "
              "WITH s, sum(all.count) AS live_total "
              "WITH s, coalesce(s.analysed_reads_total, live_total) AS sample_total "
              "OPTIONAL MATCH (s)-[r:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) WHERE a.id IN $ids "
+             "WITH s, sample_total, sum(coalesce(r.count, 0.0)) AS sum_count, "
+             "sum(CASE WHEN r.count > 0 THEN 1 ELSE 0 END) AS n_members_present "
              "RETURN s.sample_id AS sample, toString(s.date) AS date, "
-             "sum(coalesce(r.count, 0.0)) AS sum_count, "
-             "sum(CASE WHEN r.count > 0 THEN 1 ELSE 0 END) AS n_members_present, "
-             "coalesce(sample_total, 0.0) AS sample_total ORDER BY date, sample",
+             "sum_count AS sum_count, n_members_present AS n_members_present, "
+             "coalesce(sample_total, 0.0) AS sample_total "
+             "ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id",
              d=dataset_id, ids=member_ids)
     for r in rows:
         tot = r["sample_total"] or 0.0
@@ -1098,8 +1208,8 @@ ENV_LINK_NOTE = (
     "is covariation with a delay, not a response and not a cause; shares move when other taxa "
     "move. The best of 2L+1 shifts was chosen; the correction (Benjamini-Hochberg) runs across "
     "the pairs of one variable, not across the shifts.")
-ENV_LINK_ABSENT_NO_RUN = ("No environment links have been computed for this dataset "
-                          "(tools/env_links/compute.py).")
+ENV_LINK_ABSENT_NO_RUN = ("No environment links are stored for this dataset "
+                          "(removed by a rebuild or not yet computed).")
 
 
 def env_link_run(q: Runner, dataset_id: str) -> dict:
@@ -1206,13 +1316,17 @@ def cluster_functions(q: Runner, dataset_id: str, louvain_label: int) -> dict:
 
 
 
+ACTIVITY_SECOND_RUN_RATIO = 2 / 3
+
+
 def activity(freq: dict) -> dict:
     axis = freq.get("time_axis")
     pts = freq.get("points") or []
     if axis == TIME_AXIS_DATES and (freq.get("seasonal") or {}).get("climatology"):
         climo = [c for c in freq["seasonal"]["climatology"] if c.get("mean") is not None]
         if not climo:
-            return {"axis": axis, "window": [], "peak": None, "n_min": 0, "statement": None}
+            return {"axis": axis, "window": [], "windows": [], "peak": None, "n_min": 0,
+                    "statement": None}
         overall = sum(c["mean"] for c in climo) / len(climo)
         above = [c for c in climo if c["mean"] > overall]
         peak = max(climo, key=lambda c: c["mean"])
@@ -1232,26 +1346,46 @@ def activity(freq: dict) -> dict:
             return out
 
         runs = _runs(months)
-        best = max(runs, key=len) if runs else [peak["month"]]
-        label = (MONTHS[best[0] - 1] if len(best) == 1
-                 else f"{MONTHS[best[0] - 1]}–{MONTHS[best[-1] - 1]}")
-        n_min = min((c["n"] for c in above), default=0)
+        mittel = {c["month"]: c["mean"] for c in climo}
+        ueber = {tuple(r): sum(mittel[m] - overall for m in r) for r in runs}
+        reihe = sorted(runs, key=lambda r: (-ueber[tuple(r)], r[0]))
+        if reihe:
+            best = reihe[0]
+            fenster = [best] + [r for r in reihe[1:2]
+                                if ueber[tuple(r)] >= ACTIVITY_SECOND_RUN_RATIO * ueber[tuple(best)]]
+        else:
+            best = [peak["month"]]
+            fenster = [best]
+
+        def _label(r):
+            return (MONTHS[r[0] - 1] if len(r) == 1
+                    else f"{MONTHS[r[0] - 1]}–{MONTHS[r[-1] - 1]}")
+
+        im_fenster = {m for r in fenster for m in r}
+        n_min = min((c["n"] for c in climo if c["month"] in im_fenster), default=0)
+        spitze = MONTHS[peak["month"] - 1]
+        peak_lauf = next((r for r in fenster if peak["month"] in r), None)
+        satz = "strongest in " + " and ".join(_label(r) for r in fenster)
+        if peak_lauf is not None:
+            if (len(im_fenster) > 1 and sum(
+                    1 for c in climo if c["month"] in im_fenster and c["mean"] == peak["mean"]) == 1):
+                satz += f", peaking in {spitze}"
+        else:
+            satz += f"; the single highest month, {spitze}, lies outside this window"
         return {
             "axis": axis, "window": [MONTHS[m - 1] for m in best],
-            "peak": MONTHS[peak["month"] - 1], "n_min": n_min,
-            "statement": (f"strongest in {label}" + (
-                f", peaking in {MONTHS[peak['month'] - 1]}"
-                if len(best) > 1 and sum(
-                    1 for c in climo if c["month"] in best and c["mean"] == peak["mean"]) == 1
-                else "")),
+            "windows": [[MONTHS[m - 1] for m in r] for r in fenster],
+            "peak": spitze, "n_min": n_min,
+            "statement": satz,
         }
 
     shares = [(p.get("share"), i + 1) for i, p in enumerate(pts) if p.get("share") is not None]
     if not shares:
-        return {"axis": axis, "window": [], "peak": None, "n_min": 0, "statement": None}
+        return {"axis": axis, "window": [], "windows": [], "peak": None, "n_min": 0,
+                "statement": None}
     best_share, best_i = max(shares)
     return {
-        "axis": axis, "window": [], "peak": f"sample {best_i}", "n_min": 1,
+        "axis": axis, "window": [], "windows": [], "peak": f"sample {best_i}", "n_min": 1,
         "statement": f"strongest at sample {best_i} of {len(pts)} — this dataset has no calendar "
                      f"dates, so the position is the answer, not a season",
     }
@@ -1283,6 +1417,15 @@ ENVIRONMENT_VARS: list[dict] = [
 ]
 
 ENVIRONMENT_KEYS = [v["key"] for v in ENVIRONMENT_VARS]
+
+ENV_NOT_MEASURED = (
+    "No environmental variable was measured on any sample of this dataset, so there is nothing "
+    "to relate an ASV to.")
+
+
+def env_variable_not_measured(variable: str) -> str:
+    return (f"Variable {variable!r} was not measured on any sample of this dataset, so there is "
+            f"nothing to relate an ASV to.")
 
 _PUBLICATION_UNIT_NOTES: dict[str, str] = {
     "par_satellite": ("The publication states μmol photons m⁻² d⁻¹. The values in this dataset "
@@ -1334,31 +1477,39 @@ def environment_units_note(q: Runner, dataset_id: str) -> str:
             else ENVIRONMENT_UNITS_NOTE)
 
 
-def pool_share(q: Runner, dataset_id: str, asv_id: str) -> dict:
-    rows = q("MATCH (s:Sample {dataset_id:$d})-[h:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) "
-             "RETURN sum(h.count) AS gesamt, "
-             "       sum(CASE WHEN a.id = $a THEN h.count ELSE 0 END) AS eigen, "
-             "       count(DISTINCT a) AS n_asv", d=dataset_id, a=asv_id)
-    if not rows or not rows[0]["gesamt"]:
-        return {"share": None, "n_asv": 0, "absent_reason":
-                "No stored values for this dataset, so there is no whole to be a part of."}
-    r = rows[0]
-    return {
-        "share": float(r["eigen"] or 0.0) / float(r["gesamt"]),
-        "n_asv": int(r["n_asv"] or 0),
-        "basis": "the summed values of all analysed ASVs of this dataset, over all samples",
-        "caveat": ("A share of the whole dataset, not an amount: the values are compositional, "
-                   "and a larger part can mean that the others became smaller."),
-        "absent_reason": None,
-    }
 
 
 def environment_profile(q: Runner, dataset_id: str, asv_id: str) -> dict:
     props = ", ".join(f"s.`{v['key']}` AS `{v['key']}`" for v in ENVIRONMENT_VARS)
     rows = q(f"MATCH (s:Sample {{dataset_id:$d}})-[h:HAS_ABUNDANCE]->"
              f"(a:ASV {{id:$a, dataset_id:$d}}) WHERE h.count > 0 "
-             f"RETURN h.count AS w, {props} ORDER BY s.sample_id", d=dataset_id, a=asv_id)
-    return _weighted_env_profile(rows, environment_vars(q, dataset_id))
+             f"WITH s, h.count AS eigen "
+             f"MATCH (s)-[x:HAS_ABUNDANCE]->(:ASV {{dataset_id:$d}}) "
+             f"WITH s, eigen, sum(x.count) AS live "
+             f"RETURN toFloat(eigen) / coalesce(s.analysed_reads_total, live) AS w, {props} "
+             f"ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id",
+             d=dataset_id, a=asv_id)
+    specs = environment_vars(q, dataset_id)
+    return _weighted_env_profile(rows, specs, environment_ranges(q, dataset_id, specs))
+
+
+def environment_ranges(q: Runner, dataset_id: str,
+                       specs: "list[dict] | None" = None) -> dict[str, tuple[float, float]]:
+    specs = ENVIRONMENT_VARS if specs is None else specs
+    if not specs:
+        return {}
+    props = ", ".join(f"min(s.`{v['key']}`) AS `lo_{v['key']}`, max(s.`{v['key']}`) AS `hi_{v['key']}`"
+                      for v in specs)
+    rows = q(f"MATCH (s:Sample {{dataset_id:$d}}) RETURN {props}", d=dataset_id)
+    if not rows:
+        return {}
+    r = rows[0]
+    out: dict[str, tuple[float, float]] = {}
+    for v in specs:
+        lo, hi = r.get(f"lo_{v['key']}"), r.get(f"hi_{v['key']}")
+        if isinstance(lo, (int, float)) and isinstance(hi, (int, float)):
+            out[v["key"]] = (float(lo), float(hi))
+    return out
 
 
 CLUSTER_SERIES_DEFINITION = (
@@ -1369,9 +1520,14 @@ CLUSTER_SERIES_DEFINITION = (
 def cluster_environment_profile(q: Runner, dataset_id: str, louvain_label: int) -> dict:
     props = ", ".join(f"s.`{v['key']}` AS `{v['key']}`" for v in ENVIRONMENT_VARS)
     rows = q(f"MATCH (s:Sample {{dataset_id:$d}})-[h:HAS_ABUNDANCE]->(a:ASV {{dataset_id:$d}}) "
-             f"WHERE a.louvain_label = $l WITH s, sum(h.count) AS w WHERE w > 0 "
-             f"RETURN w, {props} ORDER BY s.sample_id", d=dataset_id, l=louvain_label)
-    out = _weighted_env_profile(rows, environment_vars(q, dataset_id))
+             f"WHERE a.louvain_label = $l WITH s, sum(h.count) AS eigen WHERE eigen > 0 "
+             f"MATCH (s)-[x:HAS_ABUNDANCE]->(:ASV {{dataset_id:$d}}) "
+             f"WITH s, eigen, sum(x.count) AS live "
+             f"RETURN toFloat(eigen) / coalesce(s.analysed_reads_total, live) AS w, {props} "
+             f"ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id",
+             d=dataset_id, l=louvain_label)
+    specs = environment_vars(q, dataset_id)
+    out = _weighted_env_profile(rows, specs, environment_ranges(q, dataset_id, specs))
     out["series_definition"] = CLUSTER_SERIES_DEFINITION
     out["series_note"] = ("Method after " + SOURCE_PUBLICATION + "; the publication does not name "
                           "the weights, MANTA uses equal weights (the plain sum of the members' "
@@ -1379,7 +1535,8 @@ def cluster_environment_profile(q: Runner, dataset_id: str, louvain_label: int) 
     return out
 
 
-def _weighted_env_profile(rows: list[dict], specs: "list[dict] | None" = None) -> dict:
+def _weighted_env_profile(rows: list[dict], specs: "list[dict] | None" = None,
+                          ranges: "dict[str, tuple[float, float]] | None" = None) -> dict:
     n_present = len(rows)
     items = []
     for spec in (ENVIRONMENT_VARS if specs is None else specs):
@@ -1400,17 +1557,25 @@ def _weighted_env_profile(rows: list[dict], specs: "list[dict] | None" = None) -
         mittel = sum(x * w for x, w in pairs) / wsum
         sd = ((sum(w * (x - mittel) ** 2 for x, w in pairs) / wsum) ** 0.5
               if len(pairs) > 1 else None)
+        spanne = (ranges or {}).get(key)
         items.append({"key": key, "label": spec["label"], "unit": spec["unit"],
                       "unit_note": spec.get("unit_note"),
                       "weighted_mean": mittel, "weighted_sd": sd,
-                      "p10": pct(0.10), "p90": pct(0.90),
+                      "p10": pct(0.10), "p25": pct(0.25), "median": pct(0.50),
+                      "p75": pct(0.75), "p90": pct(0.90),
+                      "dataset_min": spanne[0] if spanne else None,
+                      "dataset_max": spanne[1] if spanne else None,
                       "n_samples_used": len(pairs), "n_samples_present": n_present})
     return {
         "items": items,
-        "method": ("Weighted by this ASV's value in each sample, over all samples with a "
-                   "detection (count > 0) and a measured value; the percentiles are the "
-                   "smallest value whose cumulative weight reaches 10 % / 90 % of the total "
-                   "weight. The spread is the weighted standard deviation around that mean — "
+        "method": ("Weighted by the subject's SHARE of each sample (its stored value divided "
+                   "by the sample total — the share the curves show, so sequencing depth does "
+                   "not set the weight), over all samples with a "
+                   "detection (count > 0) and a measured value; the percentiles (10th, 25th, "
+                   "median, 75th, 90th) are each the smallest value whose cumulative weight "
+                   "reaches that fraction of the total weight. The axis range is the smallest "
+                   "and largest measured value over ALL samples of the dataset. The spread is "
+                   "the weighted standard deviation around that mean — "
                    "how far the conditions scattered, not how precise the mean is. Samples "
                    "without a measurement are excluded, never filled."),
         "caveat": ("A weighted summary of the conditions this ASV was found under — NOT a "
@@ -1529,8 +1694,9 @@ def seasons(q: Runner, dataset_id: str) -> dict:
 def light_year(q: Runner, dataset_id: str) -> dict:
     st = _station(q, dataset_id)
     if not st or st.get("lat") is None:
-        return {"available": False, "absent_reason": LIGHT_ABSENT_NO_STATION, "bands": [],
-                "shortest_day_doy": None, "lat": None}
+        return {"available": False,
+                "absent_reason": station_absent_reason(q, dataset_id) or LIGHT_ABSENT_NO_STATION,
+                "bands": [], "shortest_day_doy": None, "lat": None}
     import datetime as _dt
     jahr = 2019
     b = tageslicht.bands(st["lat"], _dt.date(jahr, 1, 1), _dt.date(jahr, 12, 31), st.get("lon") or 0.0)
@@ -1555,7 +1721,7 @@ def environment(q: Runner, dataset_id: str) -> dict:
     axis = time_axis(q, dataset_id)
     props = ", ".join(f"s.`{v['key']}` AS `{v['key']}`" for v in ENVIRONMENT_VARS)
     rows = q(f"MATCH (s:Sample {{dataset_id:$d}}) RETURN s.sample_id AS sample, toString(s.date) AS date, "
-             f"{props} ORDER BY date, sample", d=dataset_id)
+             f"{props} ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id", d=dataset_id)
     n_sample = len(rows)
     pub = is_publication_dataset(q, dataset_id)
 
@@ -1625,6 +1791,9 @@ LIGHT_ABSENT_NO_STATION = (
     "No light bands: this dataset has no station, so there is no latitude to compute them from. "
     "The synthetic test datasets are the case this is built for — a placeholder 0/0 is not a "
     "place at the equator.")
+LIGHT_ABSENT_SEVERAL_STATIONS = (
+    "No light bands: this dataset's samples point to more than one station, so there is no "
+    "single latitude to compute them from. That is a data error to repair, not a place.")
 LIGHT_ABSENT_ORDINAL = (
     "No light bands: this dataset's samples carry an order, not calendar dates. Day length needs "
     "a real date; the placeholder dates would produce a band that means nothing.")
@@ -1634,7 +1803,16 @@ def _station(q: Runner, dataset_id: str) -> "dict | None":
     rows = q("MATCH (:Sample {dataset_id:$d})-[:AT_STATION]->(st:Station) "
              "RETURN DISTINCT st.station_id AS station_id, st.location.latitude AS lat, "
              "st.location.longitude AS lon ORDER BY lat, lon, station_id", d=dataset_id)
-    return rows[0] if rows else None
+    return rows[0] if len(rows) == 1 else None
+
+
+def station_absent_reason(q: Runner, dataset_id: str) -> "str | None":
+    rows = q("MATCH (:Sample {dataset_id:$d})-[:AT_STATION]->(st:Station) "
+             "RETURN count(DISTINCT st) AS n", d=dataset_id)
+    n = rows[0]["n"] if rows else 0
+    if n == 1:
+        return None
+    return LIGHT_ABSENT_SEVERAL_STATIONS if n > 1 else LIGHT_ABSENT_NO_STATION
 
 
 def sample_light(q: Runner, dataset_id: str) -> dict:
@@ -1643,12 +1821,14 @@ def sample_light(q: Runner, dataset_id: str) -> dict:
     st = _station(q, dataset_id)
     axis = time_axis(q, dataset_id)
     if st is None:
-        return {"available": False, "absent_reason": LIGHT_ABSENT_NO_STATION, "samples": []}
+        return {"available": False,
+                "absent_reason": station_absent_reason(q, dataset_id) or LIGHT_ABSENT_NO_STATION,
+                "samples": []}
     if axis != TIME_AXIS_DATES:
         return {"available": False, "absent_reason": LIGHT_ABSENT_ORDINAL, "samples": []}
     rows = q("MATCH (s:Sample {dataset_id:$d}) WHERE s.date IS NOT NULL "
              "RETURN s.sample_id AS sample, toString(s.date) AS date "
-             "ORDER BY date, sample", d=dataset_id)
+             "ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id", d=dataset_id)
     aus = []
     for r in rows:
         d = _dt.date.fromisoformat(r["date"])
@@ -1670,7 +1850,8 @@ def light_bands(q: Runner, dataset_id: str) -> dict:
             "legend": LIGHT_LEGEND, "method": tageslicht.METHOD,
             "reference": tageslicht.REFERENCE, "caveat": tageslicht.NOT_ECOLOGY}
     if st is None:
-        return {**leer, "absent_reason": LIGHT_ABSENT_NO_STATION}
+        return {**leer,
+                "absent_reason": station_absent_reason(q, dataset_id) or LIGHT_ABSENT_NO_STATION}
     if axis != TIME_AXIS_DATES:
         return {**leer, "absent_reason": LIGHT_ABSENT_ORDINAL}
     spanne = q("MATCH (s:Sample {dataset_id:$d}) WHERE s.date IS NOT NULL "
@@ -1681,7 +1862,8 @@ def light_bands(q: Runner, dataset_id: str) -> dict:
     b = tageslicht.bands(st["lat"], _dt.date.fromisoformat(von), _dt.date.fromisoformat(bis),
                          st["lon"])
     proben = q("MATCH (s:Sample {dataset_id:$d}) WHERE s.date IS NOT NULL "
-               "RETURN s.sample_id AS sample, toString(s.date) AS date ORDER BY date, sample",
+               "RETURN s.sample_id AS sample, toString(s.date) AS date "
+               "ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id",
                d=dataset_id)
     per_sample = []
     for r in proben:
@@ -1770,136 +1952,290 @@ def provenance_chain(q: Runner, dataset_id: str) -> dict:
 
 
 
-
-HUB_SOURCE = "Priest et al. 2025 (Nat Commun), criterion 2 of 3"
-
-HUB_MEASURES: dict[str, str] = {
+CENTRALITY_MEASURES: dict[str, str] = {
     "con_degree": "number of association partners",
     "con_cluster_closeness": "closeness within its own co-occurrence community",
     "con_closeness": "closeness in the whole co-occurrence network",
     "con_cluster_betweenness": "betweenness within its own co-occurrence community",
     "con_betweenness": "betweenness in the whole co-occurrence network",
 }
-HUB_MEASURE_DEFAULT = "con_degree"
-HUB_K_DEFAULT = 1.0
-HUB_K_MIN, HUB_K_MAX, HUB_K_STEP = 0.0, 3.0, 0.5
 
-HUB_MEASURE_CAVEATS: dict[str, str] = {
+CENTRALITY_CAVEATS: dict[str, str] = {
     "con_degree": (
         "The degree counts the links that survived THIS run's thresholds — a lower correlation "
-        "cut would give every ASV more partners, and a different set would clear the bar. The "
-        "number is exact for this network, not a property of the organism."),
+        "cut would give every ASV more partners. The number is exact for this network, not a "
+        "property of the organism."),
     "con_cluster_closeness": (
         "OTTER computes the intra-community centralities on the unweighted network — "
         "how strongly two ASVs correlate does not enter the measure, only whether they are "
-        "linked at all."),
+        "linked at all. In addition, the module subgraph it uses leaves out every member that "
+        "appears only as the second end of its links, together with those links: the stored "
+        "value is not the closeness within the full module, and such members carry none. "
+        "Criterion 2 (`criterion2`) is computed by MANTA itself instead."),
     "con_cluster_betweenness": (
         "OTTER computes the intra-community centralities on the unweighted network — "
         "how strongly two ASVs correlate does not enter the measure, only whether they are "
-        "linked at all."),
+        "linked at all. In addition, the module subgraph it uses leaves out every member that "
+        "appears only as the second end of its links, together with those links: the stored "
+        "value is not the betweenness within the full module, and such members carry none."),
     "con_closeness": (
-        "Measured across two CPU architectures: con_closeness differed between "
-        "CPU architectures for about one ASV in five in that run — a hub list based on it is "
-        "machine-dependent."),
+        "The stored whole-network closeness was computed on a DIRECTED version of the "
+        "co-occurrence network whose arrows only follow the column order of the ASVs at import "
+        "— it is not the closeness of the undirected network, and an ASV with many partners can "
+        "carry 0. Unlike the betweenness, it does not differ between CPU architectures."),
     "con_betweenness": (
+        "The stored whole-network betweenness was computed on a DIRECTED version of the "
+        "co-occurrence network whose arrows only follow the column order of the ASVs at import "
+        "— it is not the betweenness of the undirected network. "
         "Measured across two CPU architectures: only the top 10 betweenness "
         "positions were stable between architectures — a threshold that reaches below them "
         "marks nodes whose order the hardware picked."),
 }
 
-HUB_WHY_NOT_KEYSTONE = (
-    "The word is deliberately \"hub\", never \"keystone\": Priest et al. 2025 identify "
-    "keystones through three joint criteria — a significant NMI (CCM), closeness within the "
-    "community above μ + 1·σ, and presence in a stable energy-landscape state. This view "
-    "checks at most ONE of them, and the default measure — the number of association "
-    "partners — is none of the three at all. A \"keystone\" label would claim more method "
-    "than the data went through.")
-
-HUB_NODE_TOOLTIP = "hub — meets the displayed hub criterion"
-HUB_TITLE = "Hubs — not keystone species"
-
 EDGE_WIDTH_LEGEND = {
-    "con": ("Line width ∝ |corr| — {min} to {max} across the links now in view; "
-            "relative to this view, it changes when filtering."),
-    "ccm": ("Line width ∝ NMI (the larger of a link's directions) — {min} to {max} across "
-            "the links now in view; relative to this view, it changes when filtering."),
+    "con": ("Line width ∝ r (only positive correlations at or above the threshold are links) — "
+            "fixed scale from {min} (the run's threshold) to {max}, the same in every filter."),
+    "ccm": ("Line width ∝ NMI (the larger of a link's directions) — fixed scale from {min} to "
+            "{max}, the same in every filter."),
     "rejected": ("Line width ∝ NMI of the rejected direction (the larger where both were "
-                 "rejected) — {min} to {max} across the links now in view; relative to this "
-                 "view, it changes when filtering."),
+                 "rejected) — fixed scale from {min} to {max}, the same in every filter."),
 }
 
 
-def hub_set(q: Runner, dataset_id: str, measure: str | None = None, k: float | None = None) -> dict:
-    measure = measure or HUB_MEASURE_DEFAULT
-    k = HUB_K_DEFAULT if k is None else float(k)
-    if measure not in HUB_MEASURES:
-        raise ValueError(f"unknown hub measure {measure!r} — allowed: {sorted(HUB_MEASURES)}")
-    if not (HUB_K_MIN <= k <= HUB_K_MAX) or not (k / HUB_K_STEP).is_integer():
-        raise ValueError(f"k must lie between {HUB_K_MIN:g} and {HUB_K_MAX:g}, "
-                         f"in steps of {HUB_K_STEP:g} — given: {k!r}")
+def edge_width_scale(t: dict) -> dict:
+    con_tr = t.get("con_tr")
+    lo = float(con_tr) if isinstance(con_tr, (int, float)) and 0 <= con_tr < 1 else 0.0
+    return {"con": [lo, 1.0], "ccm": [0.0, 1.0], "rejected": [0.0, 1.0]}
 
-    if measure == "con_degree":
-        rows = q("MATCH (a:ASV {dataset_id:$d}) WHERE a.louvain_label IS NOT NULL "
-                 "RETURN a.id AS id, "
-                 "COUNT { (a)-[:CO_OCCURS_WITH {dataset_id:$d}]-(:ASV {dataset_id:$d}) } AS v "
-                 "ORDER BY a.id", d=dataset_id)
-    else:
-        rows = q(f"MATCH (a:ASV {{dataset_id:$d}}) WHERE a.louvain_label IS NOT NULL "
-                 f"RETURN a.id AS id, a.{measure} AS v ORDER BY a.id", d=dataset_id)
-    vals = [r["v"] for r in rows if r["v"] is not None]
-    n_network, n_with_value = len(rows), len(vals)
-    label = HUB_MEASURES[measure]
 
-    if n_with_value == 0:
-        mu = sigma = threshold = None
-        ids: list[str] = []
-        statement = (f"No hub criterion possible — {label} is stored for none of the "
-                     f"{n_network} network ASVs of this dataset.")
-    else:
-        mu = sum(vals) / n_with_value
-        sigma = statistics.stdev(vals) if n_with_value > 1 else 0.0
-        threshold = mu + k * sigma
-        ids = [r["id"] for r in rows if r["v"] is not None and r["v"] > threshold]
-        n_missing = n_network - n_with_value
-        is_default_closeness = measure == "con_cluster_closeness" and k == HUB_K_DEFAULT
-        if measure == "con_degree":
-            herkunft = (f"This is MANTA's operational definition, not a criterion from "
-                        f"{HUB_SOURCE}: that one is the closeness within the community. ")
-        elif is_default_closeness:
-            herkunft = f"After {HUB_SOURCE}. "
+
+CRITERION2_ALPHA = 0.05
+CRITERION2_MIN_MODULE = 3
+
+CRITERION2_LABEL = ("high closeness centrality within its co-occurrence community — criterion 2 "
+                    "of the keystone definition (Oldenburg et al. 2024)")
+CRITERION2_PAPER_WORDING = ("a high centrality (closeness) value within its co-occurrence "
+                            "community")
+CRITERION2_SOURCE_DOI = SOURCE_PUBLICATION_DOI
+CRITERION2_SOURCE_LOCATION = 'Methods, "Keystone species definition"'
+CRITERION2_SOURCE = (f"{SOURCE_PUBLICATION}, doi:{SOURCE_PUBLICATION_DOI} — "
+                     f"{CRITERION2_SOURCE_LOCATION}")
+CRITERION2_METHOD = (
+    "Computed by MANTA from the stored links (the centrality values stored with the network run "
+    "are not used), on the undirected co-occurrence (CON) network of this dataset. For each "
+    "module (Louvain label): the subgraph of all its members and all links with both ends in "
+    "the module. Closeness of each member within that subgraph, unweighted: "
+    "c_i = (n − 1) / Σ d(i, j), with n the number of members and d the number of links on the "
+    "shortest path (breadth-first search). For each ASV i: a one-sided one-sample t-test of the "
+    "closeness values of all members of its module against c_i — "
+    "scipy.stats.ttest_1samp(module closeness values, popmean=c_i, alternative='less'). "
+    "Benjamini–Hochberg correction over all testable network ASVs of the dataset; the criterion "
+    f"is met at q ≤ {CRITERION2_ALPHA:g}.")
+CRITERION2_FORMULA = (
+    "c_i = (n − 1) / Σ d(i, j) in the module subgraph; "
+    "p_i = ttest_1samp(module closeness values, popmean=c_i, alternative='less'); "
+    f"Benjamini–Hochberg over all testable network ASVs; met at q ≤ {CRITERION2_ALPHA:g}")
+CRITERION2_NOT_KEYSTONE = (
+    "Not a keystone on its own: criteria 1 and 3 are not tested — the paper also requires a "
+    "significant NMI (at least one significant CCM link) and presence in at least one stable "
+    "state of the energy landscape; only all three together define a keystone there.")
+CRITERION2_TITLE = "Criterion 2 of the keystone definition (Oldenburg et al. 2024)"
+CRITERION2_MARK = ("meets criterion 2 of the keystone definition (Oldenburg et al. 2024) — "
+                   "not a keystone on its own")
+CRITERION2_SELECTION = (
+    "A selection step: about half of the nodes pass. The t-test compares c_i with the standard "
+    "error of the module mean, not with the spread of the members — it marks the upper part of "
+    "a module, not outliers, and says nothing about an ecological role.")
+CRITERION2_REASONS: dict[str, str] = {
+    "module_too_small": (f"its module has fewer than {CRITERION2_MIN_MODULE} members — too few "
+                         f"closeness values for a t-test"),
+    "module_disconnected": ("its module's subgraph is not connected — the closeness "
+                            "(n − 1) / Σ d is undefined where members cannot reach each other, "
+                            "and no substitute formula is used"),
+    "zero_variance": ("all members of its module have the same closeness — without variance "
+                      "the t-test is undefined"),
+    "not_in_network": ("it is not in the co-occurrence network (no module) — criterion 2 does "
+                       "not apply"),
+}
+_CRITERION2_MODULE_REASONS = ("module_too_small", "module_disconnected", "zero_variance")
+
+
+def criterion2_compute(modules: dict, links, alpha: float = CRITERION2_ALPHA) -> dict:
+    from collections import deque
+    from scipy import stats as sp_stats
+
+    adj: dict = {a: set() for a in modules}
+    for a, b in links:
+        if a == b or a not in modules or b not in modules or modules[a] != modules[b]:
+            continue
+        adj[a].add(b)
+        adj[b].add(a)
+    by_module: dict = {}
+    for a in sorted(modules):
+        by_module.setdefault(modules[a], []).append(a)
+
+    nodes: dict[str, dict] = {}
+    module_rows: list[dict] = []
+    pvals: dict[str, float] = {}
+    for label in sorted(by_module):
+        members = by_module[label]
+        n = len(members)
+        dist_sum: dict[str, int] = {}
+        connected = True
+        for s in members:
+            seen = {s: 0}
+            queue = deque([s])
+            while queue:
+                x = queue.popleft()
+                for y in adj[x]:
+                    if y not in seen:
+                        seen[y] = seen[x] + 1
+                        queue.append(y)
+            if len(seen) < n:
+                connected = False
+            dist_sum[s] = sum(seen.values())
+        closeness = {s: ((n - 1) / dist_sum[s] if connected and n > 1 else None)
+                     for s in members}
+        if n < CRITERION2_MIN_MODULE:
+            reason = "module_too_small"
+        elif not connected:
+            reason = "module_disconnected"
+        elif len(set(dist_sum.values())) == 1:
+            reason = "zero_variance"
         else:
-            herkunft = (f"Modified from {HUB_SOURCE} — the source uses closeness within the "
-                        f"community at k = 1. ")
-        statement = (
-            f"Hub = node whose {label} lies above μ + {k:g}·σ of all {n_with_value} network "
-            f"ASVs with a stored value (μ = {mu:.3f}, σ = {sigma:.3f}, threshold {threshold:.3f}; "
-            f"{len(ids)} of {n_with_value} nodes qualify"
-            + (f"; {n_missing} further network ASVs carry no stored value and can never qualify"
-               if n_missing else "")
-            + "). "
-            + herkunft
-            + "Criteria 1 (significant NMI) and 3 (a stable energy-landscape state) are "
-              "not checked.")
+            reason = None
+        vals = [closeness[s] for s in members]
+        if reason is None:
+            for s in members:
+                pvals[s] = float(sp_stats.ttest_1samp(vals, popmean=closeness[s],
+                                                      alternative="less").pvalue)
+        defined = all(v is not None for v in vals) and n > 1
+        module_rows.append({
+            "module": label, "module_size": n, "testable": reason is None,
+            "reason": reason, "reason_text": CRITERION2_REASONS.get(reason) if reason else None,
+            "mean_closeness": (sum(vals) / n) if defined else None,
+            "sd_closeness": statistics.stdev(vals) if defined else None,
+            "n_pass": 0,
+        })
+        for s in members:
+            nodes[s] = {"module": label, "module_size": n, "closeness": closeness[s],
+                        "p": None, "q": None, "passes": False, "testable": reason is None,
+                        "reason": reason,
+                        "reason_text": CRITERION2_REASONS.get(reason) if reason else None}
 
-    n_zero = sum(1 for v in vals if v == 0.0)
+    tested = sorted(pvals)
+    if tested:
+        qs = sp_stats.false_discovery_control([pvals[s] for s in tested], method="bh")
+        for s, qv in zip(tested, qs):
+            nodes[s]["p"] = pvals[s]
+            nodes[s]["q"] = float(qv)
+            nodes[s]["passes"] = bool(float(qv) <= alpha)
+    ids = sorted(s for s, v in nodes.items() if v["passes"])
+    for row in module_rows:
+        row["n_pass"] = sum(1 for s in ids if nodes[s]["module"] == row["module"])
+    not_testable = []
+    for code in _CRITERION2_MODULE_REASONS:
+        mods = [m for m in module_rows if m["reason"] == code]
+        if mods:
+            not_testable.append({"reason": code, "reason_text": CRITERION2_REASONS[code],
+                                 "n_asv": sum(m["module_size"] for m in mods),
+                                 "n_modules": len(mods),
+                                 "modules": [m["module"] for m in mods]})
+    return {"alpha": alpha, "n_network": len(nodes), "n_modules": len(module_rows),
+            "n_testable": len(tested), "n_pass": len(ids),
+            "n_not_testable": len(nodes) - len(tested), "not_testable": not_testable,
+            "modules": module_rows, "ids": ids, "nodes": nodes}
+
+
+def criterion2_statement(res: dict) -> str:
+    if not res["n_network"]:
+        return (f'"{CRITERION2_LABEL}" cannot be computed: this dataset has no co-occurrence '
+                f'network.')
+    s = (f'{res["n_pass"]} of {res["n_testable"]} testable network ASVs meet '
+         f'"{CRITERION2_LABEL}"')
+    if res["n_not_testable"]:
+        teile = [f'{r["n_asv"]} in {r["n_modules"]} module{"s" if r["n_modules"] != 1 else ""}: '
+                 f'{r["reason_text"]}' for r in res["not_testable"]]
+        s += (f'; {res["n_not_testable"]} further network ASVs cannot be tested '
+              f'({"; ".join(teile)})')
+    return s + "."
+
+
+def _criterion2_texts(res: dict) -> dict:
     return {
-        "measure": measure, "measure_label": label, "k": k,
-        "mu": mu, "sigma": sigma, "threshold": threshold,
-        "sigma_kind": "sample SD (n−1)",
-        "n_network": n_network, "n_with_value": n_with_value,
-        "n_marked": len(ids), "n_zero": n_zero, "ids": ids,
-        "statement": statement,
-        "zero_caveat": (
-            f"{n_zero} of {n_with_value} nodes have the stored value exactly 0 — among "
-            f"themselves this measure separates nothing." if n_zero else None),
-        "measure_caveat": HUB_MEASURE_CAVEATS[measure],
-        "why_not_keystone": HUB_WHY_NOT_KEYSTONE,
-        "node_tooltip": HUB_NODE_TOOLTIP,
-        "title": HUB_TITLE,
-        "source": (None if measure == "con_degree" else HUB_SOURCE),
-        "controls": {
-            "measures": [{"key": m, "label": lbl} for m, lbl in HUB_MEASURES.items()],
-            "default_measure": HUB_MEASURE_DEFAULT, "default_k": HUB_K_DEFAULT,
-            "k_min": HUB_K_MIN, "k_max": HUB_K_MAX, "k_step": HUB_K_STEP,
-        },
+        "label": CRITERION2_LABEL,
+        "title": CRITERION2_TITLE,
+        "mark": CRITERION2_MARK,
+        "paper_wording": CRITERION2_PAPER_WORDING,
+        "method": CRITERION2_METHOD,
+        "formula": CRITERION2_FORMULA,
+        "not_keystone": CRITERION2_NOT_KEYSTONE,
+        "selection_note": (f"{CRITERION2_SELECTION} In this dataset {res['n_pass']} of "
+                           f"{res['n_testable']} testable network ASVs pass."),
+        "source": CRITERION2_SOURCE,
+        "source_doi": CRITERION2_SOURCE_DOI,
+        "source_location": CRITERION2_SOURCE_LOCATION,
+        "statement": criterion2_statement(res),
     }
+
+
+def criterion2(q: Runner, dataset_id: str) -> dict:
+    rows = q("MATCH (a:ASV {dataset_id:$d}) WHERE a.louvain_label IS NOT NULL "
+             "RETURN a.id AS id, a.louvain_label AS module ORDER BY a.id", d=dataset_id)
+    links = q("MATCH (a:ASV {dataset_id:$d})-[:CO_OCCURS_WITH {dataset_id:$d}]-"
+              "(b:ASV {dataset_id:$d}) "
+              "WHERE a.id < b.id AND a.louvain_label IS NOT NULL "
+              "AND a.louvain_label = b.louvain_label "
+              "RETURN DISTINCT a.id AS asv, b.id AS partner ORDER BY asv, partner", d=dataset_id)
+    res = criterion2_compute({r["id"]: r["module"] for r in rows},
+                             [(r["asv"], r["partner"]) for r in links])
+    return {**_criterion2_texts(res), **res}
+
+
+def criterion2_summary(c2: dict) -> dict:
+    return {k: v for k, v in c2.items() if k != "nodes"}
+
+
+def _criterion2_shared(c2: dict) -> dict:
+    return {k: c2[k] for k in ("label", "title", "mark", "method", "formula", "not_keystone",
+                               "selection_note", "source", "source_doi", "source_location")}
+
+
+def criterion2_asv(c2: dict, asv_id: str) -> dict:
+    node = c2["nodes"].get(asv_id)
+    if node is None:
+        node = {"module": None, "module_size": None, "closeness": None, "p": None, "q": None,
+                "passes": False, "testable": False, "reason": "not_in_network",
+                "reason_text": CRITERION2_REASONS["not_in_network"]}
+    if node["testable"]:
+        mod = next(m for m in c2["modules"] if m["module"] == node["module"])
+        wie = (f'closeness {node["closeness"]:.3f} within module M{node["module"]} '
+               f'({node["module_size"]} members, module mean {mod["mean_closeness"]:.3f}); '
+               f'one-sided t-test p = {node["p"]:.3g}, Benjamini–Hochberg q = {node["q"]:.3g} '
+               f'{"≤" if node["passes"] else ">"} {c2["alpha"]:g}')
+        verdict = (f'{"Meets" if node["passes"] else "Does not meet"} '
+                   f'"{CRITERION2_LABEL}": {wie}.')
+    else:
+        verdict = f'Not testable for "{CRITERION2_LABEL}": {node["reason_text"]}.'
+    return {**node, "verdict": verdict, **_criterion2_shared(c2)}
+
+
+def criterion2_module(c2: dict, label: int) -> dict:
+    row = next((m for m in c2["modules"] if m["module"] == label), None)
+    if row is None:
+        row = {"module": label, "module_size": 0, "testable": False, "reason": "not_in_network",
+               "reason_text": CRITERION2_REASONS["not_in_network"], "mean_closeness": None,
+               "sd_closeness": None, "n_pass": 0}
+    meeting = sorted(({"asv_id": s, "closeness": v["closeness"], "p": v["p"], "q": v["q"]}
+                      for s, v in c2["nodes"].items() if v["module"] == label and v["passes"]),
+                     key=lambda m: (m["q"], -m["closeness"], m["asv_id"]))
+    if row["testable"]:
+        verdict = (f'{row["n_pass"]} of {row["module_size"]} members of module M{label} meet '
+                   f'"{CRITERION2_LABEL}" (module mean closeness {row["mean_closeness"]:.3f}, '
+                   f'sd {row["sd_closeness"]:.3f}); Benjamini–Hochberg over all '
+                   f'{c2["n_testable"]} testable network ASVs of the dataset, '
+                   f'q ≤ {c2["alpha"]:g}.')
+    else:
+        verdict = (f'Module M{label} ({row["module_size"]} members) cannot be tested for '
+                   f'"{CRITERION2_LABEL}": {row["reason_text"]}.')
+    return {**row, "members_meeting": meeting, "verdict": verdict, **_criterion2_shared(c2)}

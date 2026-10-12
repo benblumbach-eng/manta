@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { Dataset } from "../api";
@@ -11,21 +11,16 @@ export type BathyMeta = {
   coarse: { cell_deg: number }; windows: { file: string; cell_deg: number }[];
 };
 
-export const DEPTH_RAMP_DARK = ["#cfe0ef", "#b3cee6", "#98bcdb", "#7fabcf", "#6899c2", "#5488b4",
-                                "#4376a4", "#356592", "#2a5079", "#1e3c5e", "#132842", "#0d1a2e"];
-export const DEPTH_RAMP_LIGHT = ["#f7fbff", "#e3eef9", "#cfe1f2", "#b9d3ea", "#a1c4e1", "#86b3d6",
-                                 "#6aa1cb", "#4f8fc0", "#3a7db4", "#2b6aa6", "#1f5694", "#143f7a"];
-export const LAND_DARK = "#3f4756";
-export const LAND_LIGHT = "#9aa3ad";
-const BG_DARK = "#0b1220";
-const BG_LIGHT = "#f6f8fb";
+export { DEPTH_RAMP_DARK, DEPTH_RAMP_LIGHT, LAND_DARK, LAND_LIGHT } from "../design/dataColours";
+import { DEPTH_RAMP_DARK, DEPTH_RAMP_LIGHT, LAND_DARK, LAND_LIGHT, MAP_POINT } from "../design/dataColours";
+import { readTokens } from "../design/tokens";
 
 function fillColorExpr(meta: BathyMeta, light: boolean): any {
   const ramp = light ? DEPTH_RAMP_LIGHT : DEPTH_RAMP_DARK;
   const pairs: any[] = [];
   meta.classes.forEach((c, i) => { pairs.push(c.key, ramp[Math.min(i, ramp.length - 1)]); });
   pairs.push("land", light ? LAND_LIGHT : LAND_DARK);
-  return ["match", ["get", "name"], ...pairs, light ? BG_LIGHT : BG_DARK];
+  return ["match", ["get", "name"], ...pairs, readTokens().surface];
 }
 
 function datasetsGeo(datasets: Dataset[]) {
@@ -58,13 +53,14 @@ function datasetsGeo(datasets: Dataset[]) {
 declare global {
   interface Window {
     __mantaMapInfo?: () => { projection: string; layers: string[]; bathyFeatures: number;
+                             bathyFill?: string | null;
                              punkte?: { n: number; haufen: boolean }[] };
     __mantaMapPixel?: (id: string) => [number, number] | null;
   }
 }
 
 export default function GlobeMap({ datasets, editId, light, onSelect, onHover, onMove, onApi,
-                                   onMoveError, onBathy, onHandles, onReady }: {
+                                   onMoveError, onBathy, onHandles, onReady, onUnavailable }: {
   datasets: Dataset[]; editId: string | null; light: boolean;
   onSelect: (d: Dataset) => void;
   onHover: (ids: string[]) => void;
@@ -73,6 +69,7 @@ export default function GlobeMap({ datasets, editId, light, onSelect, onHover, o
   onBathy: (meta: BathyMeta | null) => void;
   onHandles: (n: number) => void;
   onReady?: () => void;
+  onUnavailable?: () => void;
   onApi?: (api: { zoomIn: () => void; zoomOut: () => void; reset: () => void }) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -83,22 +80,36 @@ export default function GlobeMap({ datasets, editId, light, onSelect, onHover, o
   const pickRef = useRef<maplibregl.Popup | null>(null);
   const loaded = useRef(false);
   const nFeatures = useRef(0);
-  const cb = useRef({ onSelect, onHover, onMove, onMoveError, onBathy, onHandles, onReady, onApi, datasets });
-  cb.current = { onSelect, onHover, onMove, onMoveError, onBathy, onHandles, onReady, onApi, datasets };
+  const cb = useRef({ onSelect, onHover, onMove, onMoveError, onBathy, onHandles, onReady, onApi,
+                      onUnavailable, datasets });
+  cb.current = { onSelect, onHover, onMove, onMoveError, onBathy, onHandles, onReady, onApi,
+                 onUnavailable, datasets };
+  const lightRef = useRef(light);
+  lightRef.current = light;
+
+  const [noGl, setNoGl] = useState(false);
 
   useEffect(() => {
     if (!box.current) return;
-    const map = new maplibregl.Map({
-      container: box.current,
-      style: {
-        version: 8,
-        projection: { type: "globe" },
-        sources: {},
-        layers: [{ id: "bg", type: "background", paint: { "background-color": "rgba(0,0,0,0)" } }],
-      },
-      center: [5, 45], zoom: 1.4, minZoom: 0.6,
-      attributionControl: false, dragRotate: false, pitchWithRotate: false,
-    });
+    let map: maplibregl.Map;
+    try {
+      map = new maplibregl.Map({
+        container: box.current,
+        style: {
+          version: 8,
+          projection: { type: "globe" },
+          sources: {},
+          layers: [{ id: "bg", type: "background", paint: { "background-color": "rgba(0,0,0,0)" } }],
+        },
+        center: [5, 45], zoom: 1.4, minZoom: 0.6,
+        attributionControl: false, dragRotate: false, pitchWithRotate: false,
+      });
+    } catch (e) {
+      console.error("MANTA: the globe could not start (WebGL?)", e);
+      setNoGl(true);
+      cb.current.onUnavailable?.();
+      return;
+    }
     mapRef.current = map;
     cb.current.onApi?.({ zoomIn: () => map.zoomIn(), zoomOut: () => map.zoomOut(),
                          reset: () => map.easeTo({ center: [5, 45], zoom: 1.4 }) });
@@ -117,11 +128,11 @@ export default function GlobeMap({ datasets, editId, light, onSelect, onHover, o
           map.addSource("bathy", { type: "geojson", data: geo });
           map.addLayer({
             id: "bathy-fill", type: "fill", source: "bathy",
-            paint: { "fill-color": fillColorExpr(metaRef.current, light), "fill-antialias": false },
+            paint: { "fill-color": fillColorExpr(metaRef.current, lightRef.current), "fill-antialias": false },
           }, "datasets");
           map.addLayer({
             id: "bathy-seam", type: "line", source: "bathy",
-            paint: { "line-color": fillColorExpr(metaRef.current, light), "line-width": 1.5 },
+            paint: { "line-color": fillColorExpr(metaRef.current, lightRef.current), "line-width": 1.5 },
           }, "datasets");
           cb.current.onBathy(metaRef.current);
         })
@@ -138,8 +149,8 @@ export default function GlobeMap({ datasets, editId, light, onSelect, onHover, o
       map.addLayer({
         id: "datasets", type: "circle", source: "datasets",
         paint: { "circle-radius": ["step", ["get", "n"], 7, 2, 10, 5, 13, 12, 16] as never,
-                 "circle-color": "#ef4444",
-                 "circle-stroke-color": "#0b1220", "circle-stroke-width": 1.5 },
+                 "circle-color": MAP_POINT.fill,
+                 "circle-stroke-color": readTokens().surface, "circle-stroke-width": 1.5 },
       });
       map.addLayer({
         id: "datasets-n", type: "symbol", source: "datasets",
@@ -147,7 +158,7 @@ export default function GlobeMap({ datasets, editId, light, onSelect, onHover, o
         layout: { "text-field": ["to-string", ["get", "n"]] as never, "text-size": 11,
                   "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
                   "text-allow-overlap": true, "text-ignore-placement": true },
-        paint: { "text-color": "#0b1220" },
+        paint: { "text-color": MAP_POINT.label },
       });
       popupRef.current = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 10,
                                                 className: "manta-popup" });
@@ -162,16 +173,16 @@ export default function GlobeMap({ datasets, editId, light, onSelect, onHover, o
       const schieber = (auf: () => void) => {
         const spur = document.createElement("div");
         spur.setAttribute("data-testid", "map-card-slider");
-        spur.className = "relative mt-2 h-9 w-56 rounded-full border border-slate-600 "
-          + "bg-slate-800/80 overflow-hidden select-none";
+        spur.className = "relative mt-2 h-9 w-56 rounded-full border border-line-strong "
+          + "bg-control/80 overflow-hidden select-none";
         const text = document.createElement("div");
-        text.className = "absolute inset-0 grid place-items-center text-[11px] text-slate-400 "
+        text.className = "absolute inset-0 grid place-items-center text-2xs text-fg-muted "
           + "pointer-events-none";
         text.textContent = "slide to open network";
         const griff = document.createElement("button");
         griff.setAttribute("data-testid", "map-card-knob");
         griff.setAttribute("aria-label", "slide to open network");
-        griff.className = "absolute left-1 top-1 h-7 w-7 rounded-full bg-cyan-500 text-slate-900 "
+        griff.className = "absolute left-1 top-1 h-7 w-7 rounded-full bg-accent-fill text-on-warn "
           + "grid place-items-center cursor-grab active:cursor-grabbing";
         griff.textContent = "›";
         spur.append(text, griff);
@@ -216,23 +227,27 @@ export default function GlobeMap({ datasets, editId, light, onSelect, onHover, o
         if (zurueck) {
           const z = document.createElement("button");
           z.setAttribute("data-testid", "map-card-back");
-          z.className = "text-cyan-300 hover:underline mb-1";
+          z.className = "text-accent hover:underline mb-1";
           z.textContent = "‹ all datasets here";
           z.onclick = zurueck;
           el.append(z);
         }
         const t = document.createElement("div");
-        t.className = "text-sm font-medium text-slate-100"; t.textContent = name(d);
+        t.className = "text-sm font-medium text-fg"; t.textContent = name(d);
         el.append(t);
         const c = d.coords as number[] | null;
+        const p = d.derived?.params;
         const zeilen = [
           c ? `${c[1].toFixed(2)}°N ${c[0].toFixed(2)}°E${d.station ? ` · ${d.station}` : ""}` : null,
           `${d.n_sample} samples`,
-          `${d.n_network} of ${d.n_asv} ASVs in the network`,
+          `${d.n_asv} ASVs · ${d.n_network} in the network`,
+          d.derived ? `recomputed ${(d.derived.at ?? "").slice(0, 10) || "—"}`
+            + (p ? ` · CON r ≥ ${p.con_tr} · α ${p.con_alpha} · ${p.num_permutations} permutations` : "")
+            : null,
         ].filter(Boolean) as string[];
         for (const z of zeilen) {
           const r = document.createElement("div");
-          r.className = "text-slate-300"; r.textContent = z;
+          r.className = "text-fg"; r.textContent = z;
           el.append(r);
         }
         el.append(schieber(() => { pickRef.current?.remove(); cb.current.onSelect(d); }));
@@ -244,15 +259,29 @@ export default function GlobeMap({ datasets, editId, light, onSelect, onHover, o
         el.setAttribute("data-testid", "map-pick");
         el.className = "text-xs";
         const k = document.createElement("div");
-        k.className = "text-slate-400 mb-1";
+        k.className = "text-fg-muted mb-1";
         k.textContent = `${ds.length} datasets at this station`;
         el.append(k);
-        for (const d of ds) {
+        const hier = new Set(ds.map((d) => d.dataset_id));
+        const von = (d: Dataset) => (d.derived?.from && hier.has(d.derived.from) ? d.derived.from : null);
+        const geordnet: { d: Dataset; tiefe: number }[] = [];
+        const drin = new Set<string>();
+        const haenge = (d: Dataset, tiefe: number) => {
+          if (drin.has(d.dataset_id)) return;
+          drin.add(d.dataset_id); geordnet.push({ d, tiefe });
+          ds.filter((x) => von(x) === d.dataset_id)
+            .sort((a, b) => (a.derived?.at ?? "").localeCompare(b.derived?.at ?? ""))
+            .forEach((x) => haenge(x, tiefe + 1));
+        };
+        ds.filter((d) => !von(d)).forEach((d) => haenge(d, 0));
+        ds.forEach((d) => haenge(d, 0));
+        for (const { d, tiefe } of geordnet) {
           const b = document.createElement("button");
           b.setAttribute("data-testid", "map-pick-row");
           b.setAttribute("data-ds", d.dataset_id);
-          b.className = "block w-full text-left rounded px-2 py-1 text-slate-100 hover:bg-slate-700";
-          b.textContent = name(d);
+          b.className = "block w-full text-left rounded px-2 py-1 text-fg hover:bg-control-hover";
+          if (tiefe > 0) b.style.paddingLeft = `${8 + Math.min(tiefe, 4) * 12}px`;
+          b.textContent = (tiefe > 0 ? "↳ " : "") + name(d);
           b.onclick = () => pickRef.current?.setDOMContent(karte(d, () => {
             pickRef.current?.setDOMContent(liste(ds));
           }));
@@ -288,10 +317,10 @@ export default function GlobeMap({ datasets, editId, light, onSelect, onHover, o
           zuletzt = schluessel;
           map.getCanvas().style.cursor = "zoom-in";
           const el = document.createElement("div");
-          el.className = "text-xs text-slate-200";
+          el.className = "text-xs text-fg";
           el.textContent = `${f.properties.n} datasets in this area`;
           const c = document.createElement("div");
-          c.className = "text-slate-400"; c.textContent = "click to zoom in";
+          c.className = "text-fg-muted"; c.textContent = "click to zoom in";
           el.append(c);
           popupRef.current?.setLngLat((f.geometry as any).coordinates).setDOMContent(el).addTo(map);
           cb.current.onHover([]);
@@ -312,19 +341,19 @@ export default function GlobeMap({ datasets, editId, light, onSelect, onHover, o
         map.getCanvas().style.cursor = "pointer";
         if (f && popupRef.current) {
           const el = document.createElement("div");
-          el.className = "text-xs space-y-0.5";
+          el.className = "text-xs space-y-1";
           for (const d of ds.slice(0, 4)) {
             const t = document.createElement("div");
-            t.className = "text-slate-100";
+            t.className = "text-fg";
             t.textContent = name(d);
             el.append(t);
           }
           if (ds.length > 4) {
             const r = document.createElement("div");
-            r.className = "text-slate-400"; r.textContent = `and ${ds.length - 4} more`;
+            r.className = "text-fg-muted"; r.textContent = `and ${ds.length - 4} more`;
             el.append(r);
           }
-          const c = document.createElement("div"); c.className = "text-slate-400 pt-0.5";
+          const c = document.createElement("div"); c.className = "text-fg-muted pt-1";
           c.textContent = ds.length > 1 ? "click to choose" : "click for details";
           el.append(c);
           popupRef.current.setLngLat((f.geometry as any).coordinates).setDOMContent(el).addTo(map);
@@ -364,6 +393,8 @@ export default function GlobeMap({ datasets, editId, light, onSelect, onHover, o
         projection: (map as any).getProjection?.()?.type ?? "unknown",
         layers: map.getStyle().layers.map((l) => l.id),
         bathyFeatures: map.getSource("bathy") ? nFeatures.current : 0,
+        bathyFill: map.getLayer("bathy-fill")
+          ? JSON.stringify(map.getPaintProperty("bathy-fill", "fill-color")) : null,
         punkte: [...new Map(map.querySourceFeatures("datasets").map((f) => [
           f.properties?.cluster ? `h${f.properties.cluster_id}` : String(f.properties?.ids ?? ""),
           { n: Number(f.properties?.n ?? 1), haufen: !!f.properties?.cluster },
@@ -406,7 +437,7 @@ export default function GlobeMap({ datasets, editId, light, onSelect, onHover, o
     markerRef.current?.remove(); markerRef.current = null;
     const d = datasets.find((x) => x.dataset_id === editId && x.coords);
     if (!map || !d) { onHandles(0); return; }
-    const m = new maplibregl.Marker({ draggable: true, color: "#f59e0b" })
+    const m = new maplibregl.Marker({ draggable: true, color: MAP_POINT.newPoint })
       .setLngLat(d.coords as [number, number]).addTo(map);
     m.on("dragend", () => {
       const p = m.getLngLat().wrap();
@@ -423,6 +454,15 @@ export default function GlobeMap({ datasets, editId, light, onSelect, onHover, o
   return (
     <div className="absolute inset-0" data-testid="globe-map">
       <div ref={box} className="h-full w-full" />
+      {noGl && (
+        <div data-testid="globe-unavailable"
+          className="absolute inset-0 grid place-items-center p-6 text-sm text-fg-muted">
+          <p className="max-w-sm text-center leading-snug">
+            The globe needs WebGL, which this browser does not provide — pick a dataset from
+            the list on the left.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

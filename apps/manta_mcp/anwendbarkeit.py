@@ -35,11 +35,10 @@ def _traits(q, d):
 
 
 def _env_variables(q, d):
-    rows = q("MATCH (v:EnvVariable {dataset_id:$d}) RETURN count(v) AS n", d=d)
+    rows = q("MATCH (s:Sample {dataset_id:$d}) WHERE any(k IN $keys WHERE s[k] IS NOT NULL) "
+             "RETURN count(s) AS n", d=d, keys=semantics.ENVIRONMENT_KEYS)
     n = rows[0]["n"] if rows else 0
-    return n > 0, None if n else (
-        "No environmental variables were supplied with this dataset, so there is nothing to "
-        "link an ASV to.")
+    return n > 0, None if n else semantics.ENV_NOT_MEASURED
 
 
 def _network(q, d):
@@ -59,10 +58,8 @@ def _spectrum(q, d):
 
 
 def _station(q, d):
-    rows = q("MATCH (:Sample {dataset_id:$d})-[:AT_STATION]->(st:Station) "
-             "RETURN count(DISTINCT st) AS n", d=d)
-    n = rows[0]["n"] if rows else 0
-    return n > 0, None if n else semantics.LIGHT_ABSENT_NO_STATION
+    grund = semantics.station_absent_reason(q, d)
+    return grund is None, grund
 
 
 BEDINGUNGEN = {
@@ -79,13 +76,15 @@ BEDINGUNGEN = {
 
 SUBJEKTABHAENGIG = {
     "seasonality_test": f"needs at least two calendar months with {statistik.MIN_PER_GROUP} "
-                        f"detections of THIS subject",
-    "trend_test": "needs at least 8 samples with a detection of THIS subject",
+                        f"detections of THIS subject (months with fewer than "
+                        f"{statistik.MIN_PER_GROUP} samples are left out)",
+    "trend_test": f"needs at least {statistik.MIN_SERIES} samples with a detection of THIS subject",
     "pair_proportionality": f"needs at least {statistik.MIN_PER_GROUP + 1} samples in which "
                             f"BOTH ASVs were detected",
     "group_comparison_test": f"needs at least {statistik.MIN_PER_GROUP} detections of THIS "
                              f"subject in each of the two groups",
-    "environment_correlation": "needs at least 8 samples with both a detection and a measurement",
+    "environment_correlation": f"needs at least {statistik.MIN_SERIES} samples with both a "
+                               f"detection and a measurement",
 }
 
 

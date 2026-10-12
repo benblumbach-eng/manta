@@ -54,6 +54,8 @@ SOURCES = {
 }
 MARKER_SOURCES = {"18S": ("mdb", "tmd", "pr2fun"), "16S": ("faprotax",)}
 PR2FUN_RANKS = ("species", "genus", "family", "order", "class", "phylum")
+PR2FUN_RESOLUTION = "class"
+RANK_LADDER = ("species", "genus", "family", "order", "class", "phylum")
 
 
 def sha256(path: Path) -> str:
@@ -159,8 +161,13 @@ def join_pr2fun(tbl: dict, lineage: dict) -> list[dict]:
             continue
         fun = tbl["name"].get(_norm_species(name))
         if fun:
+            if rank in ("class", "phylum"):
+                aussage, quelle = rank, f"{label}, {rank}"
+            else:
+                aussage = PR2FUN_RESOLUTION
+                quelle = f"{label}, class (assigned per class; matched by {rank} name)"
             return [{"function": semantics.pr2_function_label(fun),
-                     "source": f"{label}, {rank}", "rank": rank}]
+                     "source": quelle, "rank": aussage}]
     return []
 
 
@@ -215,7 +222,7 @@ def _finer(a: str | None, b: str | None) -> str | None:
         return b
     if b is None:
         return a
-    return a if FINE_TO_COARSE.index(a) <= FINE_TO_COARSE.index(b) else b
+    return a if RANK_LADDER.index(a) <= RANK_LADDER.index(b) else b
 
 
 def lineage_strings(lineage: dict) -> dict[str, str]:

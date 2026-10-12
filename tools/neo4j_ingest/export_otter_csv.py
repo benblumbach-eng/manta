@@ -4,11 +4,13 @@ import argparse
 import csv
 from pathlib import Path
 
-from ingest import connect
+from ingest import ENV_COLUMNS, connect
 
 TAXA_COLUMNS = ["Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species"]
 TAXA_PROPS = ["kingdom", "phylum", "class", "order", "family", "genus", "species"]
-ENV_PROPS = ["MLD", "temp", "PW_frac", "chl_sens", "PAR_satellite", "sal", "O2_conc", "depth"]
+
+
+SAMPLE_ORDER = "ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id"
 
 
 def _q(driver, query, **params):
@@ -20,7 +22,7 @@ def export(driver, dataset_id: str, out: Path) -> dict:
     out.mkdir(parents=True, exist_ok=True)
 
     samples = _q(driver, "MATCH (s:Sample {dataset_id:$d}) RETURN s.sample_id AS id, "
-                         "toString(s.date) AS date, properties(s) AS props ORDER BY date, id",
+                         "properties(s) AS props " + SAMPLE_ORDER,
                  d=dataset_id)
     asvs = _q(driver, "MATCH (a:ASV {dataset_id:$d}) RETURN a.id AS id, properties(a) AS props "
                       "ORDER BY a.id", d=dataset_id)
@@ -47,10 +49,11 @@ def export(driver, dataset_id: str, out: Path) -> dict:
 
     with open(out / "environment_info.csv", "w", newline="", encoding="utf-8") as fh:
         w = csv.writer(fh, delimiter=";")
-        w.writerow(["date"] + ENV_PROPS)
+        w.writerow(["date"] + list(ENV_COLUMNS))
         for s in samples:
             p = s["props"]
-            w.writerow([s["id"]] + ["" if p.get(k) is None else p[k] for k in ENV_PROPS])
+            w.writerow([s["id"]] + ["" if p.get(prop) is None else p[prop]
+                                    for prop in ENV_COLUMNS.values()])
 
     return {"samples": len(samples), "asvs": len(asv_ids), "cells": len(cells)}
 

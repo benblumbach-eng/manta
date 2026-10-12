@@ -24,6 +24,7 @@ export type TaxonLink = {
   target: string;
   n_links: number;
   n_directed: number;
+  n_crossing: number;
 };
 
 const platzhalter = (v: string | null | undefined) =>
@@ -81,9 +82,16 @@ export function taxonPoints(nodes: NetNode[]): TaxonPoint[] {
   return punkte;
 }
 
-export function taxonLinks(points: TaxonPoint[], edges: NetEdge[]): TaxonLink[] {
+export function memberPoint(points: TaxonPoint[]): Map<string, string> {
   const wohin = new Map<string, string>();
   for (const p of points) for (const m of p.members) wohin.set(m.id, p.id);
+  return wohin;
+}
+
+export function taxonLinks(points: TaxonPoint[], edges: NetEdge[]): TaxonLink[] {
+  const wohin = memberPoint(points);
+  const modulVon = new Map<string, number>();
+  for (const p of points) for (const m of p.members) modulVon.set(m.id, m.cluster);
   const acc = new Map<string, TaxonLink>();
   for (const e of edges) {
     const a = wohin.get(e.source);
@@ -91,9 +99,10 @@ export function taxonLinks(points: TaxonPoint[], edges: NetEdge[]): TaxonLink[] 
     if (!a || !b || a === b) continue;
     const [s, t] = a < b ? [a, b] : [b, a];
     const k = s + SEP + t;
-    const cur = acc.get(k) ?? { source: s, target: t, n_links: 0, n_directed: 0 };
+    const cur = acc.get(k) ?? { source: s, target: t, n_links: 0, n_directed: 0, n_crossing: 0 };
     cur.n_links += 1;
     if ((e.ccm_dirs ?? 0) > 0) cur.n_directed += 1;
+    if (modulVon.get(e.source) !== modulVon.get(e.target)) cur.n_crossing += 1;
     acc.set(k, cur);
   }
   return [...acc.values()].sort((x, y) =>

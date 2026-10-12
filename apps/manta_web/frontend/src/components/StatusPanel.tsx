@@ -16,25 +16,25 @@ export default function StatusPanel() {
     adminStatus().then(setState).catch((e) => setErr(String(e.message ?? e)));
   }, []);
 
-  if (err) return <p data-testid="status-error" className="text-xs text-red-400">{err}</p>;
-  if (!state) return <p className="text-xs text-slate-500">…</p>;
+  if (err) return <p data-testid="status-error" className="text-xs text-danger">{err}</p>;
+  if (!state) return <p className="text-xs text-fg-muted">…</p>;
 
   return (
     <section className="space-y-1" data-testid="admin-status">
-      <h3 className="text-sm font-medium text-slate-200">Status</h3>
+      <h3 className="text-sm font-medium text-fg">Status</h3>
       <table className="w-full text-sm">
         <tbody>
           {(Object.keys(LABEL) as (keyof AdminStatus["checks"])[]).map((key) => {
             const check = state.checks[key];
             return (
-              <tr key={key} className="border-t border-slate-800" data-testid={`status-${key}`}>
-                <td className="py-1.5 w-32 text-slate-300">{LABEL[key]}</td>
-                <td className="py-1.5 w-6">
-                  <span className={check.ok ? "text-emerald-400" : "text-amber-400"}>
+              <tr key={key} className="border-t border-line-subtle" data-testid={`status-${key}`}>
+                <td className="py-2 w-32 text-fg">{LABEL[key]}</td>
+                <td className="py-2 w-6">
+                  <span className={check.ok ? "text-ok" : "text-warn"}>
                     {check.ok ? "●" : "○"}
                   </span>
                 </td>
-                <td className="py-1.5 text-slate-400">{check.detail}</td>
+                <td className="py-2 text-fg-muted">{check.detail}</td>
               </tr>
             );
           })}

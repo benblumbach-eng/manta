@@ -70,7 +70,9 @@ def main() -> int:
     p.add_argument("--con-alpha", type=float, default=None,
                    help="p-value threshold of the CON network (OTTER default: 0.05)")
     p.add_argument("--ccmn-tr", type=float, default=None,
-                   help="CCM (NMI) threshold (OTTER default: 0.00)")
+                   help="CCM (NMI) threshold, recorded only: it goes into the file names and "
+                        "manta_manifest.json, but OTTER does not apply it, so it filters no CCM "
+                        "direction (OTTER default: 0.00)")
     p.add_argument("--louvain-res", type=float, default=None,
                    help="Louvain resolution (OTTER default: 1)")
     p.add_argument("--fft-coeffs", type=int, default=None,
@@ -109,7 +111,8 @@ def main() -> int:
         val = getattr(args, arg)
         if val is not None:
             cfg[key] = val
-    print(f"[otter] Thresholds: CON {cfg['CON_TR']} / p {cfg['CON_ALPHA']} · CCM {cfg['CCMN_TR']} · "
+    print(f"[otter] Thresholds: CON {cfg['CON_TR']} / p {cfg['CON_ALPHA']} · "
+          f"CCM {cfg['CCMN_TR']} (recorded only, not applied by OTTER) · "
           f"permutations {cfg['NUM_PERMUTATIONS']} · FFT {cfg['FFT_COEFFS']} · "
           f"Louvain {cfg['LOUVAIN_RES']}", flush=True)
 
@@ -134,6 +137,10 @@ def main() -> int:
 
     def load_spec():
         df = pd.read_csv(args.abundance, sep=";", index_col=0)
+        doppelt = sorted({str(i) for i in df.index[df.index.duplicated()]})
+        if doppelt:
+            raise SystemExit(f"[otter] ERROR: {args.abundance} has more than one row for the "
+                             f"sample(s) {doppelt[:5]}; each row must be a different sample.")
         _scope["n_asv_available"] = int(df.shape[1])
         if args.head and args.head > 0:
             df = df.T.head(args.head).T
@@ -197,7 +204,8 @@ def main() -> int:
         "pv": pval_path,
         "fft": fft_path,
         "params": {"con_tr": cfg["CON_TR"], "con_alpha": cfg["CON_ALPHA"],
-                   "ccmn_tr": cfg["CCMN_TR"], "ccmn_alpha": str(cfg["CCMN_ALPHA"]),
+                   "ccmn_tr": cfg["CCMN_TR"], "ccmn_tr_applied": False,
+                   "ccmn_alpha": str(cfg["CCMN_ALPHA"]),
                    "louvain_res": cfg["LOUVAIN_RES"], "fft_coeffs": cfg["FFT_COEFFS"],
                    "num_permutations": cfg["NUM_PERMUTATIONS"], "num_samples": cfg["NUM_SAMPLES"],
                    "hellinger": bool(cfg["HELLENIGER_NORM"]),

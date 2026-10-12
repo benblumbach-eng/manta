@@ -1,15 +1,38 @@
 import { useEffect, useRef, useState } from "react";
 import * as echarts from "echarts";
 import ReactECharts from "echarts-for-react";
-import { getFastqPreflight, getImportTools, uploadFastq, uploadImport,
+import { getFastqPreflight, getImportTools, uploadFastq, uploadImport, PRODUCTION_THRESHOLDS,
          type FastqPreflight, type ImportTools, type ThresholdInput } from "../api";
 import InfoTip from "./InfoTip";
+import { Button, Dialog, StateNotice } from "./ui";
+import { Segmented } from "./controls";
+import { useTokens } from "../design/tokens";
+import { MAP_POINT } from "../design/dataColours";
 
 type Source = "dada2" | "otterout" | "fastq";
 
 const RDATA = /\.(rdata|rda)$/i;
 const FASTA = /\.(fa|fasta|fna)$/i;
 const CSVNAME = /\.csv$/i;
+
+const FASTQ_PAIR = /^(.+)_R([12])_001\.fastq\.gz$/;
+const READ_FILE = /\.(gz|fastq|fq)$/i;
+
+function fastqPairs(files: File[]): { n: number; unpaired: string[]; offPattern: string[] } {
+  const stems = new Map<string, Set<string>>();
+  const offPattern: string[] = [];
+  for (const f of files) {
+    const m = FASTQ_PAIR.exec(f.name);
+    if (!m) { if (READ_FILE.test(f.name)) offPattern.push(f.name); continue; }
+    if (!stems.has(m[1])) stems.set(m[1], new Set());
+    stems.get(m[1])!.add(m[2]);
+  }
+  const unpaired = [...stems].filter(([, r]) => r.size !== 2).map(([s]) => s).sort();
+  return { n: stems.size - unpaired.length, unpaired, offPattern };
+}
+
+const kurz = (xs: string[], n = 5) =>
+  xs.slice(0, n).join(", ") + (xs.length > n ? ` (+${xs.length - n} more)` : "");
 const TABLES_REQUIRED = ["abundance.csv", "taxa_info.csv", "environment_info.csv"];
 const OTTER_OUT_REQUIRED = ["abundance.csv", "environment_info.csv"];
 const OTTER_OUT_MANIFEST = "manta_manifest.json";
@@ -57,14 +80,14 @@ const SOURCE_DETAIL: Record<Source, React.ReactNode> = {
   </>,
 };
 
-const inputCls = "w-full mt-0.5 px-2 py-1 rounded bg-slate-950 border border-slate-700 text-sm " +
-                 "text-slate-100 focus:border-cyan-500 focus:outline-none";
+const inputCls = "w-full mt-1 px-2 py-1 rounded-md bg-control border border-line-strong text-sm " +
+                 "text-fg focus:border-accent focus:outline-none";
 
 function Field({ label, children, tip }:
   { label: string; children: React.ReactNode; tip?: React.ReactNode }) {
   return (
     <label className="block">
-      <span className="text-[11px] uppercase tracking-wide text-slate-500 flex items-center">
+      <span className="text-xs text-fg-muted flex items-center">
         {label}{tip && <InfoTip title={label}>{tip}</InfoTip>}
       </span>
       {children}
@@ -75,6 +98,7 @@ function Field({ label, children, tip }:
 function LocationPicker({ lat, lon, onPick }:
   { lat: string; lon: string; onPick: (lat: number, lon: number) => void }) {
   const [ready, setReady] = useState(false);
+  const tok = useTokens();
   const bound = useRef(false);
   const pick = useRef(onPick);
   pick.current = onPick;
@@ -90,23 +114,23 @@ function LocationPicker({ lat, lon, onPick }:
       .catch(() => setReady(false));
   }, []);
 
-  if (!ready) return <div className="h-40 grid place-items-center text-xs text-slate-500">loading map …</div>;
+  if (!ready) return <div className="h-40 grid place-items-center"><StateNotice state="loading" inline>loading map …</StateNotice></div>;
 
   const has = lat.trim() !== "" && lon.trim() !== "" &&
               !Number.isNaN(Number(lat)) && !Number.isNaN(Number(lon));
   const option = {
     backgroundColor: "transparent",
     geo: { map: "world", roam: true, silent: true,
-           itemStyle: { areaColor: "#13203a", borderColor: "#2a3a5e" } },
+           itemStyle: { areaColor: tok.control, borderColor: tok.border } },
     series: [{
       type: "scatter", coordinateSystem: "geo", symbolSize: 14,
-      itemStyle: { color: "#22d3ee", borderColor: "#0b1220", borderWidth: 1 },
+      itemStyle: { color: MAP_POINT.newPoint, borderColor: tok.surface, borderWidth: 1 },
       data: has ? [{ value: [Number(lon), Number(lat)] }] : [],
     }],
   };
 
   return (
-    <div data-testid="import-map" className="h-40 rounded border border-slate-700 cursor-crosshair">
+    <div data-testid="import-map" className="h-40 rounded border border-line cursor-crosshair">
       <ReactECharts
         option={option} style={{ height: "100%", width: "100%" }} notMerge
         onChartReady={(chart: any) => {
@@ -124,10 +148,7 @@ function LocationPicker({ lat, lon, onPick }:
   );
 }
 
-const DEFAULT_THRESHOLDS: ThresholdInput = {
-  con_tr: 0.7, con_alpha: 0.05, ccmn_tr: 0, louvain_res: 1,
-  fft_coeffs: 14, num_permutations: 999, num_samples: 10,
-};
+const DEFAULT_THRESHOLDS: ThresholdInput = PRODUCTION_THRESHOLDS;
 
 export default function ImportDialog({ onClose, onStarted }:
   { onClose: () => void; onStarted: (jobId: string) => void }) {
@@ -138,7 +159,6 @@ export default function ImportDialog({ onClose, onStarted }:
   const [station, setStation] = useState("");
   const [lat, setLat] = useState("");
   const [lon, setLon] = useState("");
-  const [topN, setTopN] = useState(500);
   const [files, setFiles] = useState<File[]>([]);
   const [metadata, setMetadata] = useState<File | null>(null);
   const [pre, setPre] = useState<FastqPreflight | null>(null);
@@ -155,7 +175,9 @@ export default function ImportDialog({ onClose, onStarted }:
   const entryState = tools?.entries[source];
 
   const idOk = /^[a-z0-9_]{3,}$/.test(datasetId);
-  const nFastqPairs = files.filter((f) => f.name.includes("_R1_")).length;
+  const fq = fastqPairs(files);
+  const nFastqPairs = fq.n;
+  const fastqOk = nFastqPairs >= 8 && fq.unpaired.length === 0 && fq.offPattern.length === 0;
   const has = (n: string) => files.some((f) => f.name === n);
   const dada2Missing = [
     files.filter((f) => RDATA.test(f.name)).length >= 2 ? ""
@@ -168,7 +190,7 @@ export default function ImportDialog({ onClose, onStarted }:
   const otterOutTablesOk = has(OTTER_OUT_MANIFEST) || OTTER_OUT_DEFAULT_TABLES.every(has);
   const stage1Ok = dada2Missing.length === 0 || tablesMissing.length === 0;
   const canStart = idOk && !busy && files.length > 0 && entryState?.ok !== false &&
-    (source === "fastq" ? nFastqPairs >= 8
+    (source === "fastq" ? fastqOk
       : source === "dada2" ? stage1Ok
       : otterOutMissing.length === 0 && otterOutTablesOk);
 
@@ -184,7 +206,7 @@ export default function ImportDialog({ onClose, onStarted }:
       };
       const res = source === "fastq"
         ? await uploadFastq(files, datasetId, opts.region,
-            { metadata, top_n: topN, station: opts.station, lat: opts.lat, lon: opts.lon, marker,
+            { metadata, station: opts.station, lat: opts.lat, lon: opts.lon, marker,
               thresholds: thr })
         : await uploadImport(files, datasetId, opts.region,
             { station: opts.station, lat: opts.lat, lon: opts.lon, marker,
@@ -209,26 +231,22 @@ export default function ImportDialog({ onClose, onStarted }:
   );
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60" data-testid="import-dialog">
-      <div className="w-[560px] max-h-[90vh] overflow-auto rounded-lg border border-slate-700 bg-slate-900 p-5 space-y-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-slate-100 font-medium">Import a dataset</h2>
-          <button onClick={onClose} data-testid="import-cancel" className="text-slate-400 hover:text-white">✕</button>
-        </div>
-
-        <div className="flex gap-1 text-xs">
-          {([["fastq", "Raw reads (FASTQ)"], ["dada2", "DADA2 output (ASVs)"],
-             ["otterout", "OTTER output (network)"]] as [Source, string][]).map(([v, l]) => (
-            <button key={v} data-testid={`source-${v}`} onClick={() => { setSource(v); setFiles([]); }}
-              className={`px-3 py-1 rounded border ${source === v
-                ? "border-cyan-400 text-cyan-300" : "border-slate-700 text-slate-400 hover:border-slate-500"}`}>
-              {l}
-            </button>
-          ))}
-        </div>
+    <Dialog title="Import a dataset" onClose={onClose} testid="import-dialog" closeTestid="import-cancel"
+      width="max-w-[560px]" footer={<>
+        <Button size="md" onClick={onClose}>Cancel</Button>
+        <Button size="md" variant="primary" data-testid="import-start" onClick={start} disabled={!canStart}
+          reason={busy ? "the import is starting" : "complete the files and the name first (see the line above)"}>
+          {busy ? "starting …" : "Start import"}
+        </Button>
+      </>}>
+      <div className="space-y-3">
+        <Segmented value={source} onChange={(v) => { setSource(v); setFiles([]); }}
+          options={([["fastq", "Raw reads (FASTQ)"], ["dada2", "DADA2 output (ASVs)"],
+                     ["otterout", "OTTER output (network)"]] as [Source, string][]).map(([v, l]) => (
+            { value: v, label: l, testid: `source-${v}` }))} />
 
         <div data-testid="source-declaration"
-          className="flex items-start gap-1 rounded border border-slate-700/60 bg-slate-950/40 p-2 text-xs text-slate-400">
+          className="flex items-start gap-1 rounded-md border border-line bg-surface p-2 text-xs text-fg-muted">
           <span>{SOURCE_LINE[source]}</span>
           <InfoTip title="What this entrance needs and what will run">
             {SOURCE_DETAIL[source]}
@@ -236,21 +254,28 @@ export default function ImportDialog({ onClose, onStarted }:
         </div>
 
         {entryState && !entryState.ok && (
-          <div data-testid="import-unavailable" className="rounded border border-amber-700/60 bg-amber-950/30 p-2 text-xs text-amber-300">
+          <div data-testid="import-unavailable" className="rounded border border-warn bg-warn-soft p-2 text-xs text-warn">
             This entrance cannot run here — missing analysis tools: {entryState.missing.join(", ")}.{" "}
             {tools?.hint}
           </div>
         )}
         {source === "fastq" && entryState?.ok !== false && pre && !pre.ok && (
-          <div data-testid="fastq-unavailable" className="rounded border border-amber-700/60 bg-amber-950/30 p-2 text-xs text-amber-300">
+          <div data-testid="fastq-unavailable" className="rounded border border-warn bg-warn-soft p-2 text-xs text-warn">
             FASTQ import is not possible on this server — {pre.error}.
             The route via DADA2 output still works.
           </div>
         )}
         {source === "fastq" && pre?.ok && (
-          <div className="text-xs text-slate-400">
-            DADA2 {pre.dada2_version} ready. <span className="text-amber-400">Runs for a long
+          <div className="text-xs text-fg-muted">
+            DADA2 {pre.dada2_version} ready. <span className="text-warn">Runs for a long
             time</span> — about 20 minutes for 24 samples, and the machine is busy throughout.
+          </div>
+        )}
+        {source !== "otterout" && (
+          <div data-testid="import-all-asvs" className="text-xs text-fg-muted space-y-1">
+            <p>All ASVs are computed — none are dropped.</p>
+            <p>Run time and memory are estimated once the ASVs are known; too little memory stops
+            the import there.</p>
           </div>
         )}
 
@@ -273,24 +298,10 @@ export default function ImportDialog({ onClose, onStarted }:
               <option value="16S">16S (prokaryotes)</option>
             </select>
           </Field>
-          {source === "fastq" && (
-            <Field label="Discard rare ASVs — keep the N most abundant" tip={
-              <><p>DADA2 typically finds several thousand ASVs. This keeps only the N with the
-              most reads overall and throws the rest away <strong>before</strong> the network is
-              built.</p>
-              <p>Why: OTTER compares every pair, so the cost grows with the square of the count —
-              a few thousand ASVs would run for days, a few hundred for minutes. The share of
-              reads that the kept ASVs cover depends on the dataset; the import reports it.</p>
-              <p>This is a pragmatic cut for computability, not a statistical method — the
-              discarded ASVs are gone from the dataset, not just from the network.</p></>}>
-              <input data-testid="import-topn" type="number" value={topN} className={input}
-                onChange={(e) => setTopN(Math.max(50, Number(e.target.value) || 500))} />
-            </Field>
-          )}
         </div>
 
-        <fieldset className="border border-slate-700 rounded p-2">
-          <legend className="text-[11px] uppercase tracking-wide text-slate-500 px-1 flex items-center">
+        <fieldset className="border border-line rounded-md p-2">
+          <legend className="text-xs font-semibold text-fg-muted px-1 flex items-center">
             Origin
             <InfoTip title="Why the origin matters">
               <p>Without it the dataset does <strong>not</strong> appear on the world map — on
@@ -309,14 +320,14 @@ export default function ImportDialog({ onClose, onStarted }:
           </div>
           <button type="button" data-testid="import-map-toggle"
             onClick={() => setShowMap((v) => !v)}
-            className="mt-2 text-xs text-cyan-300 hover:underline">
+            className="mt-2 text-xs text-accent hover:underline">
             {showMap ? "hide map" : "or pick it on the map …"}
           </button>
           {showMap && (
             <div className="mt-1 space-y-1">
               <LocationPicker lat={lat} lon={lon}
                 onPick={(la, lo) => { setLat(String(la)); setLon(String(lo)); }} />
-              <div className="text-[11px] text-slate-500">
+              <div className="text-2xs text-fg-muted">
                 Click to place the dot; drag and scroll to zoom. Typing in the fields still works.
               </div>
             </div>
@@ -324,19 +335,21 @@ export default function ImportDialog({ onClose, onStarted }:
         </fieldset>
 
         {source !== "otterout" && (
-          <fieldset className="border border-slate-700 rounded p-2" data-testid="import-thresholds">
-            <legend className="text-[11px] uppercase tracking-wide text-slate-500 px-1 flex items-center gap-2">
+          <fieldset className="border border-line rounded p-2" data-testid="import-thresholds">
+            <legend className="text-xs font-semibold text-fg-muted px-1 flex items-center gap-2">
               Network thresholds
               <InfoTip title="What these decide">
                 <p>Which correlated pairs become links at all. In practice the correlation cut
                 does the work — the CON p-value is a statistic over the Fourier coefficients and
                 weak on its own.</p>
-                <p>The permutation count caps how fine the CCM p-values can be: with 2, only 0.0
-                and 0.025 exist. They can also be changed later on an existing dataset.</p>
+                <p>The permutation count sets how fine the CCM p-values can be: p moves in steps
+                of one over permutations × sampled pairs × 2 (at most the number of directions
+                tested). With 2 permutations and 10 pairs that is 1/40, so below the 0.05 cut only
+                0.0 and 0.025 remain. They can also be changed later on an existing dataset.</p>
               </InfoTip>
               <button type="button" data-testid="import-thresholds-toggle"
                 onClick={() => setShowThresholds((v) => !v)}
-                className="normal-case tracking-normal text-cyan-300 hover:underline">
+                className="normal-case tracking-normal text-accent hover:underline">
                 {showThresholds ? "hide" : `defaults (Pearson ≥ ${thr.con_tr}) — change …`}
               </button>
             </legend>
@@ -346,8 +359,6 @@ export default function ImportDialog({ onClose, onStarted }:
                   <p>Higher means fewer, tighter links; lower opens the network up.</p>)}
                 {num("con_alpha", "CON p <", 0.005,
                   <p>Benjamini-Hochberg corrected, and weak on its own here.</p>)}
-                {num("ccmn_tr", "CCM ≥", 0.01,
-                  <p>Applied before the permutation pruning, which does the selecting.</p>)}
                 {num("num_permutations", "permutations", 1,
                   <p>Caps the resolution of the CCM p-values. More costs time in proportion.</p>)}
                 {num("fft_coeffs", "Fourier coeff.", 1,
@@ -382,14 +393,14 @@ export default function ImportDialog({ onClose, onStarted }:
               e.target.value = "";
             }} />
           {files.length > 0 && (
-            <ul data-testid="import-file-list" className="mt-1 max-h-32 overflow-auto space-y-0.5">
+            <ul data-testid="import-file-list" className="mt-1 max-h-32 overflow-auto space-y-1">
               {files.map((f) => (
-                <li key={f.name} className="flex items-center justify-between text-xs text-slate-400">
+                <li key={f.name} className="flex items-center justify-between text-xs text-fg-muted">
                   <span className="truncate">{f.name}</span>
                   <button type="button" data-testid={`import-file-remove-${f.name}`}
                     title={`remove ${f.name}`} aria-label={`remove ${f.name}`}
                     onClick={() => setFiles((prev) => prev.filter((x) => x.name !== f.name))}
-                    className="ml-2 text-slate-500 hover:text-red-400">✕</button>
+                    className="ml-2 text-fg-muted hover:text-danger">✕</button>
                 </li>
               ))}
             </ul>
@@ -404,10 +415,14 @@ export default function ImportDialog({ onClose, onStarted }:
           </Field>
         )}
 
-        <div className="text-xs text-slate-500" data-testid="import-summary">
+        <div className="text-xs text-fg-muted" data-testid="import-summary">
           {files.length === 0 ? "no files selected"
             : source === "fastq"
-              ? `${files.length} files · ${nFastqPairs} samples${nFastqPairs < 8 ? " — too few for a network (min. 8)" : ""}`
+              ? `${files.length} files · ${nFastqPairs} samples`
+                + (fq.offPattern.length > 0 ? ` — not named <sample>_R1_001.fastq.gz / `
+                    + `<sample>_R2_001.fastq.gz: ${kurz(fq.offPattern)}` : "")
+                + (fq.unpaired.length > 0 ? ` — without partner: ${kurz(fq.unpaired)}` : "")
+                + (nFastqPairs < 8 ? " — too few for a network (min. 8)" : "")
               : source === "otterout"
                 ? `${files.length} files${otterOutMissing.length > 0 ? ` — missing: ${otterOutMissing.join(", ")}`
                     : !otterOutTablesOk ? ` — missing: ${OTTER_OUT_MANIFEST} (or the default-named network tables)` : ""}`
@@ -416,22 +431,12 @@ export default function ImportDialog({ onClose, onStarted }:
                     : tablesMissing.length < dada2Missing.length
                       ? ` — missing: ${tablesMissing.join(", ")}`
                       : ` — missing: ${dada2Missing.join("; ")}`}`}
-          {datasetId && !idOk && <span className="text-amber-400"> · name needs at least 3 characters (a–z, 0–9, _)</span>}
+          {datasetId && !idOk && <span className="text-warn"> · name needs at least 3 characters (a–z, 0–9, _)</span>}
           {source === "fastq" && !metadata && <span> · without metadata.csv: no season statements</span>}
         </div>
 
-        {err && <div data-testid="import-error" className="text-xs text-red-400">{err}</div>}
-
-        <div className="flex justify-end gap-2 pt-1">
-          <button onClick={onClose} className="px-3 py-1.5 rounded border border-slate-600 text-slate-300 text-sm">
-            Cancel
-          </button>
-          <button data-testid="import-start" onClick={start} disabled={!canStart}
-            className="px-3 py-1.5 rounded bg-cyan-700 text-white text-sm disabled:opacity-40">
-            {busy ? "starting …" : "Start import"}
-          </button>
-        </div>
+        {err && <div data-testid="import-error" className="text-xs text-danger">{err}</div>}
       </div>
-    </div>
+    </Dialog>
   );
 }

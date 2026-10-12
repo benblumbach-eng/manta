@@ -20,7 +20,10 @@ REFERENCE = (
     "NOAA Global Monitoring Laboratory, Solar Calculation Details "
     "(https://gml.noaa.gov/grad/solcalc/calcdetails.html), after Meeus, Astronomical Algorithms, "
     "2nd ed. 1998. Checked against U.S. Naval Observatory rise/set times for 79.0118°N: the "
-    "start of the polar night 2016/17 to the day, its end one day early.")
+    "start of the polar night 2016/17 to the day, its end one day late (first sun computed on "
+    "2017-02-18, USNO 2017-02-17). Because the declination is taken once per local noon, the "
+    "edges of the polar day can likewise be off by one day (24 h computed on a day with a brief "
+    "sunset).")
 
 NOT_ECOLOGY = (
     "This is an ASTRONOMICAL statement, not an ecological one. \"Polar night\" here means the "

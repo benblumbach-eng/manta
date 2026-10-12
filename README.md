@@ -26,7 +26,7 @@ in your browser.
 
 <br>
 
-<img src="docs/images/network.png" alt="A dataset's network: modules in color, directed links, hubs highlighted" width="100%">
+<img src="docs/images/network.png" alt="A dataset's network: modules in color, directed links, ASVs meeting criterion 2 highlighted" width="100%">
 
 </div>
 
@@ -75,9 +75,10 @@ measured variable.
 
 **Also included**
 
-- Co-occurrence networks and directed links (convergent cross mapping), grouped into modules,
-  with hub organisms marked
-- Filters by module, taxon, function and hub; the dataset and filters are kept in the link
+- Co-occurrence networks and directed links (convergent cross mapping), grouped into modules;
+  organisms with a high closeness centrality within their module are marked (criterion 2 of the
+  keystone definition of Oldenburg et al. 2024, see Methods) — not keystones on their own
+- Filters by module, taxon, function and criterion 2; the dataset and filters are kept in the link
 - Energy landscape: stable community states and the transitions between them
 - Comparison over the year of ASVs, modules and environmental variables within a dataset
 - Import in the browser, from raw reads or from finished results
@@ -175,6 +176,12 @@ works. `bash assistant.sh status` shows the state; `bash assistant.sh off` switc
 keeps the downloaded models (`docker volume rm deploy_ollama_models` deletes them). An
 OpenAI-compatible service can be used instead via the `MANTA_OPENAI_*` settings in `deploy/.env`;
 questions and the values they touch are then sent to that service.
+
+Every conversation with the assistant is saved to its account, one thread per dataset, with the
+full record of each answer ("How was this answered?": the model, every tool call with its input
+and output, and the evidence check). Administrators can read all accounts' transcripts while
+*Admins can read all transcripts* is on in the admin panel (the default); the chat says so.
+Keys and passwords are never written into a transcript.
 
 ### Step 2 — Install the analysis tools
 
@@ -296,8 +303,11 @@ apps/manta_web/backend/.venv/bin/python tools/env_links/compute.py <name>
 
 The function annotation describes a taxonomic name, not a measurement from your data; for the
 synthetic examples it stays empty, because their taxon names are made up. Recomputing a network in
-the interface removes the function annotation and the environmental links; run `annotate.py` and
-`compute.py` again afterwards.
+the interface creates a new dataset next to the original and leaves the original as it is. The new
+dataset carries a copy of the samples, the function annotation and the environmental links; its
+energy landscape is not copied (it can depend on the modules of the old network), so compute it as
+above if you need it. Every ASV goes into the network; when the memory of the machine will not
+suffice, MANTA says so before the run starts instead of dropping ASVs.
 
 <details>
 <summary><b>The whole chain on the command line</b></summary>
@@ -457,7 +467,15 @@ repository; MANTA downloads them from their original sources.
 **Methods**
 
 - Network terminology — Oldenburg et al. 2024 (above).
-- Hub (keystone) criteria — Priest et al. 2025, *Nat Commun* 16:1326, [doi:10.1038/s41467-025-56203-3](https://doi.org/10.1038/s41467-025-56203-3).
+- Recurrence and modules (peak window, annual oscillation, interannual variability of modules) —
+  Priest et al. 2025, *Nat Commun* 16:1326, [doi:10.1038/s41467-025-56203-3](https://doi.org/10.1038/s41467-025-56203-3).
+- Criterion 2 of the keystone definition — Oldenburg et al. 2024 (above), Methods "Keystone
+  species definition": "a high centrality (closeness) value within its co-occurrence community".
+  MANTA computes it itself on the undirected co-occurrence network: closeness within the module
+  subgraph (all members, all links with both ends in the module), unweighted (n − 1)/Σd; per ASV a
+  one-sided one-sample t-test of the module's closeness values against its own
+  (`scipy.stats.ttest_1samp(…, popmean=c_i, alternative='less')`); Benjamini–Hochberg over all
+  testable network ASVs, q ≤ 0.05. A selection step, not a keystone: criteria 1 and 3 are not tested.
 
 <br>
 

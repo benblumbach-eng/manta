@@ -68,7 +68,8 @@ CAVEATS: dict[str, str] = {
     "cluster_year": semantics.CLUSTER_YEAR_CAVEAT,
     "spectrum": semantics.SPECTRUM_CAVEAT,
     "cluster_timeseries": semantics.CLUSTER_TIMESERIES_CAVEAT,
-    "hub_not_keystone": semantics.HUB_WHY_NOT_KEYSTONE,
+    "criterion2_not_keystone": semantics.CRITERION2_NOT_KEYSTONE,
+    "criterion2_selection": semantics.CRITERION2_SELECTION,
     "light_not_ecology": tageslicht.NOT_ECOLOGY,
     "sampler_depth": semantics.SAMPLER_NOTE,
     "jaccard_depth": statistik.CAVEAT_JACCARD,
@@ -103,8 +104,7 @@ _KLASSEN = [
        "A Louvain partition of the co-occurrence network at the run's resolution. A RESULT of "
        "one run, not a property of the organisms: a different resolution gives a different "
        "partition, and membership says nothing about relatedness.",
-       source=PUB, caveats=("hub_not_keystone",),
-       tools_=("cluster_detail", "cluster_network")),
+       source=PUB, tools_=("cluster_detail", "cluster_network")),
     _b("EnvVariable", "Environmental variable", "klasse",
        "One measured property of the water body, recorded alongside the samples — measured, "
        "never derived from the sequences. `depth` is the exception: it is a coordinate of the "
@@ -130,8 +130,10 @@ _BEZIEHUNGEN = [
        "causality. Undirected in meaning; stored once as a directed edge.",
        source=PUB, tools_=("neighbors", "edge", "cluster_bridges")),
     _b("INFLUENCES", "Kept CCM direction", "beziehung",
-       "A CCM direction whose NMI cleared the run's threshold and whose p-value held. The name "
-       "is misleading and is never read that way: it measures directed predictive skill.",
+       "A CCM direction on a co-occurrence link that OTTER's permutation test kept (p < 0.05). "
+       "No NMI threshold decides it: the run records a CCM NMI threshold (ccmn_tr), but OTTER "
+       "does not apply it. The name is misleading and is never read that way: it measures "
+       "directed predictive skill.",
        caveats=("ccm", "ccm_decision"), tools_=("edge", "cluster_network")),
     _b("CCM_REJECTED", "Tested and rejected CCM direction", "beziehung",
        "A direction that WAS tested and did not hold (p >= 0.05). It exists as its own edge kind "
@@ -154,35 +156,62 @@ _KENNZAHLEN = [
        "that sample. NOT a share of the sample: the denominator is the analysed ASVs only.",
        formula="count / analysed_reads_total (or the live sum where that is not stored)",
        unit="fraction of 1", inputs=("HAS_ABUNDANCE.count", "Sample.analysed_reads_total"),
-       caveats=("compositional", "share"), tools_=("asv_abundance_series", "asv_seasonality")),
+       caveats=("compositional", "share"), tools_=("asv_seasonality",)),
     _b("rank", "Position within one sample", "kennzahl",
        "1 = the most abundant ASV of that sample. The only quantity here that survives an "
        "unknown preprocessing intact: any strictly monotone conversion leaves the order within "
        "a sample unchanged.",
        formula="1 + number of ASVs in that sample with a strictly larger value",
-       unit="position", caveats=("rank_free",), tools_=("asv_detail",)),
+       unit="position", caveats=("rank_free",), tools_=("asv_seasonality",)),
     _b("read_count_total", "Summed value over all samples", "kennzahl",
        "The sum of one ASV's stored values across the samples of its dataset. Only formed where "
        "`value_kind` is 'reads' — summing an unknown transform would be arithmetic on unknowns.",
        formula="sum over samples of HAS_ABUNDANCE.count", unit="reads",
-       caveats=("compositional",), tools_=("summarize_by_taxon", "taxa_composition")),
+       caveats=("compositional",),
+       tools_=("summarize_by_taxon", "taxa_composition", "find_asv", "asv_detail",
+               "cluster_detail")),
     *[_b(k, v, "kennzahl",
          f"A centrality of the co-occurrence network: {v}. It is a property of THIS run's "
-         f"network — a different correlation threshold changes it.",
+         f"network — a different correlation threshold changes it. No view and no tool of "
+         f"MANTA marks ASVs by it; the marking everywhere is criterion 2 (`criterion2`), "
+         f"computed by MANTA itself.",
          formula=("number of CON edges at this node" if k == "con_degree"
                   else f"OTTER's {k} on the co-occurrence graph"),
          unit="count" if k == "con_degree" else "centrality",
          inputs=("CO_OCCURS_WITH",),
-         caveats=(), note=semantics.HUB_MEASURE_CAVEATS.get(k),
-         tools_=("dataset_summary", "asv_detail"))
-      for k, v in semantics.HUB_MEASURES.items()],
+         caveats=(), note=semantics.CENTRALITY_CAVEATS.get(k),
+         tools_=())
+      for k, v in semantics.CENTRALITY_MEASURES.items()],
+    _b("criterion2", semantics.CRITERION2_LABEL, "kennzahl", semantics.CRITERION2_METHOD,
+       formula=semantics.CRITERION2_FORMULA, unit="met / not met / not testable",
+       inputs=("CO_OCCURS_WITH", "MEMBER_OF", "closeness"),
+       caveats=("criterion2_not_keystone", "criterion2_selection"),
+       source=semantics.CRITERION2_SOURCE,
+       note=(f'The paper\'s words: "{semantics.CRITERION2_PAPER_WORDING}" '
+             f'({semantics.CRITERION2_SOURCE_LOCATION}). Not testable, with the reason stated: '
+             + "; ".join(semantics.CRITERION2_REASONS[k] for k in
+                         ("module_too_small", "module_disconnected", "zero_variance")) + "."),
+       tools_=("dataset_summary", "asv_detail", "cluster_detail")),
+    _b("closeness", "Closeness within the module (criterion 2)", "kennzahl",
+       "How close one ASV lies to all other members of its module, counted in links within the "
+       "module subgraph (all members, all links with both ends in the module, unweighted). The "
+       "quantity criterion 2 tests; computed by MANTA, not taken from the values stored with "
+       "the run.",
+       formula="(n - 1) / sum of shortest-path lengths to the other n - 1 members",
+       unit="inverse mean path length, in (0, 1]", inputs=("CO_OCCURS_WITH", "MEMBER_OF"),
+       source=semantics.CRITERION2_SOURCE, tools_=("asv_detail",)),
     _b("hub", "Hub", "kennzahl",
-       "Nothing more than: highest rank by the CHOSEN centrality measure, above mu + k*sigma "
-       "over the nodes that have a value. Which measure was chosen travels with every answer — "
-       "the word alone means nothing without it.",
-       formula="value > mean + k * sd (sample sd, n-1) over nodes with a value",
-       inputs=tuple(semantics.HUB_MEASURES), caveats=("hub_not_keystone",),
-       source=semantics.HUB_SOURCE, tools_=("dataset_summary",)),
+       "Not a measure of its own. Wherever MANTA marks ASVs as central — the glow in the "
+       "network view, the ASV and module windows, the legend, the image export and the "
+       "assistant — it is criterion 2 of the keystone definition of Oldenburg et al. 2024 "
+       "(`criterion2`), one computation for all of them. The word has no single published "
+       "definition.",
+       formula=semantics.CRITERION2_FORMULA,
+       inputs=("CO_OCCURS_WITH", "MEMBER_OF", "closeness"),
+       caveats=("criterion2_not_keystone", "criterion2_selection"),
+       source=semantics.CRITERION2_SOURCE,
+       note=f"See `criterion2` for the declared computation: {semantics.CRITERION2_LABEL}.",
+       tools_=()),
     _b("peak_window", "Peak window", "kennzahl", semantics.PEAK_WINDOW_DEFINITION,
        formula=f"{semantics.PEAK_WINDOW_DAYS}-day window of the calendar holding the most "
                f"yearly peak dates", unit="day of year",
@@ -201,7 +230,7 @@ _KENNZAHLEN = [
        source=PUB, tools_=("cluster_bridges",)),
     _b("nmi", "Normalised mutual information (CCM)", "kennzahl",
        "The directed predictive skill OTTER's CCM reports for one direction.",
-       unit="NMI", caveats=("ccm",), tools_=("edge", "cluster_network")),
+       unit="NMI", caveats=("ccm",), tools_=("edge",)),
     _b("corr", "Correlation of the Fourier features (CON)", "kennzahl",
        "The Pearson correlation behind a co-occurrence edge.", unit="r",
        source=PUB, tools_=("edge", "neighbors")),
@@ -215,10 +244,12 @@ _KENNZAHLEN = [
        semantics.CLUSTER_SERIES_DEFINITION,
        formula="sum over the member ASVs of their value in that sample (equal weights)",
        unit="same as the stored values", source=PUB, caveats=("cluster_timeseries",),
-       tools_=("cluster_timeseries", "cluster_detail")),
+       tools_=("cluster_timeseries",)),
     _b("seasonality_p", "Seasonality test (Kruskal-Wallis)", "kennzahl",
        "Does the calendar month make a difference to the share? Kruskal-Wallis over the months "
-       f"with at least {statistik.MIN_PER_GROUP} samples.",
+       f"with at least {statistik.MIN_PER_GROUP} samples; the p-value comes from a permutation "
+       f"of the month labels, not from the chi-square approximation. Only run when at least two "
+       f"months carry {statistik.MIN_PER_GROUP} detections.",
        unit="p-value", caveats=("not_network", "independence", "compositional"),
        tools_=("seasonality_test",)),
     _b("trend_p", "Trend test (Mann-Kendall)", "kennzahl",
@@ -226,26 +257,56 @@ _KENNZAHLEN = [
        unit="p-value", caveats=("not_network", "independence", "trend"),
        tools_=("trend_test",)),
     _b("rho_p", "Proportionality (Lovell 2015)", "kennzahl",
-       "Does the RATIO of two ASVs stay constant across samples? A different question from CON, "
-       "which correlates Fourier features — agreement is not required.",
+       "Does the RATIO of two ASVs stay constant across samples? Computed on shares (stored value "
+       "/ sample total) over the samples where both are detected; the raw-value variant beside it "
+       "is inflated by sequencing depth. A different question from CON, which correlates Fourier "
+       "features — agreement is not required.",
+       formula="1 - var(log x - log y) / (var(log x) + var(log y)), x and y shares",
        unit="rho_p", caveats=("compositional", "transformed"),
        tools_=("pair_proportionality",)),
-    _b("peak_month_single_sample", "Peak month (single sample)", "kennzahl",
-       "The calendar month of the ONE largest sample of this series. A single observation, "
-       "not a summary — it can differ from the peak of the typical-year curve, and for many "
-       "network ASVs it does.",
-       formula="month of argmax over all samples", unit="month 1-12",
+    _b("vargha_delaney_a", "Vargha-Delaney A (group comparison)", "kennzahl",
+       "The probability that a random sample of group A has a larger share than a random sample "
+       "of group B, counting a tie as one half: P(A>B) + 0.5·P(A=B). With many tied zeros it is "
+       "far from P(A>B) — frac_a_greater and frac_tie stand beside it.",
+       formula="U / (n_a · n_b) = frac_a_greater + 0.5 · frac_tie", unit="probability 0-1",
+       caveats=("compositional",), tools_=("group_comparison_test",)),
+    _b("frac_a_greater", "Pairs with A larger", "kennzahl",
+       "The fraction of all (A sample, B sample) pairs in which the A share is strictly larger.",
+       formula="count(a > b) / (n_a · n_b)", unit="fraction 0-1",
+       tools_=("group_comparison_test",)),
+    _b("frac_tie", "Tied pairs", "kennzahl",
+       "The fraction of all (A sample, B sample) pairs with exactly equal shares — mostly pairs of "
+       "two non-detections.",
+       formula="count(a == b) / (n_a · n_b)", unit="fraction 0-1",
+       tools_=("group_comparison_test",)),
+    _b("frac_b_greater", "Pairs with B larger", "kennzahl",
+       "The fraction of all (A sample, B sample) pairs in which the B share is strictly larger.",
+       formula="count(a < b) / (n_a · n_b)", unit="fraction 0-1",
+       tools_=("group_comparison_test",)),
+    _b("peak_month_single_sample", "Peak month (largest raw value, OTTER)", "kennzahl",
+       "The calendar month of the ONE sample with the largest RAW stored value of this ASV "
+       "(OTTER's max_abundance_month, drawn on the seasonal wheel). Depends on sequencing depth: "
+       "it can name a different sample than the highest share, and it can differ from the peak "
+       "of the typical-year curve.",
+       formula="month of argmax over all samples of the raw stored value", unit="month 1-12",
+       caveats=("compositional",), tools_=("asv_seasonality",)),
+    _b("peak_month_max_share", "Peak month (highest share)", "kennzahl",
+       "The calendar month of the sample in which this ASV made up the largest share of the "
+       "analysed values — the same sample as max_sample, the highest point of the interface's "
+       "share curve.",
+       formula="month of argmax over all samples of the share", unit="month 1-12",
        caveats=("compositional",), tools_=("asv_seasonality",)),
     _b("peak_month_climatology", "Peak month (typical year)", "kennzahl",
        "The month with the largest MEAN across years. Answers a different question from the "
        "single-sample peak: where the series usually is highest, not where its record is.",
        formula="argmax over months of the mean share of that month across years",
        unit="month 1-12", caveats=("compositional",), tools_=("asv_seasonality",)),
-    _b("weighted_mean", "Abundance-weighted environmental mean", "kennzahl",
+    _b("weighted_mean", "Share-weighted environmental mean", "kennzahl",
        "The mean of a measured variable over the samples where this ASV was detected, weighted "
-       "by its value there. NOT a niche and NOT an optimum: the variable was measured next to "
-       "the sample, not manipulated.",
-       formula="sum(value * weight) / sum(weight) over samples with a detection AND a measurement",
+       "by its SHARE of each of those samples (stored value / sample total), so sequencing depth "
+       "does not set the weight. NOT a niche and NOT an optimum: the variable was measured next "
+       "to the sample, not manipulated.",
+       formula="sum(value * share) / sum(share) over samples with a detection AND a measurement",
        unit="unit of the variable", caveats=("compositional",), tools_=("asv_detail",)),
     _b("p10", "10th percentile (weighted)", "kennzahl",
        "The smallest value whose cumulative weight reaches 10 % of the total. Samples without a "
@@ -254,22 +315,67 @@ _KENNZAHLEN = [
     _b("p90", "90th percentile (weighted)", "kennzahl",
        "The smallest value whose cumulative weight reaches 90 % of the total.",
        unit="unit of the variable", inputs=("weighted_mean",), tools_=("asv_detail",)),
+    _b("p25", "25th percentile (weighted)", "kennzahl",
+       "The smallest value whose cumulative weight reaches 25 % of the total — the lower edge of "
+       "the box in the environment box plot.",
+       unit="unit of the variable", inputs=("weighted_mean",), tools_=("asv_detail",)),
+    _b("median", "Median (weighted)", "kennzahl",
+       "The smallest value whose cumulative weight reaches 50 % of the total — the line inside "
+       "the box. Can differ from the weighted mean when the conditions are skewed.",
+       unit="unit of the variable", inputs=("weighted_mean",), tools_=("asv_detail",)),
+    _b("p75", "75th percentile (weighted)", "kennzahl",
+       "The smallest value whose cumulative weight reaches 75 % of the total — the upper edge of "
+       "the box in the environment box plot.",
+       unit="unit of the variable", inputs=("weighted_mean",), tools_=("asv_detail",)),
+    _b("dataset_min", "Smallest measured value in the dataset", "kennzahl",
+       "The smallest measured value of the variable over ALL samples of the dataset — the left "
+       "end of the box plot's axis, the same for every ASV and module of the dataset.",
+       formula="min over all samples of the dataset with a measurement",
+       unit="unit of the variable", tools_=("asv_detail",)),
+    _b("dataset_max", "Largest measured value in the dataset", "kennzahl",
+       "The largest measured value of the variable over ALL samples of the dataset — the right "
+       "end of the box plot's axis.",
+       formula="max over all samples of the dataset with a measurement",
+       unit="unit of the variable", tools_=("asv_detail",)),
     _b("mean_nmi", "Mean NMI between two modules", "kennzahl",
        semantics.CLUSTER_NETWORK_DEFINITION, unit="NMI", caveats=("ccm",),
        tools_=("cluster_network",)),
     _b("mean_dissimilarity", "Mean dissimilarity between years", "kennzahl",
-       "The mean pairwise dissimilarity between the yearly profiles of a module.",
+       semantics.INTERANNUAL_DEFINITION,
        unit="dissimilarity 0-1", caveats=("interannual",),
        tools_=("cluster_interannual_variability",)),
-    _b("trend_per_year", "Theil-Sen slope per year", "kennzahl",
-       "The median of all pairwise slopes between yearly anomalies. Robust against outliers; "
-       "it is a description of these years, not a forecast.",
+    _b("trend_per_year", "Trend per year (least squares on yearly anomalies)", "kennzahl",
+       "The least-squares slope of the per-year mean seasonal anomaly against the calendar year "
+       "(anomaly = value minus the mean of its calendar month over all years). A description of "
+       "these few years, not a forecast — and a different number from trend_test's Theil-Sen "
+       "slope.",
+       formula="OLS slope of the yearly mean anomaly against the year",
+       unit="share per year", caveats=("trend",),
+       tools_=("asv_seasonality", "cluster_detail", "cluster_year_overview")),
+    _b("theil_sen_slope_per_year", "Theil-Sen slope per year (trend test)", "kennzahl",
+       "The median of all pairwise slopes of the per-sample seasonal anomalies against the "
+       "decimal year, with a 95 % interval — the size of the trend that trend_test tests. "
+       "Robust against single outliers; it differs from trend_per_year, which is a "
+       "least-squares slope over yearly means.",
+       formula="median over sample pairs of (anomaly_j - anomaly_i) / (t_j - t_i)",
        unit="share per year", caveats=("trend", "independence"), tools_=("trend_test",)),
+    _b("rho_p_on_raw_counts", "Proportionality on raw values (check only)", "kennzahl",
+       "The same formula as rho_p, applied to the raw stored values instead of the shares. Its "
+       "denominator also carries the variance of the log sample totals, so varying sequencing "
+       "depth pushes it toward 1 — shown beside rho_p as a check, never as the answer.",
+       formula="1 - var(log x - log y) / (var(log x) + var(log y)), x and y raw values",
+       unit="rho_p", caveats=("compositional",), tools_=("pair_proportionality",)),
+    _b("weighted_sd", "Weighted spread of an environmental variable", "kennzahl",
+       "The share-weighted standard deviation of a measured variable around its weighted mean, "
+       "over the samples where the subject was detected: how far the conditions scattered, not "
+       "how precise the mean is. None for a single sample.",
+       formula="sqrt(sum(share * (value - weighted_mean)^2) / sum(share))",
+       unit="unit of the variable", inputs=("weighted_mean",), tools_=("asv_detail",)),
     _b("rho", "Spearman rank correlation", "kennzahl",
        "The rank correlation between two series. A rank correlation with a measured variable is "
        "NOT a niche, an optimum or a response.",
        unit="rho -1..1", caveats=("compositional", "independence", "not_network"),
-       tools_=("environment_correlation", "asv_drivers")),
+       tools_=("environment_correlation",)),
     _b("n_peaks", "Peaks per year", "kennzahl",
        "Local maxima per calendar year of the reconstruction from OTTER's Fourier slice.",
        unit="peaks", inputs=("oscillation",), source=semantics.OSCILLATION_REFERENCE,
@@ -290,8 +396,7 @@ _KENNZAHLEN = [
     _b("day_length_h", "Day length", "kennzahl", tageslicht.METHOD,
        formula="sunrise hour angle at zenith 90.833 degrees from the solar declination",
        unit="hours", inputs=("Station.location.latitude", "Sample.date"),
-       source=tageslicht.REFERENCE, caveats=("light_not_ecology",),
-       tools_=("dataset_capabilities",)),
+       source=tageslicht.REFERENCE, caveats=("light_not_ecology",)),
     _b("polar_night", "Polar night", "kennzahl",
        "Day length is exactly 0 h at this latitude and date. An ASTRONOMICAL statement.",
        unit="boolean", inputs=("day_length_h",), source=tageslicht.REFERENCE,
@@ -326,7 +431,7 @@ _UMWELT = [
 BEGRIFFE: list[dict] = _KLASSEN + _BEZIEHUNGEN + _KENNZAHLEN + _UMWELT
 _NACH_KEY = {b["key"]: b for b in BEGRIFFE}
 
-VERSION = "1.0.1"
+VERSION = "1.4.0"
 
 
 def aufloesen(b: dict) -> dict:

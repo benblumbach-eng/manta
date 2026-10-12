@@ -19,6 +19,7 @@ import semantics
 
 OUT_DIR = HERE / "out"
 MIN_PAIRS = 8
+SAMPLE_ORDER = "ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id"
 DEFAULT_MAX_LAG = 3
 DEFAULT_ALPHA = 0.05
 METHOD = ("Spearman rank correlation of the ASV's share of the sample against the variable, at "
@@ -30,11 +31,11 @@ METHOD = ("Spearman rank correlation of the ASV's share of the sample against th
 
 
 
-def spearman_at_lag(env: list[float | None], asv: list[float], lag: int) -> tuple[float | None, float | None, int]:
+def spearman_at_lag(env: list[float | None], asv: list[float | None], lag: int) -> tuple[float | None, float | None, int]:
     pairs = []
     for t, e in enumerate(env):
         u = t + lag
-        if e is None or u < 0 or u >= len(asv):
+        if e is None or u < 0 or u >= len(asv) or asv[u] is None:
             continue
         pairs.append((float(e), float(asv[u])))
     if len(pairs) < MIN_PAIRS:
@@ -45,7 +46,11 @@ def spearman_at_lag(env: list[float | None], asv: list[float], lag: int) -> tupl
     return float(r), float(p), len(pairs)
 
 
-def cross_correlate(env: list[float | None], asv: list[float], max_lag: int) -> dict | None:
+def _best_lag(by_lag: dict) -> int:
+    return sorted(by_lag, key=lambda k: (-abs(by_lag[k][0]), abs(k), -k))[0]
+
+
+def cross_correlate(env: list[float | None], asv: list[float | None], max_lag: int) -> dict | None:
     by_lag = {}
     for k in range(-max_lag, max_lag + 1):
         r, p, n = spearman_at_lag(env, asv, k)
@@ -53,7 +58,7 @@ def cross_correlate(env: list[float | None], asv: list[float], max_lag: int) -> 
             by_lag[k] = (r, p, n)
     if not by_lag:
         return None
-    best = sorted(by_lag, key=lambda k: (-abs(by_lag[k][0]), abs(k), -k))[0]
+    best = _best_lag(by_lag)
     r, p, n = by_lag[best]
     r0, _, n0 = by_lag.get(0, (None, None, 0))
     return {"lag": best, "r": r, "p": p, "n": n, "r0": r0, "n0": n0,
@@ -107,7 +112,7 @@ def read_dataset(driver, dataset_id: str) -> dict:
             f"WITH s, coalesce(sum(ha.count), 0.0) AS live_total "
             f"RETURN s.sample_id AS sample, s.date AS date, "
             f"coalesce(s.analysed_reads_total, live_total) AS total, {props} "
-            f"ORDER BY s.date, s.sample_id", d=dataset_id)]
+            f"{SAMPLE_ORDER}", d=dataset_id)]
         cells = [dict(r) for r in s.run(
             "MATCH (s:Sample {dataset_id:$d})-[ha:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) "
             "RETURN s.sample_id AS sample, a.id AS asv, ha.count AS count", d=dataset_id)]
@@ -116,13 +121,13 @@ def read_dataset(driver, dataset_id: str) -> dict:
 
 def build_series(samples: list[dict], cells: list[dict]) -> tuple[dict, dict]:
     idx = {s["sample"]: i for i, s in enumerate(samples)}
-    n = len(samples)
-    shares: dict[str, list[float]] = {}
+    basis = [0.0 if (s["total"] or 0) > 0 else None for s in samples]
+    shares: dict[str, list[float | None]] = {}
     for c in cells:
-        shares.setdefault(c["asv"], [0.0] * n)
+        shares.setdefault(c["asv"], list(basis))
         i = idx[c["sample"]]
         tot = samples[i]["total"] or 0.0
-        shares[c["asv"]][i] = (float(c["count"]) / tot) if tot > 0 else 0.0
+        shares[c["asv"]][i] = (float(c["count"]) / tot) if tot > 0 else None
     env_by_var = {}
     for spec in semantics.ENVIRONMENT_VARS:
         k = spec["key"]
@@ -149,17 +154,26 @@ def run_id_for(max_lag: int, alpha: float) -> str:
     return f"envlinks_spearman_L{max_lag}_bh{alpha:g}"
 
 
+def absent_reason(data: dict, env_by_var: dict) -> str | None:
+    absent = None
+    tage = [s["date"] for s in data["samples"] if s.get("date") is not None]
+    if data["axis"] != semantics.TIME_AXIS_DATES:
+        absent = ("This dataset has no real time axis (sample order only) — a shift in samples "
+                  "would be a shift along an arbitrary order, so no links were computed.")
+    elif len(set(tage)) != len(tage):
+        absent = ("Several samples share a calendar day (same_day_index); a shift in samples "
+                  "would mix 0-day and multi-day offsets, so no links were computed.")
+    elif not env_by_var:
+        absent = "This dataset carries no environmental variables, so there is nothing to link."
+    return absent
+
+
 def compute_dataset(driver, dataset_id: str, max_lag: int = DEFAULT_MAX_LAG,
                     alpha: float = DEFAULT_ALPHA) -> dict:
     data = read_dataset(driver, dataset_id)
     env_by_var, shares = build_series(data["samples"], data["cells"])
     run_id = run_id_for(max_lag, alpha)
-    absent = None
-    if data["axis"] != semantics.TIME_AXIS_DATES:
-        absent = ("This dataset has no real time axis (sample order only) — a shift in samples "
-                  "would be a shift along an arbitrary order, so no links were computed.")
-    elif not env_by_var:
-        absent = "This dataset carries no environmental variables, so there is nothing to link."
+    absent = absent_reason(data, env_by_var)
     rows = [] if absent else compute_links(data["samples"], env_by_var, shares, max_lag, alpha)
     edges = [r for r in rows if r["edge"]]
     labels = {v["key"]: v for v in semantics.ENVIRONMENT_VARS}
@@ -169,6 +183,7 @@ def compute_dataset(driver, dataset_id: str, max_lag: int = DEFAULT_MAX_LAG,
         "max_lag": max_lag, "lag_unit": "samples", "alpha": alpha, "min_pairs": MIN_PAIRS,
         "correction": "Benjamini-Hochberg across all pairs of one variable",
         "n_samples": len(data["samples"]), "n_variables": len(env_by_var),
+        "n_samples_without_reads": sum(1 for x in data["samples"] if not (x["total"] or 0) > 0),
         "variables": sorted(env_by_var), "n_asv": len(shares), "n_pairs": len(rows),
         "n_links": len(edges), "absent_reason": absent,
     }

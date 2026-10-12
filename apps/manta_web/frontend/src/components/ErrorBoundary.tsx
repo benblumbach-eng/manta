@@ -1,3 +1,4 @@
+import { Button } from "./ui";
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
 type Props = { children: ReactNode; label?: string };
@@ -19,33 +20,30 @@ export default class ErrorBoundary extends Component<Props, State> {
     if (!error) return this.props.children;
     return (
       <div data-testid="error-boundary" role="alert"
-        className="h-full w-full grid place-items-center p-6 bg-slate-950">
-        <div className="max-w-lg rounded border border-red-500/40 bg-red-500/5 p-4 text-sm">
-          <div className="text-red-300 font-medium">
+        className="h-full w-full grid place-items-center p-6 bg-surface">
+        <div className="max-w-lg rounded border border-danger bg-danger-soft p-4 text-sm">
+          <div className="text-danger font-medium">
             {this.props.label ?? "This view"} could not be drawn.
           </div>
-          <p className="mt-2 text-slate-300 leading-snug">
+          <p className="mt-2 text-fg leading-snug">
             Something in the code failed while rendering — not the database. The data that was
             already loaded is unaffected, and nothing has been changed or deleted.
           </p>
-          <pre className="mt-2 max-h-32 overflow-auto rounded bg-slate-950 p-2 font-mono
-                          text-[10px] leading-tight text-slate-400 whitespace-pre-wrap">
+          <pre className="mt-2 max-h-32 overflow-auto rounded bg-surface p-2 font-mono
+                          text-2xs leading-tight text-fg-muted whitespace-pre-wrap">
             {error.message || String(error)}
           </pre>
           <div className="mt-3 flex gap-2">
-            <button data-testid="error-boundary-retry"
-              onClick={() => this.setState({ error: null })}
-              className="px-2 py-1 rounded bg-slate-700 text-slate-100 hover:bg-slate-600 text-xs">
+            <Button data-testid="error-boundary-retry"
+              onClick={() => this.setState({ error: null })}>
               Try drawing it again
-            </button>
-            <button data-testid="error-boundary-reload"
-              onClick={() => window.location.reload()}
-              className="px-2 py-1 rounded border border-slate-600 text-slate-300
-                         hover:border-cyan-400 hover:text-cyan-300 text-xs">
+            </Button>
+            <Button data-testid="error-boundary-reload"
+              onClick={() => window.location.reload()}>
               Reload the page
-            </button>
+            </Button>
           </div>
-          <p className="mt-2 text-[10px] text-slate-500">
+          <p className="mt-2 text-2xs text-fg-muted">
             The full stack is in the browser console.
           </p>
         </div>

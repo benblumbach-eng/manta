@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import inspect
 from typing import Any, Callable
+
+import pydantic
 
 import begriffe
 import semantics
@@ -45,9 +48,9 @@ TOOL_SPECS: list[dict] = [
         "description": (
             "THE NUMBERS OF A DATASET. Use this for EVERY 'how many' question about a whole "
             "dataset: HOW MANY CLUSTERS, how many ASVs, how many of those are in the network, "
-            "how many samples, how many CON links, how many CCM links, how many hubs (with "
-            "the operational hub definition sentence — quote it with the number), and what "
-            "period it covers. One call answers all of it. "
+            "how many samples, how many CON links, how many CCM links, how many ASVs meet "
+            "criterion 2 of Oldenburg et al. 2024 (`criterion2` — quote its sentences with the "
+            "number), and what period it covers. One call answers all of it. "
             "'How many clusters does X have?' belongs HERE, not to cluster_detail."
         ),
         "parameters": {
@@ -121,7 +124,9 @@ TOOL_SPECS: list[dict] = [
     {
         "name": "find_asv",
         "description": (
-            "Finds ASVs by genus (substring), exact asv_id or cluster number, sorted by size. "
+            "Finds ASVs by genus (substring), exact asv_id or cluster number, sorted by size "
+            "(reads summed over all samples; where values are transformed, by the number of "
+            "samples with a detection — `ordered_by` says which). "
             "WITH NO FILTER it returns the LARGEST ASVs of the dataset — use it exactly that way "
             "for 'what is the largest ASV' or 'show me the most important ones'. Also use it to "
             "get from a name to an asv_id."
@@ -142,9 +147,12 @@ TOOL_SPECS: list[dict] = [
     {
         "name": "asv_detail",
         "description": (
-            "Everything about ONE ASV: full taxonomy (kingdom to species), cluster, size and its "
-            "bridging role in the network. Needs an exact asv_id from find_asv. Raw centrality "
-            "numbers are deliberately not returned — only the interpreted statement."
+            "Everything about ONE ASV: full taxonomy (kingdom to species), Louvain cluster and "
+            "module name, size (reads summed over all samples), and criterion2 — whether it "
+            "meets criterion 2 of Oldenburg et al. 2024 (high closeness within its module; "
+            "one criterion, not a keystone; links between modules: "
+            "cluster_bridges). Needs an exact asv_id from find_asv. Raw centrality numbers are "
+            "deliberately not returned."
         ),
         "parameters": {
             "type": "object",
@@ -157,9 +165,10 @@ TOOL_SPECS: list[dict] = [
         "requires": [],
         "description": (
             "WHEN an ASV is present. For 'when does X peak', 'is X seasonal', 'in which month', "
-            "'does X increase over the years'. Returns TWO different peak months (the month of "
-            "the single largest sample, and the strongest month on average) — say which one you "
-            "mean. USE THIS TOOL instead of asv_abundance_series whenever the question is about "
+            "'does X increase over the years'. Returns different peak months (of the sample "
+            "with the highest share, of the largest raw value, and the strongest month on "
+            "average) — say which one you mean. USE THIS TOOL instead of asv_abundance_series "
+            "whenever the question is about "
             "timing, season or trend; evaluating the raw series is not your job."
         ),
         "parameters": {
@@ -324,9 +333,10 @@ TOOL_SPECS: list[dict] = [
         "requires": ['network'],
         "description": (
             "What ONE SPECIFIC cluster consists of, when its number is already known: size, "
-            "dominant genera, largest members, cohesion, neighbouring clusters, and its year "
-            "course (`seasonal`: the average year AND every single year's monthly distribution, "
-            "incomplete years marked). For 'what is in cluster 3', 'what characterises cluster "
+            "dominant genera, largest members, cohesion, neighbouring clusters, criterion 2 "
+            "(`criterion2`), and its year course (`seasonal`: the average year AND every single "
+            "year's monthly distribution, incomplete years marked). For 'what is in cluster 3', "
+            "'what characterises cluster "
             "0', 'how is cluster 2 distributed in 2015'. NOT for 'how many clusters are "
             "there' — dataset_summary answers that. The cluster number is MANDATORY; without it "
             "this is the wrong tool."
@@ -446,11 +456,13 @@ TOOL_SPECS: list[dict] = [
     {
         "name": "run_validated_cypher",
         "description": (
-            "LAST RESORT for questions no other tool covers: your own Cypher query. It is "
-            "checked against the schema and only executed if it ONLY reads, all labels and "
-            "properties exist, it is scoped to a dataset_id and it has a LIMIT. On rejection the "
-            "error states the reason. FIRST check whether one of the typed tools answers the "
-            "question — it almost always does."
+            "LAST RESORT for questions no other tool covers: your own Cypher query, ONE "
+            "MATCH … RETURN (no WITH, UNION or CALL). It is checked against the schema and only "
+            "executed if it ONLY reads, all labels and properties exist, and EVERY node pattern "
+            "has a Label and an inline dataset_id, e.g. (a:ASV {dataset_id:'…'}). At most "
+            f"{tools.MAX_LIMIT} rows: a missing or larger LIMIT is set to {tools.MAX_LIMIT} and "
+            "the answer says so. On rejection the error states the reason. FIRST check whether "
+            "one of the typed tools answers the question — it almost always does."
         ),
         "parameters": {
             "type": "object",
@@ -502,8 +514,9 @@ TOOL_SPECS: list[dict] = [
             "across samples? The compositional counterpart of a correlation; 1 = proportional, "
             "0 = none. Has no p-value. Use for 'do X and Y vary together' when a CON link is "
             "questioned or absent. Reports the CON link next to it — the two measure different "
-            "things. Returns rho_p on raw values AND on shares (they differ; the answer says "
-            "why). Refuses on converted values, with a reason. " + statistik.CAVEAT_NOT_NETWORK
+            "things. rho_p is computed on shares; the raw-value variant stands beside it and is "
+            "inflated by sequencing depth (the answer says why). Refuses on converted values, "
+            "with a reason. " + statistik.CAVEAT_NOT_NETWORK
         ),
         "parameters": {
             "type": "object",
@@ -556,7 +569,7 @@ TOOL_SPECS: list[dict] = [
         "description": (
             "WHAT A WORD MEANS HERE. The full glossary: every class, relationship, metric and "
             "environmental variable MANTA uses, each with its definition, its source and its "
-            "caveats. Use this BEFORE interpreting any term the user asks about — 'hub', "
+            "caveats. Use this BEFORE interpreting any term the user asks about — 'criterion2', "
             "'bridge', 'cluster', 'share' and 'influences' all mean something narrower here "
             "than in ordinary language. Filter with `kind`. No numbers about any dataset."
         ),
@@ -572,9 +585,9 @@ TOOL_SPECS: list[dict] = [
         "name": "describe_metric",
         "description": (
             "ONE METRIC IN FULL: definition, formula, unit, input quantities, caveats and which "
-            "tools report it. Use this when a user asks how a number is computed, or when two "
-            "measures share a name — the five centralities behind 'hub' are five different "
-            "questions. Does not compute anything and touches no dataset."
+            "tools report it. Use this when a user asks how a number is computed, or what "
+            "'central' or 'hub' means here — key 'criterion2'. Does not compute anything and "
+            "touches no dataset."
         ),
         "parameters": {
             "type": "object",
@@ -658,18 +671,35 @@ _DISPATCH: dict[str, Callable[..., Any]] = {
     "dataset_capabilities": tools.dataset_capabilities,
 }
 
-_DISPATCH = {n: tools.mit_abfrageprotokoll(f) for n, f in _DISPATCH.items()}
+_DISPATCH = {n: tools.mit_abfrageprotokoll(pydantic.validate_call(f)) for n, f in _DISPATCH.items()}
+
+TAKES_DATASET_ID: dict[str, bool] = {
+    n: "dataset_id" in inspect.signature(f).parameters for n, f in _DISPATCH.items()}
+
+
+def takes_dataset_id(name: str) -> bool:
+    return TAKES_DATASET_ID.get(name, False)
 
 
 def call(name: str, args: dict | None = None) -> dict:
-    args = args or {}
+    args = dict(args or {})
     fn = _DISPATCH.get(name)
     if fn is None:
         return {"error": f"unknown tool {name!r}. Available: {sorted(_DISPATCH)}"}
+    if "dataset_id" in args and not takes_dataset_id(name):
+        args.pop("dataset_id")
     try:
         return fn(**args)
     except tools.ToolError as e:
         return {"error": str(e)}
+    except pydantic.ValidationError as e:
+        spec = next((s for s in TOOL_SPECS if s["name"] == name), None)
+        required = (spec or {}).get("parameters", {}).get("required", [])
+        teile = "; ".join(f"{'.'.join(str(x) for x in f['loc']) or 'arguments'}: {f['msg']}"
+                          for f in e.errors(include_url=False))
+        return {"error": (f"wrong parameters for {name}: {teile}. Required fields: {required}. "
+                          f"Call the tool again with corrected values — or choose a tool that "
+                          f"does not need them.")}
     except ValueError as e:
         return {"error": f"unusable parameter value for {name}: {e}. Numeric fields need "
                          f"numbers; call the tool again with corrected values."}
@@ -686,7 +716,7 @@ def call(name: str, args: dict | None = None) -> dict:
 
 QUESTIONS: dict[str, tuple[str, str]] = {
     "list_datasets": ("none", "Which datasets are there, and what kind of series is each?"),
-    "describe_concepts": ("none", "What do the words here mean — module, hub, share, link?"),
+    "describe_concepts": ("none", "What do the words here mean — module, criterion 2, share, link?"),
     "dataset_summary": ("dataset", "What kind of series is this, and how much of it is connected?"),
     "dataset_capabilities": ("dataset", "What can be done on this dataset, what not — and why?"),
     "taxa_composition": ("dataset", "Which taxa dominate this dataset?"),
@@ -698,7 +728,7 @@ QUESTIONS: dict[str, tuple[str, str]] = {
     "cluster_network": ("dataset", "Which module predicts which, and how strongly?"),
     "cluster_year_overview": ("dataset", "When in the year is each module active, and does that repeat?"),
     "cluster_interannual_variability": ("dataset", "In which months do the years differ most?"),
-    "asv_detail": ("asv", "What is this ASV — taxonomy, module, size, role in the network?"),
+    "asv_detail": ("asv", "What is this ASV — taxonomy, module, size, is it central in its module?"),
     "asv_seasonality": ("asv", "When is this ASV present, and does it come back every year?"),
     "asv_spectrum": ("asv", "Which rhythms does this ASV carry — a year, half a year, longer?"),
     "asv_function": ("asv", "What does the literature say about this ASV's function?"),

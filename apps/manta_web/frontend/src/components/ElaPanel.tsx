@@ -1,15 +1,18 @@
+import { StateNotice, SectionHeading } from "./ui";
 import { useEffect, useMemo, useState } from "react";
 import { getEla, type Ela, type ElaState, type ElaTree } from "../api";
 import { useModules } from "../modules";
 import InfoTip from "./InfoTip";
+import { PanelHeader } from "./PanelFrame";
 import ProvenanceFooter from "./ProvenanceFooter";
+import ErrorNotice from "./ErrorNotice";
 
 
 const RELIABLE = 0.8;
 
 function stateColor(s: ElaState, farbe: (l: number | null | undefined) => string): string {
-  if (s.active.length === 0) return "#334155";
-  return s.majority_cluster != null ? farbe(s.majority_cluster) : "#64748b";
+  if (s.active.length === 0) return "var(--control-strong)";
+  return s.majority_cluster != null ? farbe(s.majority_cluster) : "var(--chart-line)";
 }
 
 function leavesInOrder(t: ElaTree): string[] {
@@ -24,8 +27,8 @@ function Disconnectivity({ tree, states, selected, onSelect }: {
   onSelect: (id: string) => void;
 }) {
   const modules = useModules();
-  const W = 520, H = 316;
-  const M = { top: 18, right: 10, bottom: 50, left: 52 };
+  const W = 520, H = 328;
+  const M = { top: 18, right: 10, bottom: 62, left: 52 };
   const byId = useMemo(() => new Map(states.map((s) => [s.state_id, s])), [states]);
   const order = useMemo(() => leavesInOrder(tree), [tree]);
 
@@ -67,23 +70,23 @@ function Disconnectivity({ tree, states, selected, onSelect }: {
     ticks.push(Number(v.toFixed(6)));
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full rounded bg-slate-900"
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full rounded bg-raised"
       data-testid="ela-disconnectivity"
       role="img" aria-label="Disconnectivity graph of the stable states">
       <line x1={M.left - 8} y1={M.top - 6} x2={M.left - 8} y2={H - M.bottom + 4}
-        stroke="#475569" strokeWidth="1" />
+        stroke="var(--chart-axis)" strokeWidth="1" />
       {ticks.map((t) => (
         <g key={t}>
-          <line x1={M.left - 11} y1={y(t)} x2={M.left - 8} y2={y(t)} stroke="#475569" />
-          <text x={M.left - 14} y={y(t) + 3} textAnchor="end" fontSize="9"
-            fill="#94a3b8" fontFamily="ui-monospace, monospace">{t}</text>
+          <line x1={M.left - 11} y1={y(t)} x2={M.left - 8} y2={y(t)} stroke="var(--chart-axis)" />
+          <text x={M.left - 14} y={y(t) + 3} textAnchor="end" fontSize="11"
+            fill="var(--text-muted)" fontFamily="ui-monospace, monospace">{t}</text>
         </g>
       ))}
-      <text x={12} y={M.top - 6} fontSize="9" fill="#64748b">energy</text>
+      <text x={12} y={M.top - 6} fontSize="11" fill="var(--text-muted)">energy</text>
 
       {lines.map((l, i) => (
         <line key={i} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2}
-          stroke="#94a3b8" strokeWidth="1.4" strokeLinecap="round" />
+          stroke="var(--chart-line)" strokeWidth="1.4" strokeLinecap="round" />
       ))}
 
       {leaves.map((l) => {
@@ -98,37 +101,38 @@ function Disconnectivity({ tree, states, selected, onSelect }: {
               {`state ${idx + 1} (${l.id}) · energy ${s.energy.toFixed(3)} · barrier ` +
                 `${s.barrier == null ? "—" : s.barrier.toFixed(3)} · recurrence ` +
                 `${s.recurrence == null ? "—" : Math.round(100 * s.recurrence) + " %"} · ` +
-                `${s.n_active} active taxa · clusters ` +
+                `${s.n_active} active ASVs · modules ` +
                 (Object.keys(s.cluster_counts).length
-                  ? Object.entries(s.cluster_counts).map(([c, n]) => `C${c}×${n}`).join(" ")
+                  ? Object.entries(s.cluster_counts).map(([c, n]) => `${modules.label(Number(c))} ×${n}`).join(", ")
                   : "—")}
             </title>
             <circle cx={l.x} cy={l.y} r={selected === l.id ? 7 : 5.5}
               fill={reliable ? fill : "transparent"}
-              stroke={reliable ? (selected === l.id ? "#f1f5f9" : "#0f172a") : "#f59e0b"}
+              stroke={reliable ? (selected === l.id ? "var(--text)" : "var(--raised)") : "var(--warn)"}
               strokeWidth={selected === l.id ? 2 : 1.2}
               strokeDasharray={reliable ? undefined : "2 2"} />
-            <text x={l.x} y={H - M.bottom + 16} textAnchor="middle" fontSize="10"
-              fill={selected === l.id ? "#f1f5f9" : "#94a3b8"}>{idx + 1}</text>
+            <text x={l.x} y={H - M.bottom + 15} textAnchor="middle" fontSize="11"
+              fill={selected === l.id ? "var(--text)" : "var(--text-muted)"}>{idx + 1}</text>
             {s.majority_cluster != null && (
-              <text x={l.x} y={H - M.bottom + 27} textAnchor="middle" fontSize="8"
+              <text x={l.x} y={H - M.bottom + 28} textAnchor="middle" fontSize="11"
                 fill={modules.color(s.majority_cluster)}>
-                C{s.majority_cluster}{Object.keys(s.cluster_counts).length > 1 ? "+" : ""}
+                <title>{modules.label(s.majority_cluster)}</title>
+                M{s.majority_cluster}{Object.keys(s.cluster_counts).length > 1 ? "+" : ""}
               </text>
             )}
             {s.active.length === 0 && (
-              <text x={l.x} y={H - M.bottom + 27} textAnchor="middle" fontSize="8"
-                fill="#64748b">empty</text>
+              <text x={l.x} y={H - M.bottom + 28} textAnchor="middle" fontSize="11"
+                fill="var(--text-muted)">empty</text>
             )}
             {!reliable && (
-              <text x={l.x} y={H - M.bottom + 37} textAnchor="middle" fontSize="8"
-                fill="#f59e0b">{Math.round(100 * (s.recurrence ?? 0))} %</text>
+              <text x={l.x} y={H - M.bottom + 41} textAnchor="middle" fontSize="11"
+                fill="var(--warn)">{Math.round(100 * (s.recurrence ?? 0))} %</text>
             )}
           </g>
         );
       })}
-      <text x={(M.left + W - M.right) / 2} y={H - 3} textAnchor="middle" fontSize="9"
-        fill="#64748b">stable states (deeper = lower energy; branches join at the lowest pass)</text>
+      <text x={(M.left + W - M.right) / 2} y={H - 3} textAnchor="middle" fontSize="11"
+        fill="var(--text-muted)">stable states (deeper = lower energy; branches join at the lowest pass)</text>
     </svg>
   );
 }
@@ -140,8 +144,8 @@ function ObservedChart({ observed, states, selected, onSelect }: {
   onSelect: (id: string) => void;
 }) {
   const modules = useModules();
-  const W = 520, H = 240;
-  const M = { top: 10, right: 34, bottom: 30, left: 52 };
+  const W = 520, H = 246;
+  const M = { top: 12, right: 34, bottom: 34, left: 52 };
   const pts = observed.samples;
   const byId = useMemo(() => new Map(states.map((s) => [s.state_id, s])), [states]);
   const hasDates = pts.every((p) => p.date != null);
@@ -167,23 +171,40 @@ function ObservedChart({ observed, states, selected, onSelect }: {
       ticks.push({ v: i, label: String(i + 1) });
   }
 
+  const eTicks: number[] = [];
+  {
+    const lo = eMin - pad, hi = eMax + pad, span = hi - lo;
+    const step = Math.pow(10, Math.floor(Math.log10(span / 4)));
+    const nice = [1, 2, 2.5, 5, 10].map((m) => m * step).find((s) => span / s <= 6) ?? step;
+    for (let v = Math.ceil(lo / nice) * nice; v <= hi; v += nice) eTicks.push(Number(v.toFixed(6)));
+  }
+
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full rounded bg-slate-900"
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full rounded bg-raised"
       data-testid="ela-observed-chart" role="img"
       aria-label="Energy of observed communities over time">
       <line x1={M.left - 8} y1={M.top - 4} x2={M.left - 8} y2={H - M.bottom + 4}
-        stroke="#475569" strokeWidth="1" />
-      <text x={12} y={M.top + 2} fontSize="9" fill="#64748b">energy</text>
+        stroke="var(--chart-axis)" strokeWidth="1" />
+      <g data-testid="ela-observed-energy-ticks" data-n={eTicks.length}>
+        {eTicks.map((t) => (
+          <g key={t}>
+            <line x1={M.left - 11} y1={y(t)} x2={M.left - 8} y2={y(t)} stroke="var(--chart-axis)" />
+            <text x={M.left - 14} y={y(t) + 3} textAnchor="end" fontSize="11"
+              fill="var(--text-muted)" fontFamily="ui-monospace, monospace">{t}</text>
+          </g>
+        ))}
+      </g>
+      <text x={4} y={M.top - 2} fontSize="11" fill="var(--text-muted)">energy</text>
       {ticks.map((t) => (
         <g key={t.label}>
           <line x1={x(t.v)} y1={H - M.bottom} x2={x(t.v)} y2={H - M.bottom + 4}
-            stroke="#475569" />
-          <text x={x(t.v)} y={H - M.bottom + 14} textAnchor="middle" fontSize="9"
-            fill="#94a3b8">{t.label}</text>
+            stroke="var(--chart-axis)" />
+          <text x={x(t.v)} y={H - M.bottom + 15} textAnchor="middle" fontSize="11"
+            fill="var(--text-muted)">{t.label}</text>
         </g>
       ))}
-      <text x={(M.left + W - M.right) / 2} y={H - 3} textAnchor="middle" fontSize="9"
-        fill="#64748b">
+      <text x={(M.left + W - M.right) / 2} y={H - 3} textAnchor="middle" fontSize="11"
+        fill="var(--text-muted)">
         {hasDates ? "lower = more stable in the fitted model"
           : "sample order (ordinal axis — no calendar)"}
       </text>
@@ -193,13 +214,13 @@ function ObservedChart({ observed, states, selected, onSelect }: {
           <line x1={M.left - 4} y1={y(s.energy)} x2={W - M.right + 4} y2={y(s.energy)}
             stroke={stateColor(s, modules.color)} strokeWidth="0.8" strokeDasharray="3 3"
             opacity={selected == null || selected === s.state_id ? 0.55 : 0.15} />
-          <text x={W - M.right + 7} y={y(s.energy) + 3} fontSize="9"
+          <text x={W - M.right + 7} y={y(s.energy) + 3} fontSize="11"
             fill={stateColor(s, modules.color)}
             opacity={selected == null || selected === s.state_id ? 1 : 0.3}>{i + 1}</text>
         </g>
       ))}
 
-      <polyline fill="none" stroke="#475569" strokeWidth="0.7"
+      <polyline fill="none" stroke="var(--chart-axis)" strokeWidth="0.7"
         points={pts.map((p, i) => `${x(xs[i])},${y(p.energy)}`).join(" ")} />
       {pts.map((p, i) => {
         const st = byId.get(p.basin);
@@ -207,14 +228,14 @@ function ObservedChart({ observed, states, selected, onSelect }: {
         return (
           <circle key={p.sample} cx={x(xs[i])} cy={y(p.energy)} r={st ? 2.6 : 2.2}
             fill={st ? stateColor(st, modules.color) : "transparent"}
-            stroke={st ? "#0f172a" : "#94a3b8"} strokeWidth="0.6"
+            stroke={st ? "var(--raised)" : "var(--chart-line)"} strokeWidth="0.6"
             opacity={dim ? 0.15 : 1} className={st ? "cursor-pointer" : undefined}
             onClick={st ? () => onSelect(p.basin) : undefined}>
             <title>
               {`${p.sample}${p.date && p.date !== p.sample ? ` (${p.date})` : ""} · ` +
                 `energy ${p.energy.toFixed(3)} · basin ` +
                 (st ? `state ${states.findIndex((z) => z.state_id === p.basin) + 1}` +
-                      (st.majority_cluster != null ? ` (C${st.majority_cluster})` : "")
+                      (st.majority_cluster != null ? ` (${modules.label(st.majority_cluster)})` : "")
                     : `${p.basin} — a shallow basin pruned from the stable-state list`)}
             </title>
           </circle>
@@ -231,13 +252,14 @@ export default function ElaPanel({ datasetId, onClose, onOpenAsv }: {
 }) {
   const modules = useModules();
   const [d, setD] = useState<Ela | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<unknown>(null);
+  const [nochmal, setNochmal] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
 
   useEffect(() => {
     setD(null); setErr(null); setSelected(null);
-    getEla(datasetId).then(setD).catch((e) => setErr(String(e)));
-  }, [datasetId]);
+    getEla(datasetId).then(setD).catch((e) => setErr(e));
+  }, [datasetId, nochmal]);
 
   const taxa = useMemo(() => {
     if (!d) return [];
@@ -248,31 +270,27 @@ export default function ElaPanel({ datasetId, onClose, onOpenAsv }: {
   }, [d]);
 
   return (
-    <div data-testid="ela-panel"
-      className="h-full overflow-y-auto p-4 text-sm text-slate-200">
-      <div className="flex items-start justify-between">
-        <h2 className="text-base font-semibold flex items-center">
-          Energy landscape
+    <div data-testid="ela-panel" className="text-sm text-fg">
+      <PanelHeader title="Energy landscape" onClose={onClose} closeTestid="ela-close">
           <InfoTip title="What this view answers — and what it does not">
-            <p>A pairwise maximum-entropy model over presence/absence of the model taxa:
+            <p>A pairwise maximum-entropy model over presence/absence of the ASVs in the model:
             every community state gets an <strong>energy</strong> — valleys are stable
             states, passes are the transitions between them.</p>
             <p>It answers whether distinct stable states exist and how they connect. It
             does NOT prove ecological attractors, does not use abundance heights, time
             order or environmental covariates (base model), and says nothing about
             threat or resilience.</p>
-            {d?.run && <p className="text-slate-500">{d.run.reference}</p>}
+            {d?.run && <p className="text-fg-muted">{d.run.reference}</p>}
           </InfoTip>
-        </h2>
-        <button onClick={onClose} aria-label="Close" data-testid="ela-close"
-          className="text-slate-400 hover:text-slate-200 px-1">✕</button>
-      </div>
+      </PanelHeader>
+      <div className="px-4 pb-4">
 
-      {err && <div className="mt-3 text-red-300" data-testid="ela-error">{err}</div>}
-      {!err && !d && <div className="mt-3 text-slate-400">loading …</div>}
+      {err != null && <div className="mt-3"><ErrorNotice error={err} testid="ela-error" inline
+        what="Could not load the energy landscape." onRetry={() => setNochmal((n) => n + 1)} /></div>}
+      {err == null && !d && <StateNotice state="loading" inline className="mt-3">loading …</StateNotice>}
 
       {d && d.absent_reason && (
-        <p className="mt-3 flex items-center text-amber-400" data-testid="ela-absent">
+        <p className="mt-3 flex items-center text-warn" data-testid="ela-absent">
           No energy-landscape run for this dataset
           <InfoTip title="Why there is none, and how one comes about">
             <p data-testid="ela-absent-full">{d.absent_reason}</p>
@@ -282,16 +300,16 @@ export default function ElaPanel({ datasetId, onClose, onOpenAsv }: {
 
       {d && !d.absent_reason && d.run && (
         <>
-          <p className="mt-2 text-xs text-slate-400" data-testid="ela-run">
-            {d.run.tool} · {d.run.n_species_model} model taxa · binarised at relative
+          <p className="mt-2 text-xs text-fg-muted" data-testid="ela-run">
+            {d.run.tool} · {d.run.n_species_model} ASVs in the model · binarised at relative
             value ≥ {d.run.ath} · seed {d.run.seed} · bootstrap {d.run.boot}×
           </p>
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-1 text-xs text-fg-muted">
             {d.value_declaration.frame} — values are {d.value_declaration.unit}.
           </p>
 
           <section className="mt-4" data-testid="ela-figure">
-            <h3 className="text-xs uppercase tracking-wide text-slate-500">
+            <SectionHeading>
               Disconnectivity graph
               <InfoTip title="How to read this figure">
                 <p>The standard figure of the cited literature: each leaf is one stable
@@ -300,22 +318,22 @@ export default function ElaPanel({ datasetId, onClose, onOpenAsv }: {
                 them — the longer the stem below a junction, the higher the barrier the
                 model has to cross to leave that valley.</p>
                 <p>Dashed leaves fall below the {Math.round(RELIABLE * 100)} % bootstrap
-                guard: reported, not relied on. Leaf colour is the majority cluster of the
-                state's active taxa — orientation only, not a finding.</p>
+                guard: reported, not relied on. Leaf colour is the majority module of the
+                state's active ASVs — orientation only, not a finding.</p>
               </InfoTip>
-            </h3>
+            </SectionHeading>
             {d.disconnectivity
               ? <Disconnectivity tree={d.disconnectivity} states={d.states}
                   selected={selected}
                   onSelect={(id) => setSelected(selected === id ? null : id)} />
-              : <p className="mt-1 text-xs text-slate-500" data-testid="ela-no-tree">
+              : <p className="mt-1 text-xs text-fg-muted" data-testid="ela-no-tree">
                   no figure — the pass matrix between the states is incomplete, and a
                   guessed tree would be a lie.</p>}
           </section>
 
           {d.observed && (
             <section className="mt-4" data-testid="ela-observed">
-              <h3 className="text-xs uppercase tracking-wide text-slate-500">
+              <SectionHeading>
                 Observed communities over time
                 <InfoTip title="Where each sample sits in the landscape">
                   <p>{d.observed.method}</p>
@@ -324,11 +342,11 @@ export default function ElaPanel({ datasetId, onClose, onOpenAsv }: {
                   colour the stable state it descends into. Dashed lines mark the stable
                   states. A seasonal system shows up as regular switching between
                   valleys.</p>
-                  <p className="text-slate-500">{d.observed.reference}</p>
+                  <p className="text-fg-muted">{d.observed.reference}</p>
                 </InfoTip>
-              </h3>
+              </SectionHeading>
               {d.observed.absent_reason
-                ? <p className="mt-1 text-xs text-amber-400" data-testid="ela-observed-absent">
+                ? <p className="mt-1 text-xs text-warn" data-testid="ela-observed-absent">
                     {d.observed.absent_reason}</p>
                 : <ObservedChart observed={d.observed} states={d.states}
                     selected={selected}
@@ -337,7 +355,7 @@ export default function ElaPanel({ datasetId, onClose, onOpenAsv }: {
           )}
 
           <section className="mt-4" data-testid="ela-states">
-            <h3 className="text-xs uppercase tracking-wide text-slate-500">
+            <SectionHeading>
               Stable states ({d.states.length})
               <InfoTip title="How to read a state">
                 <p>Each row is one state. Lower energy = deeper valley.
@@ -347,42 +365,43 @@ export default function ElaPanel({ datasetId, onClose, onOpenAsv }: {
                 state reappears — a state below {Math.round(RELIABLE * 100)} % is reported,
                 not relied on.</p>
               </InfoTip>
-            </h3>
+            </SectionHeading>
             <table className="mt-1 w-full text-xs">
-              <thead><tr className="text-slate-500 text-left">
+              <thead><tr className="text-fg-muted text-left">
                 <th className="pr-2 font-normal">#</th>
                 <th className="pr-2 font-normal">energy</th>
                 <th className="pr-2 font-normal">barrier</th>
                 <th className="pr-2 font-normal">recurrence</th>
-                <th className="pr-2 font-normal">taxa</th>
-                <th className="font-normal">clusters</th>
+                <th className="pr-2 font-normal">ASVs</th>
+                <th className="font-normal">modules</th>
               </tr></thead>
               <tbody>
                 {d.states.map((s, i) => (
                   <tr key={s.state_id} data-testid={`ela-state-${i}`}
                     onClick={() => setSelected(selected === s.state_id ? null : s.state_id)}
-                    className={"align-top border-t border-slate-800 cursor-pointer " +
-                      (selected === s.state_id ? "bg-slate-800/70" : "hover:bg-slate-800/40")}>
-                    <td className="pr-2 py-1 tabular-nums text-slate-400">{i + 1}</td>
+                    className={"align-top border-t border-line-subtle cursor-pointer " +
+                      (selected === s.state_id ? "bg-control/70" : "hover:bg-control/40")}>
+                    <td className="pr-2 py-1 tabular-nums text-fg-muted">{i + 1}</td>
                     <td className="pr-2 py-1 tabular-nums">{s.energy.toFixed(3)}</td>
                     <td className="pr-2 py-1 tabular-nums">
                       {s.barrier == null ? "—" : s.barrier.toFixed(3)}</td>
                     <td className="pr-2 py-1 tabular-nums">
                       {s.recurrence == null ? "—"
-                        : <span className={s.recurrence < RELIABLE ? "text-amber-400" : ""}>
+                        : <span className={s.recurrence < RELIABLE ? "text-warn" : ""}>
                             {Math.round(100 * s.recurrence)} %</span>}
                     </td>
                     <td className="pr-2 py-1 tabular-nums">
                       {s.active.length === 0
-                        ? <span className="text-slate-500">none — the empty state</span>
+                        ? <span className="text-fg-muted">none — the empty state</span>
                         : s.n_active}
                     </td>
                     <td className="py-1">
                       {Object.entries(s.cluster_counts).map(([c, n]) => (
-                        <span key={c} className="inline-flex items-center mr-1.5 whitespace-nowrap">
-                          <span className="inline-block w-2 h-2 rounded-sm mr-0.5"
+                        <span key={c} className="inline-flex items-center mr-2 whitespace-nowrap"
+                          title={modules.label(Number(c))}>
+                          <span className="inline-block w-2 h-2 rounded-sm mr-1"
                             style={{ background: modules.color(Number(c)) }} />
-                          C{c}{n > 1 ? ` ×${n}` : ""}
+                          M{c}{n > 1 ? ` ×${n}` : ""}
                         </span>
                       ))}
                     </td>
@@ -394,36 +413,36 @@ export default function ElaPanel({ datasetId, onClose, onOpenAsv }: {
 
           {taxa.length > 0 && (
             <section className="mt-4" data-testid="ela-composition">
-              <h3 className="text-xs uppercase tracking-wide text-slate-500">
+              <SectionHeading>
                 State composition
-                <InfoTip title="Which taxa make up which state">
-                  <p>Rows are the model taxa that are active in at least one stable state,
-                  grouped by network cluster (colour). A dot means the taxon is ON in that
-                  state. Click a taxon to open its detail view.</p>
+                <InfoTip title="Which ASVs make up which state">
+                  <p>Rows are the ASVs of the model that are active in at least one stable
+                  state, grouped by network module (colour). A dot means the ASV is ON in that
+                  state. Click an ASV to open its detail view.</p>
                 </InfoTip>
-              </h3>
+              </SectionHeading>
               <table className="mt-1 text-xs">
                 <thead><tr>
-                  <th className="pr-2 font-normal text-left text-slate-500">taxon</th>
+                  <th className="pr-2 font-normal text-left text-fg-muted">ASV</th>
                   {d.states.map((s, i) => (
                     <th key={s.state_id}
                       onClick={() => setSelected(selected === s.state_id ? null : s.state_id)}
                       className={"px-1 font-normal tabular-nums cursor-pointer " +
-                        (selected === s.state_id ? "text-slate-100" : "text-slate-500")}>
+                        (selected === s.state_id ? "text-fg" : "text-fg-muted")}>
                       {i + 1}</th>
                   ))}
                 </tr></thead>
                 <tbody>
                   {taxa.map((t) => (
-                    <tr key={t.id} className="border-t border-slate-800/60">
-                      <td className="pr-2 py-0.5">
+                    <tr key={t.id} className="border-t border-line-subtle">
+                      <td className="pr-2 py-1">
                         <button onClick={() => onOpenAsv?.(t.id)} disabled={!onOpenAsv}
                           title={t.genus ?? t.id}
-                          className="inline-flex items-center font-mono text-[10px]
-                                     hover:text-slate-50">
+                          className="inline-flex items-center font-mono text-2xs
+                                     hover:text-fg">
                           <span className="inline-block w-2 h-2 rounded-sm mr-1 shrink-0"
                             style={{ background: t.cluster != null
-                              ? modules.color(t.cluster) : "#334155" }} />
+                              ? modules.color(t.cluster) : "var(--control-strong)" }} />
                           {t.id}
                         </button>
                       </td>
@@ -431,11 +450,11 @@ export default function ElaPanel({ datasetId, onClose, onOpenAsv }: {
                         const on = s.active.some((a) => a.id === t.id);
                         const dim = selected != null && selected !== s.state_id;
                         return (
-                          <td key={s.state_id} className="px-1 py-0.5 text-center">
+                          <td key={s.state_id} className="px-1 py-1 text-center">
                             {on && <span className={"inline-block w-2.5 h-2.5 rounded-full " +
                                 (dim ? "opacity-25" : "")}
                               style={{ background: t.cluster != null
-                                ? modules.color(t.cluster) : "#64748b" }} />}
+                                ? modules.color(t.cluster) : "var(--chart-line)" }} />}
                           </td>
                         );
                       })}
@@ -447,31 +466,37 @@ export default function ElaPanel({ datasetId, onClose, onOpenAsv }: {
           )}
 
           <section className="mt-4" data-testid="ela-tippings">
-            <h3 className="text-xs uppercase tracking-wide text-slate-500">
+            <SectionHeading>
               Passes between states
               <InfoTip title="Tipping points">
                 <p>The lowest pass the model finds between two stable states. A high pass
                 between two deep valleys means the model does not switch between them
                 easily; it is NOT a prediction of what the ecosystem will do.</p>
               </InfoTip>
-            </h3>
+            </SectionHeading>
             {d.tipping_points.length === 0
-              ? <p className="mt-1 text-xs text-slate-500">none — only one stable state.</p>
+              ? <p className="mt-1 text-xs text-fg-muted">none — only one stable state.</p>
               : <table className="mt-1 text-xs tabular-nums">
                   <tbody>
-                    {d.tipping_points.map((t, i) => (
-                      <tr key={i} className="border-t border-slate-800">
-                        <td className="pr-2 py-0.5 font-mono">{t.ss1}</td>
-                        <td className="pr-2 py-0.5 text-slate-500">↔</td>
-                        <td className="pr-2 py-0.5 font-mono">{t.ss2}</td>
-                        <td className="py-0.5">pass at {t.energy.toFixed(3)}</td>
-                      </tr>
-                    ))}
+                    {d.tipping_points.map((t, i) => {
+                      const nr = (id: string) => {
+                        const k = d.states.findIndex((s) => s.state_id === id);
+                        return k < 0 ? id : `state ${k + 1}`;
+                      };
+                      return (
+                        <tr key={i} className="border-t border-line-subtle" data-testid="ela-tipping-row">
+                          <td className="pr-2 py-1" title={`state code ${t.ss1}`}>{nr(t.ss1)}</td>
+                          <td className="pr-2 py-1 text-fg-muted">↔</td>
+                          <td className="pr-2 py-1" title={`state code ${t.ss2}`}>{nr(t.ss2)}</td>
+                          <td className="py-1">pass at energy {t.energy.toFixed(3)}</td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>}
           </section>
 
-          <section className="mt-4 text-xs text-slate-400 space-y-1" data-testid="ela-caveats">
+          <section className="mt-4 text-xs text-fg-muted space-y-1" data-testid="ela-caveats">
             {d.caveats.map((c, i) => <p key={i}>{c}</p>)}
           </section>
         </>
@@ -479,6 +504,7 @@ export default function ElaPanel({ datasetId, onClose, onOpenAsv }: {
 
       <div className="mt-4">
         <ProvenanceFooter datasetId={datasetId} />
+      </div>
       </div>
     </div>
   );

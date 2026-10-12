@@ -4,12 +4,12 @@ import InfoTip from "./InfoTip";
 export default function DataAvailability({ caps, testid = "capabilities" }:
   { caps: Capabilities; testid?: string }) {
   return (
-    <dl data-testid={testid} className="text-[11px] leading-snug">
+    <dl data-testid={testid} className="text-2xs leading-snug">
       {caps.items.map((c) => (
         <div key={c.key} data-testid={`cap-${c.key}`}
-          className="flex items-baseline gap-1.5 py-px">
-          <dt className="text-slate-500 shrink-0">{c.label}</dt>
-          <dd className={`truncate ${c.available ? "text-slate-300" : "text-amber-400/90"}`}>
+          className="flex items-baseline gap-2 py-px">
+          <dt className="text-fg-muted shrink-0">{c.label}</dt>
+          <dd className={`truncate ${c.available ? "text-fg" : "text-warn"}`}>
             {c.value}
           </dd>
           <dd className="ml-auto shrink-0">
@@ -30,7 +30,7 @@ export default function DataAvailability({ caps, testid = "capabilities" }:
 
 export function NotAvailable({ cap, testid }: { cap?: Capability; testid?: string }) {
   return (
-    <p data-testid={testid} className="text-xs text-amber-400/90 leading-snug">
+    <p data-testid={testid} className="text-xs text-warn leading-snug">
       Not available for this dataset
       {cap && <> — {cap.detail}</>}
     </p>

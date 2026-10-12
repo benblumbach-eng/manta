@@ -1,9 +1,16 @@
+import { StateNotice } from "./ui";
 import { useEffect, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { getEnvironment, getLight, type Environment, type EnvVariable,
          type Light, type SamplerPosition } from "../api";
 import InfoTip from "./InfoTip";
+import { PanelHeader } from "./PanelFrame";
+import { esc } from "../format";
 import ProvenanceFooter from "./ProvenanceFooter";
+import ErrorNotice from "./ErrorNotice";
+import { Segmented } from "./controls";
+import { chartTooltip, FONT, useTokens } from "../design/tokens";
+import { envColour, mixedLayerColours, sunColours } from "../design/dataColours";
 
 export default function EnvironmentPanel({ datasetId, onClose, focus }: {
   datasetId: string; onClose: () => void;
@@ -11,54 +18,50 @@ export default function EnvironmentPanel({ datasetId, onClose, focus }: {
 }) {
   const [e, setE] = useState<Environment | null>(null);
   const [light, setLight] = useState<Light | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<unknown>(null);
+  const [nochmal, setNochmal] = useState(0);
 
   useEffect(() => {
     if (!e || !focus) return;
     const el = document.querySelector(`[data-testid="env-var-${focus}"]`) as HTMLElement | null;
     if (!el) return;
     el.scrollIntoView({ behavior: "smooth", block: "start" });
-    el.classList.add("ring-1", "ring-emerald-400/60", "rounded");
-    const t = setTimeout(() => el.classList.remove("ring-1", "ring-emerald-400/60", "rounded"), 2500);
+    el.classList.add("ring-1", "ring-ok", "rounded");
+    const t = setTimeout(() => el.classList.remove("ring-1", "ring-ok", "rounded"), 2500);
     return () => clearTimeout(t);
   }, [e, focus]);
   useEffect(() => {
     setE(null); setErr(null);
-    getEnvironment(datasetId).then(setE).catch((x) => setErr(String(x)));
+    getEnvironment(datasetId).then(setE).catch((x) => setErr(x));
     setLight(null);
     getLight(datasetId).then(setLight).catch(() => setLight(null));
-  }, [datasetId]);
+  }, [datasetId, nochmal]);
 
   return (
-    <div className="h-full overflow-auto"
-      data-testid="environment-panel">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700 sticky top-0 bg-slate-900 z-10">
-        <span className="flex items-center text-slate-100 font-medium">
-          Environment over time
-          {e && (
-            <InfoTip title="Where these values come from">
-              <p data-testid="environment-provenance">{e.provenance}</p>
-              <p data-testid="environment-units-note">{e.units_note}</p>
-            </InfoTip>
-          )}
-        </span>
-        <button onClick={onClose} data-testid="environment-close" aria-label="Close"
-          className="text-slate-400 hover:text-white">✕</button>
-      </div>
+    <div data-testid="environment-panel">
+      <PanelHeader title="Environment over time" onClose={onClose} closeTestid="environment-close">
+        {e && (
+          <InfoTip title="Where these values come from">
+            <p data-testid="environment-provenance">{e.provenance}</p>
+            <p data-testid="environment-units-note">{e.units_note}</p>
+          </InfoTip>
+        )}
+      </PanelHeader>
 
-      {err && <div className="p-4 text-red-300" data-testid="error">{err}</div>}
-      {!e && !err && <div className="p-4 text-slate-500">loading …</div>}
+      {err != null && <ErrorNotice error={err} what="Could not load the environment."
+        onRetry={() => setNochmal((n) => n + 1)} />}
+      {!e && err == null && <StateNotice state="loading">loading …</StateNotice>}
 
       {e && (
         <div className="p-4 space-y-4 text-sm">
-          <p className="text-xs text-slate-300" data-testid="environment-declaration">
+          <p className="text-xs text-fg" data-testid="environment-declaration">
             Measured, not derived from the sequences.
           </p>
 
           {e.variables.length === 0 ? (
-            <div data-testid="environment-none" className="rounded border border-amber-500/40 bg-amber-500/5 p-3">
-              <div className="text-amber-300 font-medium">No environmental data for this dataset</div>
-              <p className="mt-1 text-xs text-slate-300">{e.absent_reason}</p>
+            <div data-testid="environment-none" className="rounded border border-warn bg-warn-soft p-3">
+              <div className="text-warn font-medium">No environmental data for this dataset</div>
+              <p className="mt-1 text-xs text-fg">{e.absent_reason}</p>
             </div>
           ) : (
             <>
@@ -69,7 +72,7 @@ export default function EnvironmentPanel({ datasetId, onClose, focus }: {
           )}
 
           {e.absent.length > 0 && e.variables.length > 0 && (
-            <div className="text-xs text-slate-500" data-testid="environment-absent">
+            <div className="text-xs text-fg-muted" data-testid="environment-absent">
               Not supplied with this dataset: {e.absent.map((a) => a.label).join(", ")}.
             </div>
           )}
@@ -82,44 +85,47 @@ export default function EnvironmentPanel({ datasetId, onClose, focus }: {
 
 function VariableChart({ v, dated }: { v: EnvVariable; dated: boolean }) {
   const missing = v.total - v.n;
+  const tok = useTokens();
+  const achse = { color: tok.textMuted, fontSize: FONT.xs2 };
+  const ENV = envColour(tok.light);
   const option = {
     backgroundColor: "transparent",
     grid: { left: 52, right: 12, top: 10, bottom: 20 },
     tooltip: {
+      ...chartTooltip(tok),
       trigger: "axis" as const,
       formatter: (ps: { data: [string, number | null] }[]) => {
         const p = ps[0];
         if (!p) return "";
-        return `<b>${dated ? p.data[0] : `Sample ${p.data[0]}`}</b><br/>`
-          + (p.data[1] == null ? "not measured" : `${p.data[1].toFixed(3)}${v.unit ? ` ${v.unit}` : ""}`);
+        return `<b>${esc(dated ? p.data[0] : `Sample ${p.data[0]}`)}</b><br/>`
+          + (p.data[1] == null ? "not measured" : `${p.data[1].toFixed(3)}${v.unit ? ` ${esc(v.unit)}` : ""}`);
       },
     },
     xAxis: dated
-      ? { type: "time" as const, axisLabel: { color: "#94a3b8", fontSize: 9 } }
+      ? { type: "time" as const, axisLabel: achse }
       : { type: "category" as const, data: v.points.map((_, i) => String(i + 1)),
-          axisLabel: { color: "#94a3b8", fontSize: 9,
-                       interval: Math.max(0, Math.floor(v.points.length / 10) - 1) } },
+          axisLabel: { ...achse, interval: Math.max(0, Math.floor(v.points.length / 10) - 1) } },
     yAxis: {
       type: "value" as const, scale: true,
-      axisLabel: { color: "#94a3b8", fontSize: 9 },
-      splitLine: { lineStyle: { color: "#1e293b" } },
+      axisLabel: achse,
+      splitLine: { lineStyle: { color: tok.chartGrid } },
     },
     series: [{
       name: v.label, type: "line" as const, showSymbol: true, symbolSize: 3,
       connectNulls: false,
       data: v.points.map((p, i) => [dated ? p.date : String(i + 1), p.value] as [string, number | null]),
-      lineStyle: { color: "#34d399", width: 1.5 }, itemStyle: { color: "#34d399" },
+      lineStyle: { color: ENV, width: 1.5 }, itemStyle: { color: ENV },
     }],
   };
 
   return (
     <div data-testid={`env-var-${v.key}`}>
       <div className="flex items-baseline justify-between">
-        <span className="text-slate-200">
+        <span className="text-fg">
           {v.label}
-          {v.unit && <span className="text-slate-400"> ({v.unit})</span>}
+          {v.unit && <span className="text-fg-muted"> ({v.unit})</span>}
           {v.unit_note && (
-            <span className="text-amber-400" data-testid={`env-unit-note-${v.key}`}>
+            <span className="text-warn" data-testid={`env-unit-note-${v.key}`}>
               {" "}!
               <InfoTip title="The published unit does not match these values">
                 <p>{v.unit_note}</p>
@@ -129,15 +135,15 @@ function VariableChart({ v, dated }: { v: EnvVariable; dated: boolean }) {
             </span>
           )}
         </span>
-        <span className="text-[10px] text-slate-500 tabular-nums" data-testid={`env-coverage-${v.key}`}>
+        <span className="text-2xs text-fg-muted tabular-nums" data-testid={`env-coverage-${v.key}`}>
           {v.n} of {v.total} samples
         </span>
       </div>
-      <div className="text-[10px] text-slate-500 tabular-nums">
+      <div className="text-2xs text-fg-muted tabular-nums">
         {v.min.toFixed(2)} … {v.max.toFixed(2)}
         {v.unit ? ` ${v.unit}` : ""} · mean {v.mean.toFixed(2)}
         {missing > 0 && (
-          <span className="text-amber-400/80" data-testid={`env-gap-${v.key}`}>
+          <span className="text-warn" data-testid={`env-gap-${v.key}`}>
             {" "}· {missing} sample{missing === 1 ? "" : "s"} without a value, drawn as a gap
           </span>
         )}
@@ -150,8 +156,7 @@ function VariableChart({ v, dated }: { v: EnvVariable; dated: boolean }) {
 
 type DotColour = "position" | "chl" | "light";
 
-const POS_COLOR = { within: "#22d3ee", below: "#f97316", unknown: "#64748b" } as const;
-const PHASE_COLOR = { night: "#818cf8", twilight: "#94a3b8", day: "#fbbf24" } as const;
+type Phase = "night" | "twilight" | "day";
 const PHASE_LABEL = { night: "polar night", twilight: "day and night", day: "midnight sun" } as const;
 
 function chlRamp(t: number): string {
@@ -164,6 +169,10 @@ function WaterColumn({ sp, dated, vars, light }: {
   sp: SamplerPosition; dated: boolean; vars: EnvVariable[]; light: Light | null;
 }) {
   const [mode, setMode] = useState<DotColour>("position");
+  const { light: hell } = useTokens();
+  const POS_COLOR = mixedLayerColours(hell);
+  const sonne = sunColours(hell);
+  const PHASE_COLOR: Record<Phase, string> = { night: sonne.night, twilight: sonne.twilight, day: sonne.day };
   const [hover, setHover] = useState<string | null>(null);
   const [pin, setPin] = useState<string | null>(null);
 
@@ -171,7 +180,7 @@ function WaterColumn({ sp, dated, vars, light }: {
   const chl = new Map((chlVar?.points ?? []).filter((p) => p.value != null)
     .map((p) => [p.sample, p.value as number]));
   const phase = new Map((light?.per_sample ?? []).map((p) =>
-    [p.sample, (p.polar_night ? "night" : p.polar_day ? "day" : "twilight") as keyof typeof PHASE_COLOR]));
+    [p.sample, (p.polar_night ? "night" : p.polar_day ? "day" : "twilight") as Phase]));
   const lightBy = new Map((light?.per_sample ?? []).map((p) => [p.sample, p]));
   const chlLo = chlVar?.min ?? 0, chlHi = chlVar?.max ?? 1;
 
@@ -221,7 +230,7 @@ function WaterColumn({ sp, dated, vars, light }: {
     <div data-testid="water-column" data-within={sp.n_within} data-below={sp.n_below}
          data-unknown={sp.n_unknown} data-depth-axis={MAX}>
       <div className="flex items-baseline justify-between">
-        <span className="text-slate-200 flex items-center">Where the sampler hung
+        <span className="text-fg flex items-center">Where the sampler hung
           <InfoTip title="Reading this">
             <p>Time runs to the right, depth downwards. The axis reaches {MAX} m, the deepest value measured here, so nothing is cut off.</p>
             <p>The shaded body is the mixed layer — the water stirred together from the surface. Its line connects the sampling days; between them nothing was measured.</p>
@@ -229,20 +238,14 @@ function WaterColumn({ sp, dated, vars, light }: {
             <p>A hollow dot means that value is missing for this sample. {sp.note}</p>
           </InfoTip>
         </span>
-        <span className="text-[10px] text-slate-500 tabular-nums">{sp.n_total} samples</span>
+        <span className="text-2xs text-fg-muted tabular-nums">{sp.n_total} samples</span>
       </div>
-      <p className="text-xs text-slate-300 mt-0.5" data-testid="water-column-statement">{sp.statement}</p>
+      <p className="text-xs text-fg mt-1" data-testid="water-column-statement">{sp.statement}</p>
 
-      <div className="flex flex-wrap items-center gap-1 mt-1.5 text-[10px]">
-        <span className="text-slate-500 mr-0.5">colour</span>
-        {modi.filter((m) => m.da).map((m) => (
-          <button key={m.key} data-testid={`water-column-colour-${m.key}`} onClick={() => setMode(m.key)}
-            className={`px-1.5 py-0.5 rounded border ${mode === m.key
-              ? "border-cyan-600 text-cyan-300 bg-cyan-500/10"
-              : "border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-500"}`}>
-            {m.label}
-          </button>
-        ))}
+      <div className="mt-2">
+        <Segmented label="Colour" value={mode} onChange={setMode}
+          options={modi.filter((m) => m.da).map((m) => (
+            { value: m.key, label: m.label, testid: `water-column-colour-${m.key}` }))} />
       </div>
 
       <div className="relative mt-1">
@@ -252,8 +255,8 @@ function WaterColumn({ sp, dated, vars, light }: {
         }}>
         {ticks.map((d) => (
           <g key={d}>
-            <line x1={L} x2={W - R} y1={y(d)} y2={y(d)} stroke="#1e293b" strokeWidth={0.5} />
-            <text x={L - 4} y={y(d) + 3} fontSize={8} fill="#64748b" textAnchor="end">{d} m</text>
+            <line x1={L} x2={W - R} y1={y(d)} y2={y(d)} stroke="var(--chart-grid)" strokeWidth={0.5} />
+            <text x={L - 4} y={y(d) + 4} fontSize={11} fill="var(--text-muted)" textAnchor="end">{d} m</text>
           </g>
         ))}
         {jahre.map((jr) => {
@@ -261,25 +264,25 @@ function WaterColumn({ sp, dated, vars, light }: {
           if (i <= 0) return null;
           return (
             <g key={jr}>
-              <line x1={x(i)} x2={x(i)} y1={T} y2={H - B} stroke="#334155" strokeWidth={0.5} strokeDasharray="2 3" />
-              <text x={x(i) + 2} y={T - 4} fontSize={8} fill="#64748b">{jr}</text>
+              <line x1={x(i)} x2={x(i)} y1={T} y2={H - B} stroke="var(--chart-axis)" strokeWidth={0.5} strokeDasharray="2 3" />
+              <text x={x(i) + 2} y={T - 4} fontSize={11} fill="var(--text-muted)">{jr}</text>
             </g>
           );
         })}
-        {flaeche && <path d={flaeche} fill="#38bdf8" opacity={0.10} />}
-        {linie && <path d={linie} fill="none" stroke="#38bdf8" strokeWidth={1.2} opacity={0.75} />}
+        {flaeche && <path d={flaeche} fill={POS_COLOR.band} opacity={0.10} />}
+        {linie && <path d={linie} fill="none" stroke={POS_COLOR.band} strokeWidth={1.2} opacity={0.75} />}
         {sp.samples.map((s, i) => {
           const c = farbe(s);
           const an = pin === s.sample || (pin === null && hover === s.sample);
           return (
             <g key={s.sample}>
               {pin === s.sample && (
-                <circle cx={x(i)} cy={y(s.depth)} r={6.5} fill="none" stroke="#e2e8f0"
+                <circle cx={x(i)} cy={y(s.depth)} r={6.5} fill="none" stroke="var(--text)"
                         strokeWidth={1} opacity={0.9} />
               )}
               <circle data-testid="water-column-dot" data-sample={s.sample}
                 cx={x(i)} cy={y(s.depth)} r={an ? 4.5 : 3}
-                fill={c ?? "none"} stroke={c ?? "#64748b"} strokeWidth={c ? 0 : 1}
+                fill={c ?? "none"} stroke={c ?? "var(--chart-line)"} strokeWidth={c ? 0 : 1}
                 style={{ cursor: "pointer" }}
                 onMouseEnter={() => setHover(s.sample)}
                 onMouseLeave={() => setHover((h) => (h === s.sample ? null : h))}
@@ -298,31 +301,31 @@ function WaterColumn({ sp, dated, vars, light }: {
         const oben = y(s.depth) < (T + H - B) / 2;
         return (
           <div data-testid="water-column-readout" data-sample={s.sample} data-pinned={pin ? "1" : "0"}
-            className="absolute z-10 rounded border border-slate-600 bg-slate-950/95 px-2 py-1
-                       text-[10px] leading-tight text-slate-200 shadow-xl pointer-events-none"
+            className="absolute z-10 rounded-md border border-line bg-overlay px-2 py-1
+                       text-2xs leading-tight text-fg shadow-xl pointer-events-none"
             style={{ left: `${(x(i) / W) * 100}%`, top: `${(y(s.depth) / H) * 100}%`,
                      transform: `translate(${links ? "-104%" : "4%"}, ${oben ? "6%" : "-106%"})` }}>
             <div className="font-medium">{s.date ?? s.sample}</div>
-            <div className="text-slate-400 tabular-nums">sampled at {s.depth.toFixed(0)} m</div>
-            <div className="text-slate-400 tabular-nums">
+            <div className="text-fg-muted tabular-nums">sampled at {s.depth.toFixed(0)} m</div>
+            <div className="text-fg-muted tabular-nums">
               mixed layer {s.mld == null ? "not recorded" : `${s.mld.toFixed(0)} m`} · {s.position === "within" ? "inside" : s.position === "below" ? "below" : "unknown"}
             </div>
-            <div className="text-slate-400 tabular-nums">
+            <div className="text-fg-muted tabular-nums">
               chlorophyll {v == null ? "no value" : `${v.toFixed(2)}${chlVar?.unit ? " " + chlVar.unit : ""}`}
             </div>
             {ph && (
-              <div className="text-slate-400 tabular-nums">
+              <div className="text-fg-muted tabular-nums">
                 {PHASE_LABEL[ph]}{li ? ` · ${li.day_length_h.toFixed(1)} h of sun` : ""}
               </div>
             )}
-            <div className="text-slate-500">{pin ? "double-click beside it to release" : "click to keep"}</div>
+            <div className="text-fg-muted">{pin ? "double-click beside it to release" : "click to keep"}</div>
           </div>
         );
       })()}
       </div>
 
-      <div className="flex flex-wrap items-center gap-3 text-[10px] text-slate-400">
-        <span><span className="inline-block w-3 h-2 align-middle mr-1" style={{ background: "#38bdf8", opacity: 0.35 }} />mixed layer</span>
+      <div className="flex flex-wrap items-center gap-3 text-2xs text-fg-muted">
+        <span><span className="inline-block w-3 h-2 align-middle mr-1" style={{ background: POS_COLOR.band, opacity: 0.35 }} />mixed layer</span>
         {mode === "position" && (<>
           <span><span className="inline-block w-2 h-2 rounded-full mr-1" style={{ background: POS_COLOR.within }} />inside it ({sp.n_within})</span>
           <span><span className="inline-block w-2 h-2 rounded-full mr-1" style={{ background: POS_COLOR.below }} />below it ({sp.n_below})</span>

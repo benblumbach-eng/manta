@@ -1,9 +1,13 @@
+import { Button } from "./ui";
 import { useState } from "react";
 import { login, type Me } from "../api";
 import SignupForm from "./SignupForm";
 
 export default function LoginScreen(
-  { onDone, onGuest }: { onDone: (me: Me) => void; onGuest: () => void },
+  { onDone, onGuest, notice = null }: {
+    onDone: (me: Me) => void; onGuest: () => void;
+    notice?: string | null;
+  },
 ) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -24,53 +28,59 @@ export default function LoginScreen(
     }
   }
 
-  const input = "w-full mt-1 px-3 py-2 rounded bg-slate-950 border border-slate-700 text-sm " +
-                "text-slate-100 focus:border-cyan-500 focus:outline-none";
+  const input = "w-full mt-1 px-3 py-2 rounded-md bg-control border border-line-strong text-sm " +
+                "text-fg focus:border-accent focus:outline-none";
 
   if (asking) return <SignupForm onBack={() => setAsking(false)} />;
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-900">
+    <div className="fixed inset-0 z-50 grid place-items-center bg-surface p-4">
       <form onSubmit={submit} data-testid="login-form"
-            className="w-[22rem] rounded-lg border border-slate-700 bg-slate-800/60 p-6 space-y-4">
+            className="w-full max-w-[22rem] rounded-lg border border-line bg-raised p-6 space-y-4 shadow-xl">
         <div>
-          <h1 className="text-lg font-semibold text-slate-100 tracking-wide">MANTA</h1>
-          <p className="text-xs text-slate-400 mt-1">
+          <h1 className="text-xl font-semibold text-fg tracking-wide">MANTA</h1>
+          <p className="text-xs text-fg-muted mt-1">
             Marine Amplicon Network Time-series Analysis. Sign in to see internal datasets.
           </p>
         </div>
 
+        {notice && (
+          <p data-testid="signed-out-notice" role="status"
+             className="rounded border border-warn bg-warn-soft px-2 py-2 text-xs text-warn">
+            {notice}
+          </p>
+        )}
+
         <label className="block">
-          <span className="text-[11px] uppercase tracking-wide text-slate-500">User</span>
+          <span className="text-xs text-fg-muted">User</span>
           <input data-testid="login-user" className={input} value={username} autoFocus
                  autoComplete="username" onChange={(e) => setUsername(e.target.value)} />
         </label>
         <label className="block">
-          <span className="text-[11px] uppercase tracking-wide text-slate-500">Password</span>
+          <span className="text-xs text-fg-muted">Password</span>
           <input data-testid="login-pw" className={input} type="password" value={password}
                  autoComplete="current-password" onChange={(e) => setPassword(e.target.value)} />
         </label>
 
         {error && (
-          <p data-testid="login-error" className="text-xs text-red-400">{error}</p>
+          <p data-testid="login-error" className="text-xs text-danger">{error}</p>
         )}
 
-        <button type="submit" disabled={busy || !username || !password}
-                data-testid="login-submit"
-                className="w-full py-2 rounded bg-cyan-600 text-sm font-medium text-white
-                           disabled:opacity-40 hover:bg-cyan-500">
+        <Button type="submit" variant="primary" size="md" className="w-full"
+                disabled={busy || !username || !password}
+                reason={busy ? "signing in" : "enter user and password first"}
+                data-testid="login-submit">
           {busy ? "signing in …" : "Sign in"}
-        </button>
+        </Button>
 
-        <button type="button" onClick={onGuest} data-testid="login-guest"
-                className="w-full text-xs text-slate-400 hover:text-cyan-300 hover:underline">
+        <Button variant="ghost" onClick={onGuest} data-testid="login-guest" className="w-full">
           view as guest — public datasets only
-        </button>
+        </Button>
 
-        <button type="button" onClick={() => setAsking(true)} data-testid="login-request"
-                className="w-full text-xs text-slate-400 hover:text-cyan-300 hover:underline">
+        <Button variant="ghost" onClick={() => setAsking(true)} data-testid="login-request"
+                className="w-full">
           no account yet? request access
-        </button>
+        </Button>
       </form>
     </div>
   );

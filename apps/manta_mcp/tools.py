@@ -7,10 +7,11 @@ import json
 import os
 import re
 from datetime import datetime, timezone
-from typing import Any
+from typing import Annotated, Any
 
-from neo4j import GraphDatabase
+from neo4j import GraphDatabase, unit_of_work
 from neo4j.exceptions import Neo4jError
+from pydantic import Field
 
 import access
 import anwendbarkeit
@@ -19,9 +20,18 @@ import semantics
 import statistik
 
 SCHEMA_VERSION = "manta-graph-1"
-TOOLS_VERSION = "0.13.0"
+TOOLS_VERSION = "0.16.0"
 MAX_LIMIT = 500
 MAX_LIMIT_TAXA = 100
+
+LimitArg = Annotated[int, Field(json_schema_extra={"minimum": 1, "maximum": MAX_LIMIT})]
+TaxaLimitArg = Annotated[int, Field(json_schema_extra={"minimum": 1, "maximum": MAX_LIMIT_TAXA})]
+EdgeArg = Annotated[str, Field(json_schema_extra={"enum": ["con", "ccm"]})]
+DirectionArg = Annotated[str, Field(json_schema_extra={"enum": ["out", "in", "both"]})]
+RankArg = Annotated[str, Field(json_schema_extra={"enum": list(semantics.TAXONOMY_RANKS)})]
+MetricArg = Annotated[str, Field(json_schema_extra={"enum": ["jaccard", "bray_curtis"]})]
+ByArg = Annotated[str, Field(json_schema_extra={"enum": ["year", "month"]})]
+KindArg = Annotated["str | None", Field(json_schema_extra={"enum": list(begriffe.KIND_NAMES.values())})]
 
 _DATASET_LITERAL_RE = re.compile(r"""dataset_id\s*(?::|=)\s*(['"])(.*?)\1""")
 _DATASET_TOKEN_RE = re.compile(r"\bdataset_id\b")
@@ -29,6 +39,9 @@ _DATASET_TOKEN_RE = re.compile(r"\bdataset_id\b")
 NEO4J_URI = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.environ.get("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "")
+QUERY_TIMEOUT_S = float(os.environ.get("MANTA_QUERY_TIMEOUT", "120"))
+FREE_QUERY_TIMEOUT_S = float(os.environ.get("MANTA_FREE_QUERY_TIMEOUT", "15"))
+_ZEITGRENZE: contextvars.ContextVar = contextvars.ContextVar("manta_query_timeout", default=None)
 
 _driver = None
 
@@ -39,7 +52,8 @@ def driver():
         if not NEO4J_PASSWORD:
             raise RuntimeError("NEO4J_PASSWORD is not set")
         _driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD),
-                                       notifications_disabled_categories=["UNRECOGNIZED", "DEPRECATION"])
+                                       notifications_disabled_categories=["UNRECOGNIZED", "DEPRECATION"],
+                                       max_transaction_retry_time=5)
     return _driver
 
 
@@ -56,7 +70,13 @@ def mit_abfrageprotokoll(fn):
     def wrapper(*a, **kw):
         token = _QUERY_LOG.set([])
         try:
-            return fn(*a, **kw)
+            ergebnis = fn(*a, **kw)
+            if isinstance(ergebnis, dict) and isinstance(ergebnis.get("provenance"), dict):
+                voll = [e for e in (_QUERY_LOG.get() or []) if e["cypher"] != _SNAPSHOT_CYPHER]
+                if voll:
+                    ergebnis["provenance"]["cypher"] = voll
+                ergebnis["provenance"].update(_kennung(ergebnis))
+            return ergebnis
         finally:
             _QUERY_LOG.reset(token)
     return wrapper
@@ -68,8 +88,16 @@ def _run(query: str, **params) -> list[dict]:
         log = []
         _QUERY_LOG.set(log)
     log.append({"cypher": " ".join(query.split()), "params": dict(params)})
+
+    @unit_of_work(timeout=_ZEITGRENZE.get() or QUERY_TIMEOUT_S)
+    def _lesen(tx):
+        return [r.data() for r in tx.run(query, params)]
+
     with driver().session(default_access_mode="READ") as s:
-        return [r.data() for r in s.run(query, **params)]
+        return s.execute_read(_lesen)
+
+
+_SNAPSHOT_CYPHER = "MATCH (n) WHERE n:ASV OR n:Sample RETURN count(n) AS n"
 
 
 def _snapshot() -> dict:
@@ -181,6 +209,18 @@ def _require_dataset(dataset_id: str) -> None:
         raise ToolError(f"unknown dataset_id {dataset_id!r}. Known: {known}")
 
 
+NOT_IN_NETWORK_NOTE = ("This ASV is NOT in the network (no Louvain cluster, no links). "
+                       "It only appeared in the abundance table.")
+
+
+def _require_asv(dataset_id: str, asv_id: str) -> dict:
+    rows = _run("MATCH (a:ASV {dataset_id:$d, id:$id}) RETURN a.louvain_label AS cluster",
+                d=dataset_id, id=asv_id)
+    if not rows:
+        raise ToolError(f"ASV {asv_id!r} not found in dataset {dataset_id!r}")
+    return rows[0]
+
+
 def dataset_summary(dataset_id: str) -> dict:
     _require_dataset(dataset_id)
     q = """
@@ -208,10 +248,7 @@ def dataset_summary(dataset_id: str) -> dict:
     if out is not None:
         out["time_axis"] = semantics.time_axis(_q, dataset_id)
         out["quantity"] = semantics.quantity(_q, dataset_id)
-        hub = semantics.hub_set(_q, dataset_id)
-        out["hubs"] = {key: hub[key] for key in
-                       ("n_marked", "n_with_value", "n_network", "measure", "measure_label",
-                        "k", "mu", "sigma", "threshold", "statement")}
+        out["criterion2"] = semantics.criterion2_summary(semantics.criterion2(_q, dataset_id))
         if out["time_axis"] != semantics.TIME_AXIS_DATES:
             out["first_date"] = out["last_date"] = None
             out["time_axis_note"] = ("No real time axis: the samples only have an order, not a "
@@ -220,20 +257,64 @@ def dataset_summary(dataset_id: str) -> dict:
     return _envelope("dataset_summary", q, {"dataset_id": dataset_id}, out, len(rows))
 
 
+ORDERED_BY_READS = ("read_count_total: this ASV's reads summed over all samples of the dataset "
+                    "(computed from the stored values, for network and non-network ASVs alike)")
+TRANSFORMED_NO_SUM = (
+    "This dataset's values are a transform of unknown form — summing them would "
+    "assume additivity nobody has established, so no sum is computed.")
+ORDERED_BY_DETECTIONS = ("n_samples_present: the number of samples with a detection. This "
+                         "dataset's values are a transform of unknown form, so no summed size "
+                         "exists and none is ranked by.")
+UNDECLARED_NO_SUM = (
+    "This dataset does not declare whether its values are reads or a transform — summing them "
+    "would assume additivity nobody has established, so no sum is computed.")
+ORDERED_BY_DETECTIONS_UNDECLARED = (
+    "n_samples_present: the number of samples with a detection. This dataset does not declare "
+    "whether its values are reads or a transform, so no summed size exists and none is ranked by.")
+
+
+def _ohne_summe(kind: str) -> str:
+    return TRANSFORMED_NO_SUM if kind == "transformed" else UNDECLARED_NO_SUM
+
+
+def _nach_nachweisen(kind: str) -> str:
+    return ORDERED_BY_DETECTIONS if kind == "transformed" else ORDERED_BY_DETECTIONS_UNDECLARED
+
+
 def find_asv(dataset_id: str, genus: str | None = None, asv_id: str | None = None,
-             cluster: int | None = None, limit: int = 25) -> dict:
+             cluster: int | None = None, limit: LimitArg = 25) -> dict:
     _require_dataset(dataset_id)
     limit = max(1, min(int(limit), MAX_LIMIT))
-    genus = genus or None
-    q = """
+    genus = (genus or "").strip() or None
+    asv_id = (asv_id or "").strip() or None
+    kind = semantics.value_kind(_q, dataset_id)
+    reads = kind == "reads"
+    if reads:
+        q = """
     MATCH (a:ASV {dataset_id:$d})
     WHERE ($genus   IS NULL OR toLower(a.genus) CONTAINS toLower($genus))
       AND ($asv_id  IS NULL OR a.id = $asv_id)
       AND ($cluster IS NULL OR a.louvain_label = $cluster)
+    OPTIONAL MATCH (a)<-[h:HAS_ABUNDANCE]-(:Sample {dataset_id:$d})
+    WITH a, sum(h.count) AS summe, count(h) AS n_present
     RETURN a.id AS asv_id, a.genus AS genus, a.family AS family, a.phylum AS phylum,
-           a.louvain_label AS cluster, a.read_count_total AS read_count_total,
-           COUNT { (a)<-[:HAS_ABUNDANCE]-(:Sample) } AS n_samples_present
-    ORDER BY coalesce(a.read_count_total, 0) DESC, a.id
+           a.louvain_label AS cluster, summe AS read_count_total,
+           n_present AS n_samples_present
+    ORDER BY summe DESC, a.id
+    LIMIT $limit
+    """
+    else:
+        q = """
+    MATCH (a:ASV {dataset_id:$d})
+    WHERE ($genus   IS NULL OR toLower(a.genus) CONTAINS toLower($genus))
+      AND ($asv_id  IS NULL OR a.id = $asv_id)
+      AND ($cluster IS NULL OR a.louvain_label = $cluster)
+    OPTIONAL MATCH (a)<-[h:HAS_ABUNDANCE]-(:Sample {dataset_id:$d})
+    WITH a, count(h) AS n_present
+    RETURN a.id AS asv_id, a.genus AS genus, a.family AS family, a.phylum AS phylum,
+           a.louvain_label AS cluster, null AS read_count_total,
+           n_present AS n_samples_present
+    ORDER BY n_present DESC, a.id
     LIMIT $limit
     """
     q_total = """
@@ -248,7 +329,8 @@ def find_asv(dataset_id: str, genus: str | None = None, asv_id: str | None = Non
     total = _run(q_total, d=dataset_id, genus=genus, asv_id=asv_id, cluster=cluster)
     env = _envelope("find_asv", q, p,
                     {"asvs": rows, "n_returned": len(rows),
-                     "n_matching_total": total[0]["n"] if total else None},
+                     "n_matching_total": total[0]["n"] if total else None,
+                     "ordered_by": ORDERED_BY_READS if reads else _nach_nachweisen(kind)},
                     len(rows))
     env["value_declaration"] = {
         **semantics.value_declaration(_q, dataset_id, semantics.frame_summed(_q, dataset_id)),
@@ -265,19 +347,24 @@ def asv_detail(dataset_id: str, asv_id: str) -> dict:
     _require_dataset(dataset_id)
     q = """
     MATCH (a:ASV {dataset_id:$d, id:$id})
+    OPTIONAL MATCH (a)<-[h:HAS_ABUNDANCE]-(:Sample {dataset_id:$d})
+    WITH a, sum(h.count) AS summe, count(h) AS n_present
     RETURN a.id AS asv_id, a.kingdom AS kingdom, a.phylum AS phylum, a.class AS class,
            a.order AS `order`, a.family AS family, a.genus AS genus, a.species AS species,
-           a.louvain_label AS cluster, a.read_count_total AS read_count_total,
-           COUNT { (a)<-[:HAS_ABUNDANCE]-(:Sample) } AS n_samples_present,
+           a.louvain_label AS cluster, summe AS read_count_total,
+           n_present AS n_samples_present,
            a.max_abundance_month AS peak_month
     """
     rows = _run(q, d=dataset_id, id=asv_id)
     if not rows:
         raise ToolError(f"ASV {asv_id!r} not found in dataset {dataset_id!r}")
     out = dict(rows[0])
+    kind = semantics.value_kind(_q, dataset_id)
+    if kind != "reads":
+        out["read_count_total"] = None
+        out["read_count_total_absent_reason"] = _ohne_summe(kind)
     axis = semantics.time_axis(_q, dataset_id)
-    out["hub_glow"] = asv_id in set(semantics.hub_set(_q, dataset_id)["ids"])
-    out["hub_glow_means"] = semantics.HUB_NODE_TOOLTIP
+    out["criterion2"] = semantics.criterion2_asv(semantics.criterion2(_q, dataset_id), asv_id)
     out["quantity"] = semantics.quantity(_q, dataset_id)
     out["value_declaration"] = {
         **semantics.value_declaration(_q, dataset_id, semantics.frame_summed(_q, dataset_id)),
@@ -290,8 +377,7 @@ def asv_detail(dataset_id: str, asv_id: str) -> dict:
         out["peak_month"] = None
         out["peak_month_note"] = "This dataset has no real time axis — no peak month."
     if out["cluster"] is None:
-        out["network_note"] = ("This ASV is NOT in the network (no Louvain cluster, no links). "
-                               "It only appeared in the abundance table.")
+        out["network_note"] = NOT_IN_NETWORK_NOTE
     out["funktion"] = ("Not derivable from amplicon data. Ecological function, metabolism, role "
                        "in the food web and pathogenicity are NOT in these data. If asked, say "
                        "exactly that — do not infer anything from the taxonomy.")
@@ -303,10 +389,11 @@ def asv_detail(dataset_id: str, asv_id: str) -> dict:
 
 def asv_abundance_series(dataset_id: str, asv_id: str) -> dict:
     _require_dataset(dataset_id)
+    _require_asv(dataset_id, asv_id)
     q = """
     MATCH (s:Sample {dataset_id:$d})-[r:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d, id:$id})
     RETURN s.sample_id AS sample_id, toString(s.date) AS date, r.count AS count
-    ORDER BY date, sample_id
+    ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id
     """
     rows = _run(q, d=dataset_id, id=asv_id)
     axis = semantics.time_axis(_q, dataset_id)
@@ -351,6 +438,9 @@ def asv_function(dataset_id: str, asv_id: str) -> dict:
                  d=dataset_id, id=asv_id)[0]
     data = {"asv_id": asv_id, "genus": genus["g"], "species": genus["s"], **tr,
             "annotation_run": semantics.trait_run(_run, dataset_id)}
+    ok, grund = anwendbarkeit.pruefen(_q, dataset_id, _requires("asv_function"))
+    if not ok:
+        data["absent_reason"] = grund
     return _envelope("asv_function", q, {"dataset_id": dataset_id, "asv_id": asv_id}, data,
                      len(tr["functions"]))
 
@@ -363,20 +453,20 @@ def asv_seasonality(dataset_id: str, asv_id: str) -> dict:
         raise ToolError(f"ASV {asv_id!r} not found in dataset {dataset_id!r}")
 
     present = [r for r in rows if (r["count"] or 0) > 0]
-    peak = max(rows, key=lambda r: r["count"] or 0.0)
+    summary = semantics.frequency(_q, dataset_id, rows, with_rank=True)["summary"]
     base = {
         "asv_id": asv_id,
         "time_axis": axis,
         "n_samples": len(rows),
         "n_samples_present": len(present),
         "quantity": semantics.quantity(_q, dataset_id),
-        "max_sample": {"sample": peak["sample"], "date": peak["date"],
-                       "value": peak["count"], "share": peak["share"],
-                       "rank": peak["rank"],
-                       "rank_pool": _run("MATCH (a:ASV {dataset_id:$d}) RETURN count(a) AS n",
-                                         d=dataset_id)[0]["n"]},
-        "statement": semantics.frequency(_q, dataset_id, rows,
-                                         with_rank=True)["summary"]["statement"],
+        "max_sample": {"sample": summary["max_at"]["sample"], "date": summary["max_at"]["date"],
+                       "index": summary["max_at"]["index"],
+                       "value": summary["max_count"], "sample_total": summary["max_sample_total"],
+                       "share": summary["max_share"], "rank": summary["max_rank"],
+                       "rank_pool": summary["rank_pool"],
+                       "chosen_by": "largest share of its sample (not the largest raw value)"},
+        "statement": summary["statement"],
     }
     if axis != semantics.TIME_AXIS_DATES:
         base["seasonality"] = None
@@ -393,11 +483,14 @@ def asv_seasonality(dataset_id: str, asv_id: str) -> dict:
     otter_peak = _run("MATCH (a:ASV {dataset_id:$d, id:$i}) RETURN a.max_abundance_month AS m",
                       d=dataset_id, i=asv_id)
     otter_month = otter_peak[0]["m"] if otter_peak else None
+    _j, share_month = semantics.ym(base["max_sample"]["date"])
 
     base["seasonality"] = {
         "peak_month_single_sample": otter_month,
         "peak_month_single_sample_label": (semantics.MONTHS[otter_month - 1]
                                            if otter_month else None),
+        "peak_month_max_share": share_month,
+        "peak_month_max_share_label": semantics.MONTHS[share_month - 1] if share_month else None,
         "peak_month_climatology": strongest["month"] if strongest else None,
         "peak_month_climatology_label": strongest["label"] if strongest else None,
         "peak_month_climatology_n": strongest["n"] if strongest else None,
@@ -409,23 +502,26 @@ def asv_seasonality(dataset_id: str, asv_id: str) -> dict:
         "full_years": stats["full_years"],
         "partial_years": stats["partial_years"],
         "peak_window": stats["peak_window"],
-        "oscillation": semantics.oscillation(
-            [{"date": r["date"], "share": r["share"]} for r in rows],
-            int(semantics.thresholds(_q, dataset_id)["fft_coeffs"])),
+        "oscillation": semantics.share_oscillation(_q, dataset_id, rows),
     }
     base["note"] = (
-        "There are TWO peak months and they can differ: 'peak_month_single_sample' is the month "
-        "of the one largest sample (this is what the interface shows) — a single outlier is "
-        "enough to set it. 'peak_month_climatology' is the strongest month averaged over all "
-        "years. State which of the two you mean; do not claim there is only one. "
-        "The TIMING is the defensible statement, not the height of the value.")
+        "There are THREE peak months and they can differ. 'peak_month_max_share' is the month of "
+        "max_sample, the sample in which this ASV made up the largest share (the highest point "
+        "of the interface's share curve). 'peak_month_single_sample' is OTTER's month of the "
+        "sample with the "
+        "largest RAW stored value (drawn on the seasonal wheel) — it depends on sequencing depth "
+        "and can name another sample. 'peak_month_climatology' is the strongest month averaged "
+        "over all years. A single sample is enough to set the first two. State which one you "
+        "mean; do not claim there is only one. The TIMING is the defensible statement, not the "
+        "height of the value.")
     return _envelope("asv_seasonality", "semantics.series + semantics.seasonal_stats",
                      {"dataset_id": dataset_id, "asv_id": asv_id}, base, len(rows))
 
 
-def neighbors(dataset_id: str, asv_id: str, edge: str = "con", direction: str = "both",
-              limit: int = 25) -> dict:
+def neighbors(dataset_id: str, asv_id: str, edge: EdgeArg = "con", direction: DirectionArg = "both",
+              limit: LimitArg = 25) -> dict:
     _require_dataset(dataset_id)
+    eigen = _require_asv(dataset_id, asv_id)
     edge = (edge or "con").lower()
     if edge not in ("con", "ccm"):
         raise ToolError("edge must be 'con' or 'ccm'")
@@ -459,6 +555,8 @@ def neighbors(dataset_id: str, asv_id: str, edge: str = "con", direction: str = 
     out = {"asv_id": asv_id, "edge": edge, "direction": direction,
            "neighbors": rows, "n_returned": len(rows),
            "n_neighbors_total": total[0]["n"] if total else None}
+    if eigen["cluster"] is None:
+        out["network_note"] = NOT_IN_NETWORK_NOTE
     if edge == "ccm":
         out["caveat"] = semantics.CCM_CAVEAT
     else:
@@ -498,8 +596,8 @@ def edge(dataset_id: str, source: str, target: str) -> dict:
                      data, 1)
 
 
-def cluster_bridges(dataset_id: str, edge: str = "con", include_edges: bool = False,
-                    limit: int = 25) -> dict:
+def cluster_bridges(dataset_id: str, edge: EdgeArg = "con", include_edges: bool = False,
+                    limit: LimitArg = 25) -> dict:
     _require_dataset(dataset_id)
     edge = (edge or "con").lower()
     if edge not in ("con", "ccm"):
@@ -531,10 +629,14 @@ def cluster_bridges(dataset_id: str, edge: str = "con", include_edges: bool = Fa
         ORDER BY r.{val} DESC, from_asv, to_asv LIMIT $limit
         """
         out["bridges"] = _run(q_edges, d=dataset_id, limit=limit)
+        out["bridges_completeness"] = {"n_returned": len(out["bridges"]), "n_total": n_total,
+                                       "truncated": (n_total is not None
+                                                     and len(out["bridges"]) < n_total)}
     out["cluster_caveat"] = semantics.cluster_partition_caveat(_q, dataset_id)
     return _envelope("cluster_bridges", q_pairs,
                      {"dataset_id": dataset_id, "edge": edge, "include_edges": include_edges,
-                      "limit": limit}, out, len(pairs))
+                      "limit": limit}, out,
+                     max(len(pairs), len(out.get("bridges") or [])))
 
 
 def cluster_network(dataset_id: str) -> dict:
@@ -548,7 +650,7 @@ def cluster_network(dataset_id: str) -> dict:
                      data["n_cluster_pairs"])
 
 
-def cluster_interannual_variability(dataset_id: str, metric: str = "jaccard") -> dict:
+def cluster_interannual_variability(dataset_id: str, metric: MetricArg = "jaccard") -> dict:
     _require_dataset(dataset_id)
     if metric not in semantics.INTERANNUAL_METRICS:
         raise ToolError(f"metric must be one of {sorted(semantics.INTERANNUAL_METRICS)}, "
@@ -565,7 +667,7 @@ def cluster_interannual_variability(dataset_id: str, metric: str = "jaccard") ->
                      data, len(data["clusters"]))
 
 
-def cluster_year_overview(dataset_id: str, metric: str = "jaccard") -> dict:
+def cluster_year_overview(dataset_id: str, metric: MetricArg = "jaccard") -> dict:
     _require_dataset(dataset_id)
     if metric not in semantics.INTERANNUAL_METRICS:
         raise ToolError(f"metric must be one of {sorted(semantics.INTERANNUAL_METRICS)}, "
@@ -591,12 +693,25 @@ def cluster_timeseries(dataset_id: str) -> dict:
 
 def cluster_detail(dataset_id: str, cluster: int) -> dict:
     _require_dataset(dataset_id)
-    members = _run("""
+    kind = semantics.value_kind(_q, dataset_id)
+    reads = kind == "reads"
+    if reads:
+        members = _run("""
         MATCH (a:ASV {dataset_id:$d}) WHERE a.louvain_label = $l
+        OPTIONAL MATCH (a)<-[h:HAS_ABUNDANCE]-(:Sample {dataset_id:$d})
+        WITH a, sum(h.count) AS summe, count(h) AS n_present
         RETURN a.id AS asv_id, a.genus AS genus, a.family AS family,
-               a.read_count_total AS read_count_total,
-               COUNT { (a)<-[:HAS_ABUNDANCE]-(:Sample) } AS n_samples_present
-        ORDER BY coalesce(a.read_count_total, 0) DESC, a.id
+               summe AS read_count_total, n_present AS n_samples_present
+        ORDER BY summe DESC, a.id
+        """, d=dataset_id, l=cluster)
+    else:
+        members = _run("""
+        MATCH (a:ASV {dataset_id:$d}) WHERE a.louvain_label = $l
+        OPTIONAL MATCH (a)<-[h:HAS_ABUNDANCE]-(:Sample {dataset_id:$d})
+        WITH a, count(h) AS n_present
+        RETURN a.id AS asv_id, a.genus AS genus, a.family AS family,
+               null AS read_count_total, n_present AS n_samples_present
+        ORDER BY n_present DESC, a.id
         """, d=dataset_id, l=cluster)
     if not members:
         known = _run("MATCH (a:ASV {dataset_id:$d}) WHERE a.louvain_label IS NOT NULL "
@@ -631,6 +746,7 @@ def cluster_detail(dataset_id: str, cluster: int) -> dict:
         "n_members": len(members),
         "top_genera": [{"genus": g, "n_asv": n} for g, n in top_genera],
         "largest_members": members[:10],
+        "largest_members_ordered_by": ORDERED_BY_READS if reads else _nach_nachweisen(kind),
         "cohesion": {
             "con_edges_inside": cohesion["innen"],
             "con_edges_outside": cohesion["aussen"],
@@ -653,6 +769,7 @@ def cluster_detail(dataset_id: str, cluster: int) -> dict:
         "cluster_caveat": semantics.cluster_partition_caveat(_q, dataset_id),
         "cluster_name": (semantics.module_label(_q, dataset_id, cluster)["name"] or ""),
         "cluster_display": semantics.module_label(_q, dataset_id, cluster)["display"],
+        "criterion2": semantics.criterion2_module(semantics.criterion2(_q, dataset_id), cluster),
     }
     return _envelope("cluster_detail", "cluster_detail (Mitglieder + Zusammenhalt + Partner)",
                      {"dataset_id": dataset_id, "cluster": cluster}, out, len(members))
@@ -670,11 +787,14 @@ def cluster_functions(dataset_id: str, cluster: int) -> dict:
          "RETURN a.id AS id, a.trait_function AS f ORDER BY a.id")
     data = {"cluster": cluster, "cluster_display": semantics.module_label(_q, dataset_id, cluster)["display"],
             **cf, "annotation_run": semantics.trait_run(_run, dataset_id)}
+    ok, grund = anwendbarkeit.pruefen(_q, dataset_id, _requires("cluster_functions"))
+    if not ok:
+        data["absent_reason"] = grund
     return _envelope("cluster_functions", q, {"dataset_id": dataset_id, "cluster": cluster}, data,
                      cf["n_members"])
 
 
-def taxa_composition(dataset_id: str, rank: str = "genus", limit: int = 15,
+def taxa_composition(dataset_id: str, rank: RankArg = "genus", limit: TaxaLimitArg = 15,
                      network_only: bool = False) -> dict:
     _require_dataset(dataset_id)
     allowed = tuple(semantics.TAXONOMY_RANKS)
@@ -683,13 +803,16 @@ def taxa_composition(dataset_id: str, rank: str = "genus", limit: int = 15,
         raise ToolError(f"rank must be one of {list(allowed)}")
     limit = max(1, min(int(limit), MAX_LIMIT_TAXA))
     net = "AND a.louvain_label IS NOT NULL" if network_only else ""
-    reads = semantics.value_kind(_q, dataset_id) == "reads"
+    kind = semantics.value_kind(_q, dataset_id)
+    reads = kind == "reads"
     if reads:
         q = f"""
     MATCH (a:ASV {{dataset_id:$d}})
     WHERE a.{rank} IS NOT NULL {net}
+    OPTIONAL MATCH (a)<-[h:HAS_ABUNDANCE]-(:Sample {{dataset_id:$d}})
+    WITH a, sum(h.count) AS summe
     RETURN a.{rank} AS taxon, count(a) AS n_asv,
-           sum(coalesce(a.read_count_total, 0.0)) AS read_count_total
+           sum(summe) AS read_count_total
     ORDER BY n_asv DESC, read_count_total DESC, taxon
     LIMIT $limit
     """
@@ -720,15 +843,13 @@ def taxa_composition(dataset_id: str, rank: str = "genus", limit: int = 15,
                  "and NOT a share, and only comparable within this dataset."),
     }
     if not reads:
-        out["read_count_total_absent_reason"] = (
-            "This dataset's values are a transform of unknown form — summing them would "
-            "assume additivity nobody has established, so no sum is computed.")
+        out["read_count_total_absent_reason"] = _ohne_summe(kind)
     return _envelope("taxa_composition", q, {"dataset_id": dataset_id, "rank": rank,
                                              "limit": limit, "network_only": network_only},
                      out, len(rows))
 
 
-def summarize_by_taxon(dataset_id: str, rank: str = "genus", name: str | None = None) -> dict:
+def summarize_by_taxon(dataset_id: str, rank: RankArg = "genus", name: str | None = None) -> dict:
     _require_dataset(dataset_id)
     allowed = tuple(semantics.TAXONOMY_RANKS)
     rank = (rank or "genus").lower()
@@ -739,11 +860,14 @@ def summarize_by_taxon(dataset_id: str, rank: str = "genus", name: str | None = 
     child_rank = allowed[idx + 1] if (name is not None and idx + 1 < len(allowed)) else None
     group = child_rank or rank
     where = f"coalesce(a.`{rank}`, 'unassigned') = $name" if name else "true"
-    reads = semantics.value_kind(_q, dataset_id) == "reads"
-    summe = "sum(coalesce(a.read_count_total, 0.0))" if reads else "null"
+    kind = semantics.value_kind(_q, dataset_id)
+    reads = kind == "reads"
+    summe = "sum(summe)" if reads else "null"
 
     q = f"""
     MATCH (a:ASV {{dataset_id:$d}}) WHERE {where}
+    OPTIONAL MATCH (a)<-[h:HAS_ABUNDANCE]-(:Sample {{dataset_id:$d}})
+    WITH a, sum(h.count) AS summe
     RETURN coalesce(a.`{group}`, 'unassigned') AS taxon, count(a) AS n_asv,
            {summe} AS read_count_total,
            collect(a.louvain_label) AS labels
@@ -804,9 +928,7 @@ def summarize_by_taxon(dataset_id: str, rank: str = "genus", name: str | None = 
                  "never before the network run."),
     }
     if not reads:
-        out["read_count_total_absent_reason"] = (
-            "This dataset's values are a transform of unknown form — summing them would "
-            "assume additivity nobody has established, so no sum is computed.")
+        out["read_count_total_absent_reason"] = _ohne_summe(kind)
     if name is not None:
         mitglieder = [r["id"] for r in _run(
             f"MATCH (a:ASV {{dataset_id:$d}}) WHERE {where} RETURN a.id AS id ORDER BY a.id",
@@ -876,11 +998,18 @@ _WRITE_WORDS = re.compile(
     r"|\bdbms\.|\bdb\.(index|constraint)",
     re.IGNORECASE,
 )
+_ADMIN_WORDS = re.compile(
+    r"\b(SHOW|TERMINATE|ALTER|GRANT|DENY|REVOKE|START|STOP|USE|ENABLE|RENAME|DEALLOCATE|"
+    r"REALLOCATE|INSERT)\b", re.IGNORECASE)
+_ERSTE_KLAUSEL_RE = re.compile(r"(?:OPTIONAL\s+)?MATCH\b", re.IGNORECASE)
 _LABEL_RE = re.compile(r":\s*([A-Za-z_][A-Za-z0-9_]*)")
 _PROP_RE = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)")
 _LIMIT_RE = re.compile(r"\bLIMIT\s+(\d+)", re.IGNORECASE)
 
 NICHT_ABFRAGBAR = {"Star", "Reference"}
+
+FREI_ABFRAGBAR = {"ASV", "Sample", "Dataset", "Cluster", "Run", "EnvVariable", "StableState",
+                  "ElaRun", "TraitRun", "EnvLinkRun", "Dada2Run"}
 
 _NODE_RE = re.compile(
     r"(?<![A-Za-z0-9_.])\(\s*([A-Za-z_][A-Za-z0-9_]*)?\s*"
@@ -889,102 +1018,274 @@ _NODE_RE = re.compile(
 _ANON_NODE_RE = re.compile(
     r"(?<![A-Za-z0-9_.])\(\s*([A-Za-z_][A-Za-z0-9_]*)?\s*"
     r"(\{[^{}]*\})?\s*\)")
-_WHERE_BIND_RE = re.compile(
-    r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*dataset_id\s*=\s*['\"]")
+_NODE_START_RE = re.compile(r"(?<![A-Za-z0-9_.])\(\s*(?:[A-Za-z_][A-Za-z0-9_]*)?\s*:")
+_NODE_WHERE_RE = re.compile(
+    r"(?<![A-Za-z0-9_.])\(\s*[A-Za-z_][A-Za-z0-9_]*(?:\s*:\s*[A-Za-z_][A-Za-z0-9_]*)*\s*"
+    r"(?:\{[^{}]*\})?\s*WHERE\b", re.IGNORECASE)
+_STRING_LITERAL_RE = re.compile(r"'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\"")
+_KLAUSEL_RE = re.compile(
+    r"\b(OPTIONAL\s+MATCH|MATCH|WHERE|RETURN|ORDER\s+BY|SKIP|LIMIT|UNWIND|WITH|UNION|CALL)\b",
+    re.IGNORECASE)
+_SCOPE_WORDS_RE = re.compile(r"\b(WITH|UNION|CALL)\b", re.IGNORECASE)
+_STRING_OPS_RE = re.compile(r"\b(STARTS|ENDS)\s+WITH\b", re.IGNORECASE)
+_VERBOTENE_FUNKTIONEN_RE = re.compile(r"\b(labels|keys)\s*\(", re.IGNORECASE)
+_NAMENSRAUM_RE = re.compile(r"\b(apoc|db|dbms|gds|genai)\s*\.\s*[A-Za-z_][\w.]*\s*\(", re.IGNORECASE)
+_VARLAENGE_RE = re.compile(r"-\s*\[[^\]]*\*[^\]]*\]|[->]\s*[+*{]")
+_GRUPPE_RE = re.compile(r"\(\s*\(\s*(?:[A-Za-z_][A-Za-z0-9_]*)?\s*[:){]")
+_KLEBT_RE = re.compile(
+    r"\b(MATCH|WHERE|AND|OR|XOR|NOT|WHEN|THEN|ELSE|RETURN|SHORTEST|GROUPS?|PATHS?)\("
+    r"|(?<![A-Za-z0-9_.])(\d+)\("
+    r"|\b(ANY|ALL)\((?=\s*(?:[A-Za-z_][A-Za-z0-9_]*)?\s*[:){])",
+    re.IGNORECASE)
 
 
-def _ungebundene_knoten(q: str) -> list[str]:
-    gebunden_per_where = set(_WHERE_BIND_RE.findall(q))
+def _ohne_zeichenketten(q: str) -> str:
+    return _STRING_LITERAL_RE.sub(lambda m: m.group(0)[0] + "_" * (len(m.group(0)) - 2)
+                                  + m.group(0)[-1], q)
+
+
+_IS_LABEL_RE = re.compile(
+    r"(?<=\()(\s*(?:[A-Za-z_][A-Za-z0-9_]*\s+)?)IS(?=\s+(?!(?:NOT|NULL|TYPED|NORMALIZED|NFC|NFD|"
+    r"NFKC|NFKD)\b|::))", re.IGNORECASE)
+
+
+def _is_als_doppelpunkt(text: str) -> str:
+    return _IS_LABEL_RE.sub(lambda m: m.group(1) + ": ", text)
+
+
+def _tiefen(text: str) -> tuple[list[int], list[int]]:
+    alle, eckig, a, e = [], [], 0, 0
+    for ch in text:
+        alle.append(a)
+        eckig.append(e)
+        if ch in "([{":
+            a += 1
+            e += ch != "("
+        elif ch in ")]}":
+            a -= 1
+            e -= ch != ")"
+    return alle, eckig
+
+
+def _bindung_pruefen(roh: str, text: str, dataset_id: str) -> "str | None":
+    tief_alle, tief_eckig = _tiefen(text)
+    klauseln = [(m.start(), " ".join(m.group(1).upper().split()))
+                for m in _KLAUSEL_RE.finditer(text) if tief_alle[m.start()] == 0]
+
+    def klausel(pos: int) -> "str | None":
+        vor = [k for p, k in klauseln if p < pos]
+        return vor[-1] if vor else None
+
+    bindung = re.compile(r"\bdataset_id\s*:\s*(['\"])" + re.escape(dataset_id) + r"\1")
+
+    m = _NODE_WHERE_RE.search(text)
+    if m:
+        return (f"a WHERE inside a node pattern is not allowed in free queries: "
+                f"{text[m.start():m.end()][:40]!r}. Bind the node inline, e.g. "
+                f"(a:ASV {{dataset_id:'{dataset_id}'}}), and filter in the WHERE clause.")
+    for m in re.finditer(r"\b(?:OPTIONAL\s+)?MATCH\b", text, re.IGNORECASE):
+        tiefe, ende = tief_alle[m.start()], len(text)
+        for k in re.finditer(r"\b(WHERE|RETURN|MATCH|OPTIONAL|WITH|UNWIND|ORDER|SKIP|LIMIT|"
+                             r"UNION|CALL)\b", text[m.end():], re.IGNORECASE):
+            if tief_alle[m.end() + k.start()] == tiefe:
+                ende = m.end() + k.start()
+                break
+        for i in range(m.end(), ende):
+            if tief_alle[i] < tiefe:
+                ende = i
+                break
+            if text[i] == "(" and not re.match(r"[A-Za-z0-9_.]", text[i - 1] if i else " ") \
+                    and not (_NODE_RE.match(text, i) or _ANON_NODE_RE.match(text, i)):
+                return (f"only plain node patterns are allowed in MATCH: "
+                        f"{text[i:text.find(')', i) + 1][:40]!r}. Write (variable:Label "
+                        f"{{dataset_id:'{dataset_id}'}}), nothing else inside the parentheses.")
+
+    for m in _NODE_START_RE.finditer(text):
+        if not _NODE_RE.match(text, m.start()):
+            ende = text.find(")", m.start())
+            return (f"label expressions are not allowed in free queries: "
+                    f"{text[m.start():ende + 1 if ende > 0 else None][:40]!r}. Name exactly one "
+                    f"plain Label per node, e.g. (a:ASV {{dataset_id:'{dataset_id}'}}).")
+
+    muster = []
+    for m in _NODE_RE.finditer(text):
+        labels = [x.strip() for x in m.group(2).split(":") if x.strip()]
+        props = roh[m.start(3):m.end(3)] if m.group(3) else ""
+        muster.append((m.start(), m.group(1), labels, bool(props and bindung.search(props))))
+    for m in _ANON_NODE_RE.finditer(text):
+        muster.append((m.start(), m.group(1), [], False))
+
+    fremd = sorted({lab for _, _, labs, _ in muster for lab in labs if lab not in FREI_ABFRAGBAR})
+    if fremd:
+        return (f"Label {fremd} cannot be read by free queries: only labels of the dataset chain "
+                f"are allowed ({sorted(FREI_ABFRAGBAR)}).")
+
+    gebunden = {var for pos, var, labs, selbst in muster
+                if var and labs and selbst and klausel(pos) == "MATCH" and tief_eckig[pos] == 0}
     offen = []
-    sicher: set[str] = set(gebunden_per_where)
-    for var, labels, props in _NODE_RE.findall(q):
-        gebunden = bool(props and _DATASET_TOKEN_RE.search(props)) or (var in gebunden_per_where)
-        if gebunden:
-            if var:
-                sicher.add(var)
+    for pos, var, labs, selbst in sorted(muster):
+        if labs and selbst:
             continue
-        lab = ":".join(x.strip() for x in labels.split(":") if x.strip())
-        offen.append(f"({var or ''}:{lab})")
+        if var and var in gebunden:
+            continue
+        offen.append(f"({var or ''}{':' + ':'.join(labs) if labs else ''})")
+    if offen:
+        return (f"not scoped to the dataset: {', '.join(offen[:4])}"
+                + (f" and {len(offen) - 4} more" if len(offen) > 4 else "")
+                + ". EVERY node pattern needs a Label AND an inline dataset_id binding — "
+                  "otherwise the query reads past the visibility boundary. Bind it like this: "
+                  f"(b:ASV {{dataset_id:'{dataset_id}'}}). A WHERE condition does not bind. A "
+                  "pattern without a Label, such as (b), is only allowed if the same variable "
+                  "was bound with a Label in a MATCH of this query.")
+    if not any(labs and selbst and klausel(pos) in ("MATCH", "OPTIONAL MATCH")
+               and tief_eckig[pos] == 0 for pos, _v, labs, selbst in muster):
+        return ("not scoped to the dataset: the query has no node pattern with a Label and an "
+                f"inline dataset_id binding, e.g. MATCH (a:ASV {{dataset_id:'{dataset_id}'}}).")
+    return None
 
-    for var, props in _ANON_NODE_RE.findall(q):
-        if props and _DATASET_TOKEN_RE.search(props):
-            continue
-        if var and var in sicher:
-            continue
-        offen.append(f"({var or ''})")
-    return offen
+
+def _limit_pruefen(roh: str, text: str) -> "tuple[str | None, str, int | None, int]":
+    tief_alle, _ = _tiefen(text)
+    oben = [m for m in re.finditer(r"\bLIMIT\b", text, re.IGNORECASE) if tief_alle[m.start()] == 0]
+    if not oben:
+        return None, f"{roh}\nLIMIT {MAX_LIMIT}", None, MAX_LIMIT
+    letzte = oben[-1]
+    zahl = re.fullmatch(r"LIMIT\s+(\d+)\s*", text[letzte.start():], re.IGNORECASE)
+    if len(oben) > 1 or not zahl:
+        return ("LIMIT must be one plain number at the very end of the query, e.g. LIMIT 50.",
+                "", None, MAX_LIMIT)
+    verlangt = int(zahl.group(1))
+    if verlangt <= MAX_LIMIT:
+        return None, roh, verlangt, verlangt
+    return None, roh[:letzte.start()] + f"LIMIT {MAX_LIMIT}", verlangt, MAX_LIMIT
+
+
+def _schema_auffrischen() -> None:
+    global _schema_cache
+    try:
+        _schema_cache = live_schema()
+    except Exception:
+        pass
+
+
+def pruefe_cypher(query: str, dataset_id: str) -> dict:
+    aus = {"ok": False, "reason": "", "safe": "", "requested_limit": None, "applied_limit": None}
+
+    def nein(grund: str) -> dict:
+        return {**aus, "reason": grund}
+
+    if not query or not query.strip():
+        return nein("empty query")
+    q = query.strip().rstrip(";").strip()
+    text = _is_als_doppelpunkt(_ohne_zeichenketten(q))
+
+    if ";" in text:
+        return nein("multiple statements are not allowed")
+    if "//" in text or "/*" in text:
+        return nein("comments are not allowed in free queries")
+    if "`" in text:
+        return nein("backtick-quoted names are not allowed in free queries — write labels, "
+                    "properties, variables and aliases as plain names (letters, digits, _).")
+    m = re.search(r"[^\x00-\x7f]", text)
+    if m:
+        return nein(f"the character {m.group(0)!r} is not allowed outside a quoted string — "
+                    "write names, dashes and arrows in plain ASCII.")
+
+    m = _WRITE_WORDS.search(text)
+    if m:
+        return nein(f"only read-only queries are allowed — forbidden keyword {m.group(0)!r}")
+    m = _ADMIN_WORDS.search(text)
+    if m:
+        return nein(f"administration commands are not allowed in free queries — forbidden "
+                    f"keyword {m.group(1).upper()!r}. The word is reserved here, also as a "
+                    f"variable or alias name; rename it.")
+    if not _ERSTE_KLAUSEL_RE.match(text):
+        return nein("a free query must start with MATCH or OPTIONAL MATCH, e.g. "
+                    f"MATCH (a:ASV {{dataset_id:'{dataset_id}'}}) RETURN a.id LIMIT 10")
+
+    gesperrt = sorted({w for w in NICHT_ABFRAGBAR if re.search(rf"\b{w}\b", q)})
+    if gesperrt:
+        return nein(f"{gesperrt[0]!r} is blocked for free queries: the node is not part of the "
+                    f"dataset chain and is therefore not covered by the visibility boundary. "
+                    f"Blocked: {sorted(NICHT_ABFRAGBAR)}.")
+    m = _VERBOTENE_FUNKTIONEN_RE.search(text)
+    if m:
+        return nein(f"{m.group(1)}() is not allowed in free queries — it reports labels or keys "
+                    "of nodes instead of data; ask with get_schema instead.")
+    m = _NAMENSRAUM_RE.search(text)
+    if m:
+        return nein(f"procedures and namespaced functions ({m.group(1)}.…) are not allowed in "
+                    "free queries.")
+    if _VARLAENGE_RE.search(text):
+        return nein("variable-length paths and quantified relationships (`*`, `+`, `{1,3}`) "
+                    "are not allowed in free queries — name each relationship.")
+    if _GRUPPE_RE.search(text):
+        return nein("parenthesised path patterns such as ((a)-[r]->(b)) are not allowed in free "
+                    "queries — write the path once, every node with its own binding.")
+    m = _KLEBT_RE.search(text)
+    if m:
+        wort = next(g for g in m.groups() if g)
+        return nein(f"write a space between {wort!r} and '(' — the check reads a name directly "
+                    "followed by '(' as a function call.")
+
+    for runde in (0, 1):
+        sch = schema()
+        known_labels = set(sch["labels"])
+        known_rels = set(sch["relationship_types"])
+        known_props = set(sch["property_keys"])
+        unbekannt_lab = [lab for lab in _LABEL_RE.findall(text) if lab not in (known_labels | known_rels)]
+        unbekannt_prop = [p for _v, p in _PROP_RE.findall(text) if p not in known_props]
+        if not (unbekannt_lab or unbekannt_prop) or runde == 1:
+            break
+        _schema_auffrischen()
+    if unbekannt_lab:
+        return nein(f"unknown Label/relationship type {unbekannt_lab[0]!r}. "
+                    f"Labels: {sorted(known_labels)}; relationships: {sorted(known_rels)}")
+    if unbekannt_prop:
+        return nein(f"unknown property {unbekannt_prop[0]!r}. Known properties: {sorted(known_props)}")
+
+    literals = [(m.group(1), q[m.start(2):m.end(2)]) for m in _DATASET_LITERAL_RE.finditer(text)]
+    mentions = len(_DATASET_TOKEN_RE.findall(text))
+    if mentions == 0:
+        return nein("the query must be scoped to a dataset: 'dataset_id' is missing. "
+                    f"Example: MATCH (a:ASV {{dataset_id:'{dataset_id}'}}) RETURN a.id LIMIT 10")
+    if len(literals) != mentions:
+        return nein("every 'dataset_id' must be set directly to a text literal, so that "
+                    f"the scope can be checked. Allowed: dataset_id:'{dataset_id}' in the node "
+                    "pattern. Not allowed: parameters, comparison with a variable, STARTS WITH.")
+    fremd = sorted({v for _q0, v in literals if v != dataset_id})
+    if fremd:
+        return nein(f"the query reads {fremd}, but only {dataset_id!r} is authorised. "
+                    "A query may only read the dataset it was asked for.")
+    grund = _bindung_pruefen(q, text, dataset_id)
+    if grund:
+        return nein(grund)
+    m = _SCOPE_WORDS_RE.search(_STRING_OPS_RE.sub(" ", text))
+    if m:
+        return nein(f"{m.group(1).upper()} is not allowed in free queries: it opens a new scope "
+                    "in which a variable can be re-bound to ANY node, and that cannot be checked "
+                    "here. Write one MATCH … RETURN query; the typed tools cover aggregations "
+                    "over several stages.")
+
+    grund, safe, verlangt, angewandt = _limit_pruefen(q, text)
+    if grund:
+        return nein(grund)
+    return {"ok": True, "reason": "ok", "safe": safe,
+            "requested_limit": verlangt, "applied_limit": angewandt}
 
 
 def validate_cypher(query: str, dataset_id: str) -> tuple[bool, str, str]:
-    if not query or not query.strip():
-        return False, "empty query", ""
-    q = query.strip().rstrip(";").strip()
-
-    if ";" in q:
-        return False, "multiple statements are not allowed", ""
-
-    m = _WRITE_WORDS.search(q)
-    if m:
-        return False, f"only read-only queries are allowed — forbidden keyword {m.group(0)!r}", ""
-
-    sch = schema()
-    known_labels = set(sch["labels"])
-    known_rels = set(sch["relationship_types"])
-    known_props = set(sch["property_keys"])
-
-    for lab in _LABEL_RE.findall(q):
-        if lab in NICHT_ABFRAGBAR:
-            return False, (f"{lab!r} is blocked for free queries: the node is not part of the "
-                           f"dataset chain and is therefore not covered by the visibility "
-                           f"boundary. Blocked: {sorted(NICHT_ABFRAGBAR)}."), ""
-        if lab not in (known_labels | known_rels):
-            return False, (f"unknown Label/relationship type {lab!r}. "
-                           f"Labels: {sorted(known_labels)}; relationships: {sorted(known_rels)}"), ""
-
-    for _var, prop in _PROP_RE.findall(q):
-        if prop not in known_props:
-            return False, f"unknown property {prop!r}. Known properties: {sorted(known_props)}", ""
-
-    literals = _DATASET_LITERAL_RE.findall(q)
-    mentions = len(_DATASET_TOKEN_RE.findall(q))
-    if mentions == 0:
-        return False, ("the query must be scoped to a dataset: 'dataset_id' is missing. "
-                       f"Example: MATCH (a:ASV {{dataset_id:'{dataset_id}'}}) RETURN a.id LIMIT 10"), ""
-    if len(literals) != mentions:
-        return False, ("every 'dataset_id' must be set directly to a text literal, so that "
-                       f"the scope can be checked. Allowed: dataset_id:'{dataset_id}' or "
-                       f"a.dataset_id = '{dataset_id}'. Not allowed: parameters, comparison with "
-                       "a variable, STARTS WITH."), ""
-    fremd = sorted({v for _q0, v in literals if v != dataset_id})
-    if fremd:
-        return False, (f"the query reads {fremd}, but only {dataset_id!r} is authorised. "
-                       "A query may only read the dataset it was asked for."), ""
-    offen = _ungebundene_knoten(q)
-    if offen:
-        return False, (
-            f"not scoped to the dataset: {', '.join(offen[:4])}"
-            + (f" and {len(offen) - 4} more" if len(offen) > 4 else "")
-            + ". EVERY node pattern needs a Label AND a dataset_id binding — otherwise "
-            "the query reads past the visibility boundary. Bind it like this: "
-            f"(b:ASV {{dataset_id:'{dataset_id}'}}) or WHERE b.dataset_id = '{dataset_id}'. "
-            "A pattern without a Label, such as (b), cannot be checked against the schema and "
-            "is only allowed if the same variable was bound with a Label earlier."), ""
-    lm = _LIMIT_RE.search(q)
-    if not lm:
-        safe = f"{q}\nLIMIT {MAX_LIMIT}"
-    elif int(lm.group(1)) > MAX_LIMIT:
-        safe = _LIMIT_RE.sub(f"LIMIT {MAX_LIMIT}", q, count=1)
-    else:
-        safe = q
-
-    return True, "ok", safe
+    r = pruefe_cypher(query, dataset_id)
+    return r["ok"], r["reason"], r["safe"]
 
 
 def run_validated_cypher(dataset_id: str, query: str) -> dict:
     _require_dataset(dataset_id)
-    ok, reason, safe = validate_cypher(query, dataset_id)
-    if not ok:
-        raise ToolError(f"query rejected: {reason}")
+    geprueft = pruefe_cypher(query, dataset_id)
+    if not geprueft["ok"]:
+        raise ToolError(f"query rejected: {geprueft['reason']}")
+    safe = geprueft["safe"]
+    grenze = _ZEITGRENZE.set(FREE_QUERY_TIMEOUT_S)
     try:
         rows = _run(safe)
     except Neo4jError as e:
@@ -993,23 +1294,37 @@ def run_validated_cypher(dataset_id: str, query: str) -> dict:
                 "The database rejected this query as a write (read-only mode). "
                 "This is a BUG: the validator should have rejected it first. "
                 "Please report it. Only read-only queries are possible here.") from e
+        if "TransactionTimedOut" in (e.code or "") or "Timeout" in (e.code or ""):
+            raise ToolError(
+                f"The query ran longer than {FREE_QUERY_TIMEOUT_S:g} s and was stopped by the "
+                "database. Narrow it (fewer patterns, no product of unrelated MATCHes) or use "
+                "a typed tool.") from e
         raise ToolError(f"The database rejected the query: {e.message} "
                         f"({e.code}). Rephrase it; get_schema lists the valid "
                         f"names.") from e
-    env = _envelope("run_validated_cypher", safe, {"dataset_id": dataset_id}, rows, len(rows))
-    env["provenance"]["validated"] = True
-    env["provenance"]["original_query"] = " ".join(query.split())
-    env["value_declaration"] = {
+    finally:
+        _ZEITGRENZE.reset(grenze)
+    deklaration = {
         **semantics.value_declaration(
             _q, dataset_id,
             "as stored on this dataset — any count-derived value in these rows is of this kind"),
         "applies_to": "every value derived from HAS_ABUNDANCE.count in the returned rows",
     }
+    env = _envelope("run_validated_cypher", safe,
+                    {"dataset_id": dataset_id, "limit": geprueft["applied_limit"]}, rows, len(rows))
+    env["provenance"]["validated"] = True
+    env["provenance"]["original_query"] = " ".join(query.split())
+    if geprueft["requested_limit"] != geprueft["applied_limit"]:
+        env["provenance"]["limit_applied"] = {"requested": geprueft["requested_limit"],
+                                              "applied": geprueft["applied_limit"]}
+    env["value_declaration"] = deklaration
     return env
 
 
 def get_schema() -> dict:
+    global _schema_cache
     sch = live_schema()
+    _schema_cache = sch
     return _envelope("get_schema", "CALL db.labels() / db.relationshipTypes() / db.propertyKeys()",
                      {}, sch, len(sch["labels"]))
 
@@ -1044,6 +1359,9 @@ _REQUIRES: dict[str, list[str]] = {
     "trend_test": ["time_axis=dates"],
     "group_comparison_test": ["time_axis=dates"],
     "pair_proportionality": ["value_kind=reads"],
+    "environment_correlation": ["env_variables"],
+    "asv_function": ["traits"],
+    "cluster_functions": ["traits"],
 }
 
 
@@ -1107,8 +1425,9 @@ def pair_proportionality(dataset_id: str, asv_a: str, asv_b: str) -> dict:
     anteil = statistik.proportionality([r["share"] for r in ra],
                                        [b_share.get(r["sample"]) for r in ra])
     data = {"asv_a": asv_a, "asv_b": asv_b,
-            "result": {**roh, "on": "count (raw stored values)",
+            "result": {**anteil, "on": "share (stored value / sample total)",
                        "rho_p_on_share": anteil["rho_p"],
+                       "rho_p_on_raw_counts": roh["rho_p"],
                        "scale_note": statistik.CAVEAT_PROPORTIONALITY_SCALE},
             "con_link": con_link,
             "caveats": _stat_caveats(dataset_id)}
@@ -1116,7 +1435,7 @@ def pair_proportionality(dataset_id: str, asv_a: str, asv_b: str) -> dict:
                      {"dataset_id": dataset_id, "asv_a": asv_a, "asv_b": asv_b}, data, len(ra))
 
 
-def group_comparison_test(dataset_id: str, by: str, group_a: list[int], group_b: list[int],
+def group_comparison_test(dataset_id: str, by: ByArg, group_a: list[int], group_b: list[int],
                           asv_id: str | None = None, cluster: int | None = None) -> dict:
     _require_dataset(dataset_id)
     rows, subject = _stat_subject(dataset_id, asv_id, cluster)
@@ -1183,10 +1502,21 @@ def environment_correlation(dataset_id: str, asv_id: str, variable: str) -> dict
     _require_dataset(dataset_id)
     if variable not in semantics.ENVIRONMENT_KEYS:
         raise ToolError(f"unknown variable {variable!r}. Known: {semantics.ENVIRONMENT_KEYS}")
-    var = next(v for v in semantics.environment_vars(_q, dataset_id) if v["key"] == variable)
+    params = {"dataset_id": dataset_id, "asv_id": asv_id, "variable": variable}
     rows, _ = _stat_subject(dataset_id, asv_id, None)
+    ok, grund = anwendbarkeit.pruefen(_q, dataset_id, _requires("environment_correlation"))
+    if ok:
+        gemessen = _run(f"MATCH (s:Sample {{dataset_id:$d}}) WHERE s.`{variable}` IS NOT NULL "
+                        f"RETURN count(s) AS n", d=dataset_id)
+        if not (gemessen and gemessen[0]["n"]):
+            ok, grund = False, semantics.env_variable_not_measured(variable)
+    if not ok:
+        return _envelope("environment_correlation", "Sample env (refused)", params,
+                         {"asv_id": asv_id, "variable": {"key": variable}, "result": None,
+                          "note": grund}, 0)
+    var = next(v for v in semantics.environment_vars(_q, dataset_id) if v["key"] == variable)
     env_rows = _run(f"MATCH (s:Sample {{dataset_id:$d}}) RETURN s.sample_id AS sample, "
-                    f"s.`{var['key']}` AS v ORDER BY s.date, s.sample_id", d=dataset_id)
+                    f"s.`{var['key']}` AS v ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id", d=dataset_id)
     by_sample = {r["sample"]: r["v"] for r in env_rows}
     values = [r["share"] for r in rows]
     env = [by_sample.get(r["sample"]) for r in rows]
@@ -1205,7 +1535,7 @@ def environment_correlation(dataset_id: str, asv_id: str, variable: str) -> dict
 
 
 
-def describe_concepts(kind: str | None = None) -> dict:
+def describe_concepts(kind: KindArg = None) -> dict:
     try:
         eintraege = begriffe.alle(kind)
     except ValueError as e:
@@ -1228,8 +1558,10 @@ def describe_metric(key: str) -> dict:
     data = {"concepts_version": begriffe.VERSION, **b, "kind": begriffe.KIND_NAMES[b["kind"]]}
     if b["kind"] != "kennzahl":
         art = begriffe.KIND_NAMES[b["kind"]].replace("_", " ")
+        was = ("a measured quantity: it has a unit but no formula"
+               if b["kind"] == "umweltgroesse" else "it has no formula and no unit")
         data["note"] = (f"This is {'an' if art[0] in 'aeiou' else 'a'} {art}, not a metric — "
-                        f"it has no formula and no unit. The definition below is the whole answer.")
+                        f"{was}. The definition below is the whole answer.")
     return _envelope("describe_metric", "concepts.one (no database query)", {"key": key},
                      data, 1)
 

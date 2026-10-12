@@ -1,25 +1,40 @@
+import { Button, Dialog } from "./ui";
 import { useEffect, useRef, useState } from "react";
-import { getImportStatus, recompute, type ImportStatus, type ThresholdInput, type Thresholds } from "../api";
+import { getImportStatus, getRecomputeEstimate, recompute, fmtMinutes, PRODUCTION_THRESHOLDS,
+         type ImportStatus, type RecomputeAck, type RecomputePreview, type ThresholdInput,
+         type Thresholds } from "../api";
 import InfoTip from "./InfoTip";
 import { fmtUtc } from "../format";
 
-export default function ThresholdDialog({ datasetId, current, nAsv, onClose, onDone }: {
+export default function ThresholdDialog({ datasetId, current, onClose, onDone, onOpenDataset }: {
   datasetId: string;
   current: Thresholds;
-  nAsv: number;
   onClose: () => void;
   onDone: () => void;
+  onOpenDataset?: (datasetId: string) => void;
 }) {
-  const [t, setT] = useState<ThresholdInput>({
+  const [t, setT] = useState<ThresholdInput>(current.recorded ? {
     con_tr: current.con_tr, con_alpha: current.con_alpha, ccmn_tr: current.ccmn_tr,
     louvain_res: current.louvain_res, fft_coeffs: current.fft_coeffs,
     num_permutations: current.num_permutations, num_samples: current.num_samples,
-  });
+  } : { ...PRODUCTION_THRESHOLDS });
   const [job, setJob] = useState<ImportStatus | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [ack, setAck] = useState<{ estimated_minutes: number; warning: string } | null>(null);
-
-  const estimate = Math.round((nAsv * (nAsv - 1) / 2) * 0.011 / 60);
+  const [ack, setAck] = useState<RecomputeAck | null>(null);
+  const [vorschau, setVorschau] = useState<RecomputePreview | null>(null);
+  const [vorschauErr, setVorschauErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (ack) return;
+    let aktuell = true;
+    const h = setTimeout(() => {
+      getRecomputeEstimate(datasetId, t.num_permutations, t.num_samples)
+        .then((v) => { if (aktuell) { setVorschau(v); setVorschauErr(null); } })
+        .catch((e) => { if (aktuell) setVorschauErr(String(e instanceof Error ? e.message : e)); });
+    }, 300);
+    return () => { aktuell = false; clearTimeout(h); };
+  }, [datasetId, t.num_permutations, t.num_samples, ack]);
+  const est = ack?.estimate ?? vorschau?.estimate ?? null;
+  const neueId = ack?.new_dataset_id ?? vorschau?.new_dataset_id ?? null;
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
@@ -41,40 +56,67 @@ export default function ThresholdDialog({ datasetId, current, nAsv, onClose, onD
         } catch { }
       }, 2000);
       pollRef.current = poll;
-    } catch (e) { setErr(String(e)); }
+    } catch (e) { setErr(String(e instanceof Error ? e.message : e)); }
   };
 
   const running = job?.status === "running" || (!!ack && !job);
+  const done = job?.status === "done";
+  const zuGross = est != null && !est.fits;
 
-  return (
-    <div className="fixed inset-0 z-40 grid place-items-center bg-slate-950/70 p-4" data-testid="threshold-dialog">
-      <div className="w-[560px] max-h-full overflow-auto rounded-lg border border-slate-600 bg-slate-900 p-4 shadow-2xl">
-        <div className="flex items-start justify-between">
-          <h2 className="flex items-center text-slate-100 font-medium">
+  const titel = (
+        <span className="flex items-center">
             Network thresholds
             <InfoTip title="What these values decide">
               <p>They decide which correlated pairs become links at all: the correlation cut and
-              its p-value select the co-occurrence links, the CCM threshold and the permutations
-              decide which of them keep a direction.</p>
-              <p>Recomputing replaces the network of this dataset only. Samples, abundances and
-              time series stay exactly as they are — nothing measured is touched.</p>
+              its p-value select the co-occurrence links, the permutation test decides which of
+              them keep a direction.</p>
+              <p>Recomputing creates a new dataset next to this one: the samples, values,
+              environment and taxonomy are copied, the network is computed anew from all ASVs.
+              This dataset stays exactly as it is — its network, module names, notes and stars.
+              The new one appears in the list under the original, and each can be deleted on its
+              own.</p>
+              <p>The run time is a range estimated from measurements on one machine; another
+              machine or a longer series can take longer.</p>
               {!current.recorded && (
-                <p>Nothing was recorded for the current network, so the fields start on
-                OTTER&rsquo;s defaults. They are what the tool would use, not what this dataset
-                was computed with.</p>
+                <p>Nothing was recorded for the current network, so its settings are unknown.
+                The fields start on the values a new run uses ({PRODUCTION_THRESHOLDS.num_permutations}{" "}
+                permutations), not on OTTER&rsquo;s test defaults and not on what this dataset was
+                computed with.</p>
               )}
             </InfoTip>
-          </h2>
-          <button onClick={onClose} data-testid="threshold-close" aria-label="Close" className="text-slate-400 hover:text-white">✕</button>
-        </div>
+        </span>
+  );
+  const knoepfe = (
+    <>
+      <Button size="md" onClick={onClose} data-testid="threshold-dismiss">
+        {!ack ? "Cancel" : running ? "Close (keeps running)" : "Close"}
+      </Button>
+      {done && ack && onOpenDataset ? (
+        <Button size="md" variant="primary" data-testid="threshold-open-new"
+          onClick={() => onOpenDataset(ack.new_dataset_id)}>
+          Open new dataset
+        </Button>
+      ) : (
+        <Button size="md" variant="primary" data-testid="threshold-run" onClick={start}
+          disabled={running || !!ack || zuGross}
+          reason={zuGross ? "not enough memory for this run (see above)" : "a recomputation is already running"}>
+          {running ? "computing …" : "Recompute as new dataset"}
+        </Button>
+      )}
+    </>
+  );
 
+  return (
+    <Dialog title={titel} onClose={onClose} testid="threshold-dialog" closeTestid="threshold-close"
+      closeLabel="Close" width="max-w-[560px]" footer={knoepfe}>
         {!current.recorded && (
-          <p className="mt-1 text-xs text-amber-400" data-testid="threshold-unrecorded">
-            defaults — not recorded for this dataset
+          <p className="mt-1 text-xs text-warn" data-testid="threshold-unrecorded">
+            not recorded for this dataset — fields start on the values of a new run
+            ({PRODUCTION_THRESHOLDS.num_permutations} permutations)
           </p>
         )}
         {current.recorded && current.computed_at && (
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="mt-1 text-xs text-fg-muted">
             computed <span className="whitespace-nowrap">{fmtUtc(current.computed_at)}</span>
           </p>
         )}
@@ -88,13 +130,13 @@ export default function ThresholdDialog({ datasetId, current, nAsv, onClose, onD
             testid="thr-con-alpha" onChange={(v) => setT({ ...t, con_alpha: v })}
             tip={<><p>Benjamini-Hochberg corrected. Weak on its own here: it is a Pearson
               statistic over the Fourier coefficients, not over the samples.</p></>} />
-          <Field label="CCM threshold ≥" value={t.ccmn_tr} step={0.01} min={0} max={0.99}
-            testid="thr-ccmn-tr" onChange={(v) => setT({ ...t, ccmn_tr: v })}
-            tip={<p>Applied before the permutation pruning, which does the selecting.</p>} />
           <Field label="CCM permutations" value={t.num_permutations} step={1} min={1} max={1000}
             testid="thr-permutations" integer onChange={(v) => setT({ ...t, num_permutations: v })}
-            tip={<><p>Caps how fine the CCM p-values can be. With 2 permutations only 0.0 and
-              0.025 can occur — that is a test configuration, not an analysis one.</p>
+            tip={<><p>Sets how fine the CCM p-values can be: the null holds at most permutations ×
+              sampled pairs × 2 values, capped at the number of directions tested, and p moves in
+              steps of one over that. With 2 permutations and 10 pairs the step is 1/40 — below
+              the 0.05 cut only 0.0 and 0.025 remain. That is a test configuration, not an
+              analysis one.</p>
               <p>More permutations cost time roughly in proportion.</p></>} />
           <Field label="Fourier coefficients" value={t.fft_coeffs} step={1} min={2} max={64}
             testid="thr-fft" integer onChange={(v) => setT({ ...t, fft_coeffs: v })}
@@ -106,34 +148,48 @@ export default function ThresholdDialog({ datasetId, current, nAsv, onClose, onD
             tip={<p>Higher values split the network into more, smaller clusters.</p>} />
         </div>
 
-        <p className="mt-3 text-xs text-amber-400 leading-snug tabular-nums"
-           data-testid="threshold-warning">
-          Replaces this network · about {estimate} minute{estimate === 1 ? "" : "s"} for {nAsv} ASVs
+        <p className="mt-2 text-xs text-fg-muted leading-snug" data-testid="thr-ccmn-note">
+          CCM threshold {t.ccmn_tr}: recorded only — OTTER does not apply it; the permutation
+          test selects the directions.
         </p>
 
-        {err && <div className="mt-2 text-xs text-red-300" data-testid="threshold-error">{err}</div>}
+        <p className="mt-3 text-xs text-ok leading-snug" data-testid="threshold-new-dataset">
+          Creates a new dataset — the original stays unchanged.
+        </p>
+        {neueId && (
+          <p className="mt-1 text-2xs text-fg-muted leading-snug break-all" data-testid="threshold-new-id">
+            new id <code className="text-fg">{neueId}</code>
+          </p>
+        )}
+        {est && (
+          <p className={`mt-1 text-xs leading-snug tabular-nums ${zuGross ? "text-danger" : "text-warn"}`}
+             data-testid="threshold-estimate" title={est.basis}>
+            all {est.n_asv} ASVs · expected {fmtMinutes(est)} · memory ~{est.memory_gb} GB
+            {est.memory_budget_gb != null ? ` of ${est.memory_budget_gb} GB` : ""}
+          </p>
+        )}
+        {zuGross && !ack && (
+          <p className="mt-1 text-xs text-danger leading-snug" data-testid="threshold-refusal">
+            {est?.refusal}
+          </p>
+        )}
+        {vorschauErr && !est && (
+          <p className="mt-1 text-xs text-danger" data-testid="threshold-estimate-error">{vorschauErr}</p>
+        )}
+
+        {err && <div className="mt-2 text-xs text-danger" data-testid="threshold-error">{err}</div>}
 
         {ack && (
-          <div className="mt-2 text-xs text-slate-300" data-testid="threshold-progress">
+          <div className="mt-2 text-xs text-fg" data-testid="threshold-progress">
             {job?.status === "error"
-              ? <span className="text-red-300">failed: {job.error}</span>
-              : job?.status === "done"
-                ? <span className="text-emerald-300">done — the network has been replaced.</span>
-                : <>running · stage {job?.stage ?? "queued"} — this window can stay open.</>}
+              ? <span className="text-danger">failed: {job.error}</span>
+              : done
+                ? <span className="text-ok">done — the new dataset is in the list.</span>
+                : <>running · stage {job?.stage ?? "queued"} — closing this window does not stop it.</>}
           </div>
         )}
 
-        <div className="mt-4 flex justify-end gap-2">
-          <button onClick={onClose} className="px-3 py-1 rounded border border-slate-600 text-slate-300 hover:text-white">
-            {job?.status === "done" ? "Close" : "Cancel"}
-          </button>
-          <button data-testid="threshold-run" onClick={start} disabled={running}
-            className="px-3 py-1 rounded bg-cyan-700 text-white disabled:opacity-40">
-            {running ? "computing …" : "Recompute network"}
-          </button>
-        </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }
 
@@ -142,14 +198,14 @@ function Field({ label, value, onChange, step, min, max, tip, integer, testid }:
   step: number; min: number; max: number; tip: React.ReactNode; integer?: boolean; testid: string;
 }) {
   return (
-    <label className="text-xs text-slate-400">
+    <label className="text-xs text-fg-muted">
       <span className="flex items-center">{label}<InfoTip title={label}>{tip}</InfoTip></span>
       <input type="number" data-testid={testid} value={value} step={step} min={min} max={max}
         onChange={(e) => {
           const v = integer ? parseInt(e.target.value, 10) : parseFloat(e.target.value);
           if (!Number.isNaN(v)) onChange(v);
         }}
-        className="mt-0.5 w-full px-2 py-1 rounded bg-slate-800 border border-slate-600 text-slate-100 tabular-nums" />
+        className="mt-1 w-full px-2 py-1 rounded-md bg-control border border-line-strong text-fg tabular-nums" />
     </label>
   );
 }

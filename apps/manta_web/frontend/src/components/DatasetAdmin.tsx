@@ -1,7 +1,9 @@
+import { Button } from "./ui";
 import { Fragment, useState } from "react";
-import { deleteDataset, moveDataset, renameDataset, setVisibility,
+import { deleteDataset, moveDataset, renameDataset, setVisibility, SharedStationError,
          type Dataset } from "../api";
 import InfoTip from "./InfoTip";
+import SharedStationAsk, { type StationAsk } from "./SharedStationAsk";
 
 export default function DatasetAdmin(
   { datasets, visibilities, input, onChanged }:
@@ -14,6 +16,7 @@ export default function DatasetAdmin(
   const [tippen, setTippen] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [frage, setFrage] = useState<StationAsk | null>(null);
 
   const run = async (p: Promise<unknown>) => {
     setBusy(true); setErr(null);
@@ -32,7 +35,7 @@ export default function DatasetAdmin(
 
   return (
     <section className="space-y-3" data-testid="dataset-admin">
-      <h3 className="flex items-center text-sm font-medium text-slate-200">
+      <h3 className="flex items-center text-sm font-medium text-fg">
         Datasets
         <InfoTip title="internal and public">
           <p><strong>internal</strong> requires an account. <strong>public</strong> is readable by
@@ -42,18 +45,22 @@ export default function DatasetAdmin(
         </InfoTip>
       </h3>
 
-      {err && <p data-testid="dataset-error" className="text-xs text-red-400">{err}</p>}
+      {err && <p data-testid="dataset-error" className="text-xs text-danger">{err}</p>}
+      {frage && (
+        <SharedStationAsk ask={frage} onCancel={() => setFrage(null)}
+          onMoved={() => { setFrage(null); onChanged(); }} />
+      )}
 
       <table className="w-full text-sm">
         <tbody>
           {datasets.map((d) => (
             <Fragment key={d.dataset_id}>
-              <tr className="border-t border-slate-800">
-                <td className="py-1.5 text-slate-300">
+              <tr className="border-t border-line-subtle">
+                <td className="py-2 text-fg">
                   {d.region ?? d.dataset_id}
-                  <span className="ml-2 text-[11px] text-slate-600">{d.dataset_id}</span>
+                  <span className="ml-2 text-2xs text-fg-muted">{d.dataset_id}</span>
                 </td>
-                <td className="py-1.5 text-right">
+                <td className="py-2 text-right">
                   <select data-testid={`vis-${d.dataset_id}`} className={input}
                           value={d.visibility ?? "internal"} disabled={busy}
                           onChange={(e) => run(setVisibility(
@@ -61,9 +68,9 @@ export default function DatasetAdmin(
                     {visibilities.map((v) => <option key={v} value={v}>{v}</option>)}
                   </select>
                 </td>
-                <td className="py-1.5 w-16 text-right">
+                <td className="py-2 w-16 text-right">
                   <button data-testid={`dataset-edit-${d.dataset_id}`}
-                          className="text-xs text-slate-400 hover:text-cyan-300"
+                          className="text-xs text-fg-muted hover:text-accent"
                           onClick={() => oeffnen(d)}>
                     {offen === d.dataset_id ? "close" : "edit"}
                   </button>
@@ -73,47 +80,58 @@ export default function DatasetAdmin(
                 <tr key={`${d.dataset_id}-edit`} data-testid={`dataset-editor-${d.dataset_id}`}>
                   <td colSpan={3} className="pb-3">
                     <div className="grid grid-cols-3 gap-2">
-                      <label className="col-span-3 text-[11px] uppercase tracking-wide text-slate-500">
+                      <label className="col-span-3 text-xs text-fg-muted">
                         Label
                         <input data-testid="dataset-region" className={input} value={region}
                                onChange={(e) => setRegion(e.target.value)} />
                       </label>
-                      <label className="text-[11px] uppercase tracking-wide text-slate-500">
+                      <label className="text-xs text-fg-muted">
                         Latitude
                         <input data-testid="dataset-lat" className={input} value={lat}
                                onChange={(e) => setLat(e.target.value)} placeholder="79.0" />
                       </label>
-                      <label className="text-[11px] uppercase tracking-wide text-slate-500">
+                      <label className="text-xs text-fg-muted">
                         Longitude
                         <input data-testid="dataset-lon" className={input} value={lon}
                                onChange={(e) => setLon(e.target.value)} placeholder="4.17" />
                       </label>
                       <div className="flex items-end">
-                        <button data-testid="dataset-save" disabled={busy}
-                          className="px-3 py-1 rounded bg-cyan-700 text-sm text-white hover:bg-cyan-500 disabled:opacity-40"
+                        <Button variant="primary" size="md" data-testid="dataset-save" disabled={busy} reason="saving"
                           onClick={() => {
                             const arbeit: Promise<unknown>[] = [];
                             if (region.trim() && region !== (d.region ?? "")) {
                               arbeit.push(renameDataset(d.dataset_id, region.trim()));
                             }
-                            if (lat.trim() && lon.trim()) {
-                              arbeit.push(moveDataset(d.dataset_id, Number(lat), Number(lon)));
+                            const [la, lo] = [Number(lat), Number(lon)];
+                            if (lat.trim() && lon.trim()
+                                && (!d.coords || la !== d.coords[1] || lo !== d.coords[0])) {
+                              arbeit.push(moveDataset(d.dataset_id, la, lo).catch((e) => {
+                                if (!(e instanceof SharedStationError)) throw e;
+                                setFrage({ id: d.dataset_id, lat: la, lon: lo, reason: e.reason });
+                              }));
                             }
                             run(arbeit.length ? Promise.all(arbeit) : Promise.resolve());
-                          }}>save</button>
+                          }}>save</Button>
                       </div>
                     </div>
 
-                    <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-800 pt-2">
-                      <span className="text-[11px] text-slate-500">
-                        Delete permanently — type <code className="text-slate-300">{d.dataset_id}</code> to confirm:
+                    <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-line-subtle pt-2">
+                      {datasets.some((x) => x.derived?.from === d.dataset_id) && (
+                        <span data-testid={`dataset-admin-derived-${d.dataset_id}`}
+                              className="basis-full text-2xs text-fg-muted">
+                          Recomputed datasets made from it stay:{" "}
+                          {datasets.filter((x) => x.derived?.from === d.dataset_id)
+                            .map((x) => x.dataset_id).join(", ")}
+                        </span>
+                      )}
+                      <span className="text-2xs text-fg-muted">
+                        Delete permanently — type <code className="text-fg">{d.dataset_id}</code> to confirm:
                       </span>
                       <input data-testid="dataset-confirm" className={input + " w-56"}
                              value={tippen} onChange={(e) => setTippen(e.target.value)} />
-                      <button data-testid="dataset-delete"
-                        disabled={busy || tippen !== d.dataset_id}
-                        className="px-3 py-1 rounded border border-red-700 text-sm text-red-400 hover:bg-red-950 disabled:opacity-40"
-                        onClick={() => run(deleteDataset(d.dataset_id))}>delete</button>
+                      <Button variant="danger" size="md" data-testid="dataset-delete"
+                        disabled={busy || tippen !== d.dataset_id} reason="type the identifier first"
+                        onClick={() => run(deleteDataset(d.dataset_id))}>delete</Button>
                     </div>
                   </td>
                 </tr>

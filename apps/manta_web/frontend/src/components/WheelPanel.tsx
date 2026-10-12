@@ -1,3 +1,4 @@
+import { StateNotice } from "./ui";
 import { useEffect, useMemo, useState } from "react";
 import { getLight, getSeasons, getWheel, type LightYear, type SeasonMark, type Seasons,
          type Wheel } from "../api";
@@ -5,7 +6,16 @@ import { Chooser, ChooserGroup, ChooserRow } from "./controls";
 import InfoTip from "./InfoTip";
 import { useModules } from "../modules";
 import ProvenanceFooter from "./ProvenanceFooter";
-import ModulesOverTime from "./ModulesOverTime";
+import ErrorNotice from "./ErrorNotice";
+import { PanelHeader } from "./PanelFrame";
+import { useTokens } from "../design/tokens";
+import { envColour, envLabelColour, sunColours } from "../design/dataColours";
+
+
+function windowLabel(w: string[]): string {
+  if (w.length === 0) return "";
+  return w.length === 1 ? w[0] : `${w[0]}–${w[w.length - 1]}`;
+}
 
 function hourColour(h: number): string {
   const stops = [[67, 56, 202], [148, 163, 184], [251, 191, 36]];
@@ -25,22 +35,38 @@ const SHORT: Record<string, string> = {
   chl_sens: "Chlorophyll", par_satellite: "Light (PAR)", pw_frac: "Polar water", o2_conc: "Oxygen",
 };
 
+function niceTicks(lo: number, hi: number): number[] {
+  const roh = (hi - lo) / 3;
+  const zehn = Math.pow(10, Math.floor(Math.log10(roh)));
+  const schritt = [1, 2, 5, 10].map((f) => f * zehn).find((s) => (hi - lo) / s <= 4) ?? 10 * zehn;
+  const out: number[] = [];
+  for (let v = Math.ceil(lo / schritt) * schritt; v <= hi + 1e-9 * Math.abs(hi || 1); v += schritt) {
+    out.push(Math.abs(v) < 1e-12 ? 0 : v);
+  }
+  return out.length >= 2 ? out : [lo, hi];
+}
+
+function tickDigits(lo: number, hi: number): number {
+  const s = hi - lo;
+  return s >= 10 ? 0 : s >= 1 ? 1 : s >= 0.1 ? 2 : 3;
+}
+
 export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEnvironment }: {
   datasetId: string; onClose: () => void; onOpenCluster: (label: number) => void;
   onOpenEnvironment?: (key: string) => void;
 }) {
   const [w, setW] = useState<Wheel | null>(null);
   const modules = useModules();
-  const [err, setErr] = useState<string | null>(null);
+  const { light: hell } = useTokens();
+  const ENV = envColour(hell), sonne = sunColours(hell);
+  const [err, setErr] = useState<unknown>(null);
+  const [nochmal, setNochmal] = useState(0);
   const [envKey, setEnvKey] = useState<string | null>("temp");
   const [year, setYear] = useState<string | null>(null);
   useEffect(() => { setYear(null); }, [datasetId]);
-  const [hover, setHover] = useState<number | null>(null);
   const [held, setHeld] = useState<number | null>(null);
-  const front = held ?? hover;
-  const setFront = setHover;
   const hold = (l: number) => setHeld((h) => (h === l ? null : l));
-  useEffect(() => { setHover(null); setHeld(null); }, [datasetId]);
+  useEffect(() => { setHeld(null); }, [datasetId]);
 
   const [lightYear, setLightYear] = useState<LightYear | null>(null);
   const [origin, setOrigin] = useState<"jan1" | "solstice" | "sun">("jan1");
@@ -60,8 +86,8 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
     : origin === "sun" ? (lightYear?.sun_return_doy ?? 1) : 1;
   useEffect(() => {
     setW(null); setErr(null);
-    getWheel(datasetId, year).then(setW).catch((e) => setErr(String(e)));
-  }, [datasetId, year]);
+    getWheel(datasetId, year).then(setW).catch((e) => setErr(e));
+  }, [datasetId, year, nochmal]);
 
   const envVars = w?.environment?.variables ?? [];
   const activeEnv = envVars.find((v) => v.key === envKey) ?? null;
@@ -69,7 +95,7 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
 
   const CX = 220, CY = 220;
   const R_LABEL = 209;
-  const R_ENV_MAX = 190, R_ENV_MIN = 148;
+  const R_ENV_MAX = 186, R_ENV_MIN = 148;
   const R_LIGHT = 196;
   const R_CLUSTER_MAX = 136, R_CLUSTER_MIN = 52;
   const angleOfDoy = (doy: number) =>
@@ -142,32 +168,21 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
       const a = pts.get(m), b = pts.get((m % 12) + 1);
       if (a && b) segs.push([a.xy, b.xy]);
     }
-    return { pts: [...pts.values()], segs, lo, hi };
+    const guides = (hi === lo ? [lo] : niceTicks(lo, hi)).map((v) => ({ v, r: rOf(v) }));
+    return { pts: [...pts.values()], segs, lo, hi, guides, digits: tickDigits(lo, hi) };
   }, [monthly]);
 
-  const modulesBlock = w ? (
-    <div className="pt-1" data-testid="wheel-modules-over-time">
-      <ModulesOverTime datasetId={datasetId} label={front} onFront={setFront} onHold={hold}
-        order={clusters.map((c) => c.louvain_label)} />
-    </div>
-  ) : null;
-
   return (
-    <div className="h-full overflow-auto" data-testid="wheel-panel">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700 sticky top-0 bg-slate-900 z-10">
-        <span className="text-slate-100 font-medium flex items-center">
-          The year wheel
+    <div data-testid="wheel-panel">
+      <PanelHeader title="The year wheel" onClose={onClose} closeTestid="wheel-close" />
 
-        </span>
-        <button onClick={onClose} data-testid="wheel-close" aria-label="Close" className="text-slate-400 hover:text-white">✕</button>
-      </div>
-
-      {err && <div className="p-4 text-red-300" data-testid="error">{err}</div>}
-      {!w && !err && <div className="p-4 text-slate-500">loading …</div>}
+      {err != null && <ErrorNotice error={err} what="Could not load the year wheel."
+        onRetry={() => setNochmal((n) => n + 1)} />}
+      {!w && err == null && <StateNotice state="loading">loading …</StateNotice>}
 
       {w?.absent_reason && (
         <div className="p-4 pb-0">
-          <p className="text-sm text-amber-400/90" data-testid="wheel-absent">{w.absent_reason}</p>
+          <p className="text-sm text-warn" data-testid="wheel-absent">{w.absent_reason}</p>
         </div>
       )}
 
@@ -246,17 +261,17 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
           </div>
 
           {w.year?.note && (
-            <p className="text-[10px] text-amber-400" data-testid="wheel-year-note">
+            <p className="text-xs text-warn" data-testid="wheel-year-note">
               {w.year.year}: {w.year.note} — windows rest on this year&rsquo;s {w.year.n} samples only.
             </p>
           )}
 
           <div className="relative">
           <svg viewBox="0 0 440 440" className="w-full" data-testid="wheel-svg" data-origin={origin}>
-            <circle cx={CX} cy={CY} r={R_LIGHT} fill="none" stroke="#334155" strokeWidth={9}
+            <circle cx={CX} cy={CY} r={R_LIGHT} fill="none" stroke="var(--chart-axis)" strokeWidth={9}
                     opacity={0.35} />
-            <circle cx={CX} cy={CY} r={R_ENV_MIN} fill="none" stroke="#334155" strokeWidth={0.5} />
-            <circle cx={CX} cy={CY} r={R_ENV_MAX} fill="none" stroke="#334155" strokeWidth={0.5} />
+            {!envGeo && <circle cx={CX} cy={CY} r={R_ENV_MIN} fill="none" stroke="var(--chart-axis)" strokeWidth={0.5} />}
+            {!envGeo && <circle cx={CX} cy={CY} r={R_ENV_MAX} fill="none" stroke="var(--chart-axis)" strokeWidth={0.5} />}
             {lightYear?.available && lightMode === "hours" && (lightYear.day_length_doy?.length ?? 0) > 0 && (
               <g data-testid="wheel-light-hours-ring" data-n={lightYear.day_length_doy!.length}>
                 {lightYear.day_length_doy!.map((h, i) => {
@@ -278,14 +293,15 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
                   const [tx, ty] = P(R_LIGHT, angleOfDoy(b.start_doy + (((b.end_doy + 1 - b.start_doy) % 365 + 365) % 365) / 2));
                   return (
                     <g key={i}>
-                      <path d={bogen} fill="none" stroke={nacht ? "#4338ca" : "#fbbf24"}
+                      <path d={bogen} fill="none" stroke={nacht ? sonne.nightBand : sonne.day}
                         strokeWidth={8} opacity={nacht ? 0.95 : 0.85}>
                         <title>{nacht ? "polar night: the sun stays below the horizon"
                                       : "midnight sun: the sun stays above the horizon"} · days {b.start_doy}–{b.end_doy}</title>
                       </path>
                       {span >= 45 && (
-                        <text x={tx} y={ty + 3} fontSize={8} fill="#0f172a" textAnchor="middle"
-                              className="font-medium">{nacht ? "no sun" : "sun all day"}</text>
+                        <text x={tx} y={ty + 4} fontSize={11} textAnchor="middle" className="font-medium"
+                              stroke="var(--raised)" strokeWidth={2.5} paintOrder="stroke" fill="var(--text)">
+                          {nacht ? "no sun" : "sun all day"}</text>
                       )}
                     </g>
                   );
@@ -298,42 +314,52 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
               const [gx1, gy1] = P(R_ENV_MAX + 4, monthStart(i + 1));
               return (
                 <g key={name}>
-                  <line x1={gx0} y1={gy0} x2={gx1} y2={gy1} stroke="#1e293b" strokeWidth={1} />
-                  <text x={tx} y={ty} fill="#64748b" fontSize={11} textAnchor="middle"
+                  <line x1={gx0} y1={gy0} x2={gx1} y2={gy1} stroke="var(--chart-grid)" strokeWidth={1} />
+                  <text x={tx} y={ty} fill="var(--text-muted)" fontSize={11} textAnchor="middle"
                         dominantBaseline="middle">{name}</text>
                 </g>
               );
             })}
 
             {envGeo && activeEnv && (
-              <g data-testid="wheel-env-band" className={onOpenEnvironment ? "cursor-pointer" : undefined}
+              <g data-testid="wheel-env-band" data-n-months={envGeo.pts.length}
+                 data-n-guides={envGeo.guides.length}
+                 className={onOpenEnvironment ? "cursor-pointer" : undefined}
                  onClick={() => onOpenEnvironment?.(activeEnv.key)}>
-                <circle cx={CX} cy={CY} r={R_ENV_MIN} fill="none" stroke="#334155" strokeWidth={0.5} />
-                <circle cx={CX} cy={CY} r={R_ENV_MAX} fill="none" stroke="#334155" strokeWidth={0.5} />
-                {envGeo.pts.map((p) => {
-                  const rr = Math.max(R_ENV_MIN + 1, Math.hypot(p.xy[0] - CX, p.xy[1] - CY));
-                  const a0 = monthStart(p.month) + 0.02, a1 = monthStart(p.month) + 30 * (Math.PI / 180) - 0.02;
-                  const [x0, y0] = P(R_ENV_MIN, a0), [x1, y1] = P(R_ENV_MIN, a1);
-                  const [x2, y2] = P(rr, a1), [x3, y3] = P(rr, a0);
-                  return (
-                    <path key={p.month}
-                      d={`M ${x0} ${y0} A ${R_ENV_MIN} ${R_ENV_MIN} 0 0 1 ${x1} ${y1} L ${x2} ${y2} A ${rr} ${rr} 0 0 0 ${x3} ${y3} Z`}
-                      fill="#34d399" opacity={0.35} stroke="#34d399" strokeWidth={0.5}>
-                      <title>{`${w.months[p.month - 1]}: ${p.mean.toFixed(2)}${activeEnv.unit ? ` ${activeEnv.unit}` : ""} (mean of ${p.n})`}</title>
-                    </path>
-                  );
-                })}
+                {envGeo.guides.map((g) => (
+                  <circle key={`c${g.v}`} cx={CX} cy={CY} r={g.r} fill="none" stroke="var(--chart-axis)"
+                          strokeWidth={0.6} strokeDasharray="2 3" data-testid="wheel-env-guide" />
+                ))}
+                <g data-testid="wheel-env-line">
+                  {envGeo.segs.map(([a, b], i) => (
+                    <line key={i} x1={a[0]} y1={a[1]} x2={b[0]} y2={b[1]} stroke={ENV}
+                          strokeWidth={1.6} opacity={0.9} />
+                  ))}
+                </g>
+                {envGeo.pts.map((p) => (
+                  <circle key={p.month} cx={p.xy[0]} cy={p.xy[1]} r={3} fill={ENV}
+                          stroke="var(--raised)" strokeWidth={1} data-testid="wheel-env-month"
+                          data-month={p.month}>
+                    <title>{`${w.months[p.month - 1]}: ${p.mean.toFixed(2)}${activeEnv.unit ? ` ${activeEnv.unit}` : ""} (mean of ${p.n})`}</title>
+                  </circle>
+                ))}
+                {envGeo.guides.map((g) => (
+                  <text key={`t${g.v}`} x={CX - 3} y={CY - g.r} fontSize={11} textAnchor="end"
+                        dominantBaseline="middle" fill={envLabelColour(hell)} stroke="var(--raised)" strokeWidth={2.5}
+                        paintOrder="stroke" data-testid="wheel-env-guide-label">
+                    {g.v.toFixed(envGeo.digits)}
+                  </text>
+                ))}
               </g>
             )}
             {clusters.map((c, i) => {
               const r = ringR(i);
               const col = modules.color(c.louvain_label);
-              const title = `Cluster ${c.louvain_label} · ${c.statement ?? "no window"} · ${c.n_members} ASVs`;
+              const title = `${modules.label(c.louvain_label)} · ${c.statement ?? "no window"} · ${c.n_members} ASVs`;
               return (
                 <g key={c.louvain_label} data-testid={`wheel-arc-${c.louvain_label}`}
                    className="cursor-pointer"
-                   onClick={() => { hold(c.louvain_label); onOpenCluster(c.louvain_label); }}
-                   onMouseEnter={() => setFront(c.louvain_label)}>
+                   onClick={() => { hold(c.louvain_label); onOpenCluster(c.louvain_label); }}>
                   <circle cx={CX} cy={CY} r={r} fill="none" stroke={col} strokeWidth={1} opacity={0.14} />
                   {c.window_months.length > 0 && c.window_months.length < 12 && (
                     <path d={arcPath(r, c.window_months[0], c.window_months.length)}
@@ -346,7 +372,7 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
                   )}
                   {c.peak_month != null && (() => {
                     const [px, py] = P(r, monthCenter(c.peak_month));
-                    return <circle cx={px} cy={py} r={4} fill={col} stroke="#0f172a" strokeWidth={1.5} />;
+                    return <circle cx={px} cy={py} r={4} fill={col} stroke="var(--raised)" strokeWidth={1.5} />;
                   })()}
                   <title>{title}</title>
                 </g>
@@ -360,9 +386,9 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
                   const [x1, y1] = P(R_LIGHT + 5, a);
                   return (
                     <g key={`${m.label}-${m.doy}`}>
-                      <line x1={x0} y1={y0} x2={x1} y2={y1} stroke="#e2e8f0" strokeWidth={1}
+                      <line x1={x0} y1={y0} x2={x1} y2={y1} stroke="var(--text)" strokeWidth={1}
                             strokeDasharray="3 3" opacity={0.65} />
-                      <circle cx={x1} cy={y1} r={2.5} fill="#e2e8f0" opacity={0.9} />
+                      <circle cx={x1} cy={y1} r={2.5} fill="var(--text)" opacity={0.9} />
                     </g>
                   );
                 })}
@@ -371,9 +397,9 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
             {lightMode === "hours" && extremLaeufe.map((l) => {
               const [tx, ty] = P(R_LIGHT, angleOfDoy(l.mitte));
               return (
-                <text key={`${l.art}-${l.mitte}`} x={tx} y={ty + 3} fontSize={8}
+                <text key={`${l.art}-${l.mitte}`} x={tx} y={ty + 4} fontSize={11}
                       textAnchor="middle" className="font-medium"
-                      stroke="#0f172a" strokeWidth={2.5} paintOrder="stroke" fill="#e2e8f0">
+                      stroke="var(--raised)" strokeWidth={2.5} paintOrder="stroke" fill="var(--text)">
                   {l.art === "nacht" ? "no sun" : "sun all day"}
                 </text>
               );
@@ -381,12 +407,12 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
           </svg>
           </div>
 
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-slate-400"
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-fg-muted"
                data-testid="wheel-legend">
             {lightYear?.available && lightMode === "zones" && (<>
-              <span><span className="inline-block w-3 h-1.5 align-middle mr-1" style={{ background: "#4338ca" }} />no sun (polar night)</span>
-              <span><span className="inline-block w-3 h-1.5 align-middle mr-1" style={{ background: "#fbbf24" }} />sun all day (midnight sun)</span>
-              <span><span className="inline-block w-3 h-1.5 align-middle mr-1" style={{ background: "#64748b", opacity: 0.6 }} />sun rises and sets</span>
+              <span><span className="inline-block w-3 h-1.5 align-middle mr-1" style={{ background: sonne.nightBand }} />no sun (polar night)</span>
+              <span><span className="inline-block w-3 h-1.5 align-middle mr-1" style={{ background: sonne.day }} />sun all day (midnight sun)</span>
+              <span><span className="inline-block w-3 h-1.5 align-middle mr-1" style={{ background: sonne.twilight, opacity: 0.6 }} />sun rises and sets</span>
             </>)}
             {lightYear?.available && lightMode === "hours" && (<>
               <span>0 h</span>
@@ -394,33 +420,30 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
                 style={{ background: `linear-gradient(to right, ${hourColour(0)}, ${hourColour(12)}, ${hourColour(24)})` }} />
               <span>24 h of sun</span>
             </>)}
-            {activeEnv && <span><span className="inline-block w-3 h-1.5 align-middle mr-1" style={{ background: "#34d399", opacity: 0.5 }} />{SHORT[activeEnv.key] ?? activeEnv.label}, monthly mean</span>}
-            <span><span className="inline-block w-3 h-1.5 align-middle mr-1 rounded" style={{ background: "#64748b" }} />module window, dot = its peak</span>
+            {activeEnv && <span><span className="inline-block w-3 h-0.5 align-middle mr-1" style={{ background: ENV }} />{SHORT[activeEnv.key] ?? activeEnv.label}, monthly mean (dashed circles: scale)</span>}
+            <span><span className="inline-block w-3 h-1.5 align-middle mr-1 rounded" style={{ background: "var(--chart-line)" }} />module window; dot = highest month</span>
             {seasonMarks.length > 0 && (
               <span data-testid="wheel-season-legend">
-                <span className="inline-block w-3 h-px align-middle mr-1" style={{ background: "#e2e8f0" }} />
+                <span className="inline-block w-3 h-px align-middle mr-1" style={{ background: "var(--text)" }} />
                 {seasonMarks.map((m) => `${m.label} ${dateOfDoy(m.doy)}`).join(" · ")}
               </span>
             )}
           </div>
           {seasonMode === "water" && seasons?.water_note && (
-            <p className="text-[10px] text-slate-500" data-testid="wheel-water-note">{seasons.water_note}</p>
+            <p className="text-2xs text-fg-muted" data-testid="wheel-water-note">{seasons.water_note}</p>
           )}
 
-          {modulesBlock}
-
           {activeEnv && envGeo && (
-            <p className="text-[11px] text-slate-400 tabular-nums flex items-center flex-wrap gap-x-1" data-testid="wheel-env-caption">
-              <button className="text-emerald-300 hover:underline" data-testid="wheel-env-open"
+            <p className="text-2xs text-fg-muted tabular-nums flex items-center flex-wrap gap-x-1" data-testid="wheel-env-caption">
+              <button className="text-ok hover:underline" data-testid="wheel-env-open"
                 onClick={() => onOpenEnvironment?.(activeEnv.key)}>
                 {activeEnv.label}{activeEnv.unit ? ` (${activeEnv.unit})` : ""} ↗
               </button>
               <span>· ring: monthly mean{w.year ? ` ${w.year.year}` : ""}, {envGeo.lo.toFixed(1)}–{envGeo.hi.toFixed(1)}</span>
               <InfoTip title="The ring">
-                <p>Each sector is one calendar month, from the inner edge (the smallest monthly mean) out to that month&rsquo;s mean; the outer edge is the largest. A missing month stays empty.</p>
-                <p>Dots are the measurements themselves, one per sample, placed on their day; larger dots were sampled deeper. Year and value in the tooltip.</p>
+                <p>Each point is one calendar month&rsquo;s mean; the line joins neighbouring months. The dashed circles are the scale, labelled with their values at 12 o&rsquo;clock. A month without a measurement leaves a gap.</p>
                 <p>Context only — no correlation with the modules is computed.</p>
-                {activeEnv.unit_note && <p className="text-amber-400/90">{activeEnv.unit_note}</p>}
+                {activeEnv.unit_note && <p className="text-warn">{activeEnv.unit_note}</p>}
               </InfoTip>
             </p>
           )}
@@ -429,68 +452,75 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
             {clusters.map((c) => (
               <button key={c.louvain_label} data-testid={`wheel-row-${c.louvain_label}`}
                 onClick={() => { hold(c.louvain_label); onOpenCluster(c.louvain_label); }}
-                onMouseEnter={() => setFront(c.louvain_label)}
                 aria-pressed={held === c.louvain_label}
-                className={`w-full flex items-center gap-2 text-left px-2 py-1 rounded hover:bg-slate-800 ${held === c.louvain_label ? "bg-slate-800 ring-1 ring-slate-500" : ""}`}>
+                className={`w-full flex items-center gap-2 text-left px-2 py-1 rounded hover:bg-control ${held === c.louvain_label ? "bg-control ring-1 ring-line-strong" : ""}`}>
                 <span className="inline-block w-3 h-3 rounded-sm shrink-0"
                       style={{ background: modules.color(c.louvain_label) }} />
-                <span className="text-slate-200 shrink-0">{modules.label(c.louvain_label)}</span>
-                <span className="text-slate-400 text-xs flex-1">
+                <span className="text-fg shrink-0">{modules.label(c.louvain_label)}</span>
+                <span className="text-fg-muted text-xs flex-1">
                   {c.window.length
-                    ? `${c.window[0]}–${c.window[c.window.length - 1]}` + (c.peak ? ` · peak ${c.peak}` : "")
+                    ? windowLabel(c.window) + (c.peak ? ` · peak ${c.peak}` : "")
                     : "no window above its own annual mean"}
                 </span>
-                <span className="text-slate-500 text-xs tabular-nums shrink-0">{c.n_members} ASVs</span>
+                <span className="text-fg-muted text-xs tabular-nums shrink-0">{c.n_members} ASVs</span>
               </button>
             ))}
           </div>
 
-          <p className="flex items-center text-[10px] text-slate-500" data-testid="wheel-windows-note">
-            <span data-testid="wheel-windows-definition">Shares, not cell counts — a window is the months
-            above the module&rsquo;s own annual mean; the dot is its strongest month.</span>
+          <p className="flex items-center text-2xs text-fg-muted" data-testid="wheel-windows-note">
+            <span data-testid="wheel-windows-definition">Shares, not cell counts. Arc: one above-mean
+            run (others not drawn); dot: highest month, can lie outside the arc.</span>
+            <InfoTip title="The arc">
+              <p>A run is a stretch of consecutive months in which the module lies above its own
+              annual mean. A module can have several runs. The arc shows one of them: the
+              module&rsquo;s window, as named in the list below. Other runs are not drawn.</p>
+              <p>The window is the run with the largest summed excess over the annual mean, so
+              height and length both count. When a second run comes close, the hover text names
+              both; only the window is drawn.</p>
+              <p>The dot marks the single highest month. It can lie outside the arc, for example
+              when one high month stands alone and a longer run adds up to more.</p>
+            </InfoTip>
           </p>
         </div>
       )}
 
-      {w?.absent_reason && modulesBlock}
-
       {w && (
-        <div className="p-4 pt-2 space-y-2 text-sm border-t border-slate-800" data-testid="wheel-pairs">
-          <h3 className="text-slate-300 font-medium flex items-center">
+        <div className="p-4 pt-2 space-y-2 text-sm border-t border-line-subtle" data-testid="wheel-pairs">
+          <h3 className="text-fg font-medium flex items-center">
             Transitions between communities
 
           </h3>
           {w.pairs.length === 0 ? (
-            <p className="text-xs text-slate-400" data-testid="wheel-pairs-empty">
+            <p className="text-xs text-fg-muted" data-testid="wheel-pairs-empty">
               No link crosses a cluster border — the clusters are unconnected parts.
             </p>
           ) : (
             <div className="space-y-1">
               {w.pairs.map((p) => (
                 <div key={`${p.ca}-${p.cb}`} data-testid={`wheel-pair-${p.ca}-${p.cb}`}
-                  className="flex items-center gap-2 px-2 py-1 rounded bg-slate-950/40">
+                  className="flex items-center gap-2 px-2 py-1 rounded bg-surface/40">
                   <span className="inline-block w-3 h-3 rounded-sm shrink-0"
                         style={{ background: modules.color(p.ca) }} />
-                  <button className="text-slate-200 hover:underline shrink-0"
-                          onClick={() => onOpenCluster(p.ca)}>C{p.ca}</button>
-                  <span className="text-slate-500 shrink-0">↔</span>
+                  <button className="text-fg hover:underline shrink-0"
+                          onClick={() => onOpenCluster(p.ca)}>{modules.label(p.ca)}</button>
+                  <span className="text-fg-muted shrink-0">↔</span>
                   <span className="inline-block w-3 h-3 rounded-sm shrink-0"
                         style={{ background: modules.color(p.cb) }} />
-                  <button className="text-slate-200 hover:underline shrink-0"
-                          onClick={() => onOpenCluster(p.cb)}>C{p.cb}</button>
-                  <span className="text-xs text-slate-400 flex-1 text-right tabular-nums">
+                  <button className="text-fg hover:underline shrink-0"
+                          onClick={() => onOpenCluster(p.cb)}>{modules.label(p.cb)}</button>
+                  <span className="text-xs text-fg-muted flex-1 text-right tabular-nums">
                     {p.n_con} link{p.n_con === 1 ? "" : "s"} · {p.n_with_ccm} with direction
                     {p.mean_nmi != null && <> · mean NMI {p.mean_nmi.toFixed(2)}</>}
                   </span>
                   {p.n_with_ccm === 0 && (
-                    <span className="text-[10px] text-amber-400/90 shrink-0"
+                    <span className="text-xs text-warn shrink-0"
                           data-testid="wheel-pair-reset">
                       no measurable direction
                     </span>
                   )}
                 </div>
               ))}
-              <p className="text-[10px] text-slate-500">
+              <p className="text-2xs text-fg-muted">
                 Links are co-occurrences (similar temporal pattern, not interaction); a direction
                 is a pruned CCM annotation. Pairs sorted by how strongly they are connected.
               </p>

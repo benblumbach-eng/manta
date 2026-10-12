@@ -46,7 +46,7 @@ def status_summary() -> dict:
 
 
 def _header(value: str) -> str:
-    return re.sub(r"[\r\n]+", " ", (value or "").strip())[:200]
+    return " ".join((value or "").strip().splitlines())[:200]
 
 
 def send(subject: str, body: str, to: list[str], reply_to: str | None = None) -> str:
@@ -56,18 +56,21 @@ def send(subject: str, body: str, to: list[str], reply_to: str | None = None) ->
     if not empfaenger:
         return "error: no valid recipient address configured"
 
-    msg = EmailMessage()
-    msg["Subject"] = _header(subject)
-    msg["From"] = sender()
-    msg["To"] = ", ".join(empfaenger)
-    msg["Date"] = formatdate(localtime=True)
-    if reply_to and valid_email(reply_to):
-        msg["Reply-To"] = _header(reply_to)
-    msg.set_content(body)
+    try:
+        msg = EmailMessage()
+        msg["Subject"] = _header(subject)
+        msg["From"] = sender()
+        msg["To"] = ", ".join(empfaenger)
+        msg["Date"] = formatdate(localtime=True)
+        if reply_to and valid_email(reply_to):
+            msg["Reply-To"] = _header(reply_to)
+        msg.set_content(body)
+    except Exception as e:
+        return f"error: {type(e).__name__}: {e}"[:300]
 
     host = _env("MANTA_SMTP_HOST")
     mode = (_env("MANTA_SMTP_TLS", "starttls") or "starttls").lower()
-    user, password = _env("MANTA_SMTP_USER"), os.environ.get("MANTA_SMTP_PASSWORD") or ""
+    user, password = _env("MANTA_SMTP_USER"), _env("MANTA_SMTP_PASSWORD")
     try:
         port = int(_env("MANTA_SMTP_PORT", "587") or 587)
         if mode == "ssl":

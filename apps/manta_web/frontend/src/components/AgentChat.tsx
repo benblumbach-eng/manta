@@ -1,18 +1,45 @@
+import { Button, StateNotice, ToggleButton, SectionHeading } from "./ui";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { askAgent, getAgentStatus, getAgentTools, getAsv, getConcepts, getEnvironment,
-         getNetwork, runTool, type Concept, type Concepts,
+import { MANTA_FIGURE } from "../design/dataColours";
+import { askAgent, describeError, errorText, getAgentStatus, getAgentTools, getAsv, getConcepts,
+         getEnvironment, getNetwork, runTool, type Concept, type Concepts,
          type AgentAnswer, type AgentStatus, type Dataset, type EnvVariable, type Neighbor,
          type ChatTurn, type NetNode, type OwnProvider, type ToolHelp,
-         type ToolRun , getApplicability, type Applicability } from "../api";
+         type ToolRun , getApplicability, type Applicability,
+         AgentAskError, getConversation, getConversations, type ConversationSummary,
+         type StoredTurn } from "../api";
 import type { AskAssistant } from "./InfoTip";
+import { PanelHeader } from "./PanelFrame";
 import { useModules } from "../modules";
+import { AnswerText, ConversationView, RawJson, TurnProtocol, checkText } from "./Transcript";
 
 type Turn =
   | { role: "user"; text: string; tool?: { name: string; args: Record<string, unknown> } }
   | { role: "agent"; text: string; evidence: AgentAnswer["evidence"]; model?: string;
-      steps?: number; ungrounded?: string[]; corrected?: boolean; own_key?: boolean }
+      steps?: number; ungrounded?: string[]; corrected?: boolean; own_key?: boolean;
+      turnId?: number | null; grounding?: string; truncated?: boolean }
   | { role: "tool"; run: ToolRun }
-  | { role: "error"; text: string };
+  | { role: "error"; text: string; title?: string; kind?: string; todo?: string;
+      retry?: { text: string; tool?: { name: string; args: Record<string, unknown> };
+                concept?: string };
+      turnId?: number | null };
+
+type Thread = { conversationId: string | null; turns: Turn[] };
+const EMPTY_THREAD: Thread = { conversationId: null, turns: [] };
+
+function fromStored(ts: StoredTurn[]): Turn[] {
+  const out: Turn[] = [];
+  for (const s of ts) {
+    out.push({ role: "user", text: s.question });
+    if (s.status === "error") out.push({ role: "error", title: "The assistant could not answer.",
+                                         text: s.error || "failed", turnId: s.id });
+    else out.push({ role: "agent", text: s.answer, evidence: s.evidence, model: s.model,
+                    steps: s.steps ?? undefined, ungrounded: s.ungrounded, corrected: s.corrected,
+                    own_key: s.own_key, turnId: s.id, grounding: s.grounding,
+                    truncated: s.status === "step_limit" });
+  }
+  return out;
+}
 
 const MODEL_KEY = "manta.agent.model";
 
@@ -188,79 +215,54 @@ function formatArg(v: unknown): string {
   return Array.isArray(v) ? v.join(",") : String(v);
 }
 
-function inline(line: string) {
-  return line.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((part, i) => {
-    if (part.startsWith("**") && part.endsWith("**") && part.length > 4)
-      return <strong key={i} className="text-slate-100 font-semibold">{part.slice(2, -2)}</strong>;
-    if (part.startsWith("`") && part.endsWith("`") && part.length > 2)
-      return <code key={i} className="rounded bg-slate-800 px-1 text-[0.85em] text-cyan-300">{part.slice(1, -1)}</code>;
-    return part.replace(/\*\*/g, "");
-  });
-}
-
-function AnswerText({ text }: { text: string }) {
-  const blocks: React.ReactNode[] = [];
-  let list: { ordered: boolean; items: string[] } | null = null;
-  const flush = () => {
-    if (!list) return;
-    const Tag = list.ordered ? "ol" : "ul";
-    blocks.push(
-      <Tag key={blocks.length} className={`${list.ordered ? "list-decimal" : "list-disc"} pl-5 space-y-0.5`}>
-        {list.items.map((it, i) => <li key={i}>{inline(it)}</li>)}
-      </Tag>);
-    list = null;
-  };
-  for (const raw of text.split("\n")) {
-    const line = raw.trimEnd();
-    const m = /^\s*(?:([-*•])|(\d+)[.)])\s+(.*)$/.exec(line);
-    if (m) {
-      const ordered = !!m[2];
-      const indented = /^\s{2,}/.test(line) && list;
-      if (list && (list.ordered !== ordered) && !indented) flush();
-      if (!list) list = { ordered, items: [] };
-      if (indented && list.items.length) list.items[list.items.length - 1] += " · " + m[3];
-      else list.items.push(m[3]);
-      continue;
-    }
-    flush();
-    if (!line.trim()) continue;
-    const h = /^#{1,4}\s+(.*)$/.exec(line);
-    blocks.push(h
-      ? <p key={blocks.length} className="text-slate-100 font-medium">{inline(h[1])}</p>
-      : <p key={blocks.length} className="whitespace-pre-wrap">{inline(line)}</p>);
-  }
-  flush();
-  return <>{blocks}</>;
-}
-
 function MantaGlyph({ size = 18 }: { size?: number }) {
   return (
     <svg width={size} height={size * 0.8} viewBox="0 4 72 52" aria-hidden="true" className="shrink-0">
-      <path d="M36 40 Q34 50 30 57 Q37 52 38 42 Z" fill="#0e7490" />
+      <path d="M36 40 Q34 50 30 57 Q37 52 38 42 Z" fill={MANTA_FIGURE.mid} />
       <path d="M36 7 C 42 7, 50 10, 70 24 C 56 25, 48 29, 44 35 C 42 41, 39 44, 36 44
-               C 33 44, 30 41, 28 35 C 24 29, 16 25, 2 24 C 22 10, 30 7, 36 7 Z" fill="#22d3ee" />
-      <circle cx="30" cy="16" r="2.6" fill="#0f172a" />
-      <circle cx="42" cy="16" r="2.6" fill="#0f172a" />
+               C 33 44, 30 41, 28 35 C 24 29, 16 25, 2 24 C 22 10, 30 7, 36 7 Z"
+        fill={MANTA_FIGURE.body} />
+      <circle cx="30" cy="16" r="2.6" fill={MANTA_FIGURE.eye} />
+      <circle cx="42" cy="16" r="2.6" fill={MANTA_FIGURE.eye} />
     </svg>
   );
 }
 
-const CHIP = "px-2 py-0.5 rounded border text-xs";
-const CHIP_ON = "border-cyan-600 text-cyan-300 bg-cyan-500/10";
-const CHIP_OFF = "border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-500";
-const FIELD = "w-full bg-slate-950 border rounded px-2 py-1 text-xs text-slate-100 outline-none " +
-              "focus:border-cyan-600";
+const CHIP = "px-2 py-1 rounded border text-xs";
+const CHIP_ON = "border-accent text-accent bg-accent-soft";
+const CHIP_OFF = "border-line text-fg-muted hover:text-fg hover:border-line-strong";
+const FIELD = "w-full bg-surface border rounded px-2 py-1 text-xs text-fg outline-none " +
+              "focus:border-accent";
 
-export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClose }:
+export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClose, signedIn = false }:
   { datasets?: Dataset[]; datasetId?: string; asvId?: string;
-    ask?: (AskAssistant & { tick: number }) | null; onClose: () => void }) {
+    ask?: (AskAssistant & { tick: number }) | null; onClose: () => void;
+    signedIn?: boolean }) {
   const modules = useModules();
   const [status, setStatus] = useState<AgentStatus | null>(null);
-  const [turns, setTurns] = useState<Turn[]>([]);
+  const [threads, setThreads] = useState<Record<string, Thread>>({});
+  const threadKey = datasetId ?? "";
+  const thread = threads[threadKey] ?? EMPTY_THREAD;
+  const turns = thread.turns;
+  const addTurn = (k: string, t: Turn, conversationId?: string | null) =>
+    setThreads((cur) => {
+      const th = cur[k] ?? EMPTY_THREAD;
+      return { ...cur, [k]: { conversationId: conversationId === undefined ? th.conversationId
+                                                                         : conversationId,
+                              turns: [...th.turns, t] } };
+    });
+  const [openProtocol, setOpenProtocol] = useState<number | null>(null);
+  const [adminsRead, setAdminsRead] = useState<boolean | null>(null);
+  const [earlier, setEarlier] = useState<ConversationSummary[] | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyFilter, setHistoryFilter] = useState("");
+  const [historyAll, setHistoryAll] = useState(false);
+  const [reading, setReading] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [toolBusy, setToolBusy] = useState<string | null>(null);
   const [openEvidence, setOpenEvidence] = useState<number | null>(null);
+  useEffect(() => { setOpenEvidence(null); setOpenProtocol(null); }, [threadKey]);
   const [caps, setCaps] = useState<{ ds: string; app: Applicability } | null>(null);
   const [whyOpen, setWhyOpen] = useState<string | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -268,7 +270,7 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
     try { return localStorage.getItem(MODEL_KEY) ?? ""; } catch { return ""; }
   });
   const endRef = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState<"chat" | "tools" | "ontology">("chat");
+  const [view, setView] = useState<"chat" | "tools" | "ontology" | "history">("chat");
   const [concepts, setConcepts] = useState<Concepts | null>(null);
   const [conceptsError, setConceptsError] = useState<string | null>(null);
   const [conceptFilter, setConceptFilter] = useState("");
@@ -326,9 +328,25 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
       const names = (st.models ?? []).map((m) => m.name);
       setModel((cur) => (cur && names.includes(cur) ? cur : st.model));
     }).catch(() => setStatus(null));
-    getAgentTools().then((r) => setTools(r.tools)).catch((e) => setToolsError(String(e)));
-    getConcepts().then(setConcepts).catch((e) => setConceptsError(String(e)));
+    getAgentTools().then((r) => setTools(r.tools)).catch((e) => setToolsError(errorText(e)));
+    getConcepts().then(setConcepts).catch((e) => setConceptsError(errorText(e)));
   }, []);
+  useEffect(() => {
+    if (!signedIn) return;
+    getConversations().then((r) => setAdminsRead(r.admins_can_read)).catch(() => setAdminsRead(null));
+  }, [signedIn]);
+  useEffect(() => {
+    if (view !== "history" || !signedIn) return;
+    let alive = true;
+    const t = setTimeout(() => {
+      getConversations({ q: historyFilter.trim() || undefined,
+                         datasetId: historyAll ? undefined : threadKey })
+        .then((r) => { if (alive) { setEarlier(r.conversations); setAdminsRead(r.admins_can_read);
+                                    setHistoryError(null); } })
+        .catch((e) => { if (alive) setHistoryError(String((e as Error).message ?? e)); });
+    }, 250);
+    return () => { alive = false; clearTimeout(t); };
+  }, [view, signedIn, historyFilter, historyAll, threadKey, thread.conversationId]);
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); },
             [turns, busy, toolBusy]);
   useEffect(() => {
@@ -384,14 +402,27 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
     modules: modules.all.map((m) => ({ value: String(m.louvain_label), label: m.display })),
   };
 
+  const maxQ = status?.limits?.question_chars;
+  const qLen = input.trim().length;
+  const tooLong = maxQ != null && qLen > maxQ;
+
   async function send(text?: string, tool?: { name: string; args: Record<string, unknown> },
                       concept?: string) {
     const q = (text ?? input).trim();
     if (!q || busy) return;
+    const k = threadKey;
+    const fortsetzen = thread.conversationId;
+    if (maxQ != null && q.length > maxQ) {
+      if (text != null) {
+        addTurn(k, { role: "error", text:
+          `This question has ${q.length} characters; the server takes at most ${maxQ}.` });
+      }
+      return;
+    }
     setInput("");
     if (HELP_WORDS.has(q.toLowerCase())) { setView("tools"); return; }
     setView("chat");
-    setTurns((t) => [...t, { role: "user", text: q, tool }]);
+    addTurn(k, { role: "user", text: q, tool });
     setBusy(true);
     try {
       const viaOwn = own && ownActive ? own : undefined;
@@ -406,13 +437,22 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
       const verlauf = alle.slice(-8);
       const res = await askAgent(q, { dataset_id: datasetId, asv_id: asvId, concept },
                                  model || undefined,
-                                 viaOwn, verlauf);
-      setTurns((t) => [...t, { role: "agent", text: res.answer, evidence: res.evidence,
-                               model: res.model, steps: res.steps,
-                               ungrounded: res.ungrounded, corrected: res.corrected,
-                               own_key: res.own_key }]);
+                                 viaOwn, verlauf, fortsetzen);
+      addTurn(k, { role: "agent", text: res.answer, evidence: res.evidence,
+                   model: res.model, steps: res.steps,
+                   ungrounded: res.ungrounded, corrected: res.corrected,
+                   own_key: res.own_key, turnId: res.turn_id ?? null,
+                   grounding: res.grounding, truncated: res.truncated },
+              res.conversation_id ?? fortsetzen);
+      if (typeof res.admins_can_read === "boolean") setAdminsRead(res.admins_can_read);
     } catch (e) {
-      setTurns((t) => [...t, { role: "error", text: String(e) }]);
+      const d = describeError(e);
+      if (!tool) setInput((cur) => (cur.trim() ? cur : q));
+      const gespeichert = e instanceof AgentAskError ? e : null;
+      addTurn(k, { role: "error", title: "The assistant could not answer.",
+                   text: d.why, kind: d.kind, todo: d.todo,
+                   retry: { text: q, tool, concept }, turnId: gespeichert?.turnId ?? null },
+              gespeichert ? (gespeichert.conversationId ?? fortsetzen) : undefined);
     } finally {
       setBusy(false);
     }
@@ -426,6 +466,27 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
     void sendRef.current(ask.question, undefined, ask.concept);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ask?.tick]);
+
+  function newConversation() {
+    setThreads((cur) => ({ ...cur, [threadKey]: EMPTY_THREAD }));
+    setOpenEvidence(null);
+    setOpenProtocol(null);
+    setView("chat");
+  }
+  async function openConversation(c: ConversationSummary) {
+    if (c.dataset_id !== threadKey) { setReading(c.id); return; }
+    try {
+      const d = await getConversation(c.id);
+      setThreads((cur) => ({ ...cur, [threadKey]: { conversationId: d.conversation.id,
+                                                    turns: fromStored(d.turns) } }));
+      setOpenEvidence(null);
+      setOpenProtocol(null);
+      setReading(null);
+      setView("chat");
+    } catch (e) {
+      setHistoryError(String((e as Error).message ?? e));
+    }
+  }
 
   function openToolForm(name: string, fill = false, preset?: Record<string, string>) {
     setView("tools");
@@ -447,11 +508,14 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
     if (missing.length) { setTried(t.name); return; }
     setView("chat");
     setToolBusy(t.name);
+    const k = threadKey;
     try {
       const run = await runTool(t.name, args);
-      setTurns((x) => [...x, { role: "tool", run }]);
+      addTurn(k, { role: "tool", run });
     } catch (e) {
-      setTurns((x) => [...x, { role: "error", text: String(e) }]);
+      const d = describeError(e);
+      addTurn(k, { role: "error", title: "The tool could not run.", text: d.why,
+                   kind: d.kind, todo: d.todo });
     } finally {
       setToolBusy(null);
     }
@@ -468,6 +532,13 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
   const usable = !!status?.ok || !!own;
   const ownActive = !!own && (useOwnNow || !status?.ok);
   const current = models.find((m) => m.name === model);
+  const localModel = models.find((m) => !m.remote && m.supports_tools !== false) ?? null;
+  const remoteNow = ownActive || !!current?.remote;
+  function switchToLocal() {
+    if (!localModel) return;
+    chooseOwn(false);
+    pickModel(localModel.name);
+  }
   const modelLabel = ownActive && own
     ? `own key · ${own.model}`
     : status?.ok
@@ -489,15 +560,15 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
   type Zeile = { t: ToolHelp; a: Applicability["tools"][string] | undefined };
   const frageZeile = ({ t, a }: Zeile) => a?.applicable === "no" ? (
     <div key={t.name} data-testid="agent-question" data-tool={t.name} data-state="no"
-      className="text-xs text-slate-600 leading-snug">
+      className="text-xs text-fg-muted leading-snug">
       {t.question}
       <button data-testid="agent-question-why"
         onClick={() => setWhyOpen(whyOpen === t.name ? null : t.name)}
-        className="ml-1.5 text-slate-500 hover:text-slate-300">
+        className="ml-2 text-fg-muted hover:text-fg">
         {whyOpen === t.name ? "not here ▾" : "not here — why?"}
       </button>
       {whyOpen === t.name && (
-        <div data-testid="agent-question-reason" className="mt-0.5 text-slate-400">{a.reason}</div>
+        <div data-testid="agent-question-reason" className="mt-1 text-fg-muted">{a.reason}</div>
       )}
     </div>
   ) : (
@@ -505,7 +576,7 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
       data-state={a?.applicable ?? "yes"} disabled={busy}
       title={a?.applicable === "subject" && a.subject_condition ? a.subject_condition : undefined}
       onClick={() => send(t.question!)}
-      className="text-left text-xs text-slate-200 hover:text-cyan-300 hover:underline disabled:opacity-50">
+      className="text-left text-xs text-fg hover:text-accent hover:underline disabled:opacity-50">
       {t.question}
     </button>
   );
@@ -552,42 +623,42 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
     const form = forms[t.name] ?? {};
     return (
       <div key={t.name} data-testid="agent-help-tool" data-tool={t.name}
-        className={`rounded border ${open ? "border-cyan-700/70 bg-slate-800/50"
-                                          : "border-slate-700 hover:border-slate-500"}`}>
+        className={`rounded border ${open ? "border-accent bg-control/50"
+                                          : "border-line hover:border-line-strong"}`}>
         <button data-testid="tool-open" onClick={() => (open ? setOpenTool(null) : openToolForm(t.name))}
           className="w-full text-left px-3 py-2">
           <div className="flex items-start justify-between gap-2">
-            <code className="text-xs text-cyan-300 break-words">{t.usage}</code>
-            <span className="text-slate-500 text-xs">{open ? "▾" : "▸"}</span>
+            <code className="text-xs text-accent break-words">{t.usage}</code>
+            <span className="text-fg-muted text-xs">{open ? "▾" : "▸"}</span>
           </div>
-          <div className={`text-xs text-slate-400 mt-0.5 leading-snug ${open ? "" : "line-clamp-2"}`}>
+          <div className={`text-xs text-fg-muted mt-1 leading-snug ${open ? "" : "line-clamp-2"}`}>
             {t.summary}
           </div>
         </button>
         {open && (
-          <div data-testid="tool-form" className="px-3 pb-3 pt-2 space-y-2.5 border-t border-slate-700/70">
+          <div data-testid="tool-form" className="px-3 pb-3 pt-2 space-y-3 border-t border-line">
             {t.params.length === 0 && (
-              <p className="text-xs text-slate-500">No parameters — run it as it is.</p>
+              <p className="text-xs text-fg-muted">No parameters — run it as it is.</p>
             )}
             {t.params.map((p) => {
               const val = form[p.name] ?? "";
               const missing = p.required && tried === t.name && !val.trim();
               const choice = !!p.enum || p.type === "boolean";
               const sugg = choice ? [] : suggestFor(t.name, p, form, ctx);
-              const border = missing ? "border-red-500" : "border-slate-700";
+              const border = missing ? "border-danger" : "border-line";
               return (
                 <div key={p.name} data-testid="tool-param" data-param={p.name}>
                   <div className="flex items-baseline justify-between gap-2 text-xs">
                     <span>
-                      <code className="text-slate-200">{p.name}</code>
-                      <span className="text-slate-500"> · {p.type}</span>
+                      <code className="text-fg">{p.name}</code>
+                      <span className="text-fg-muted"> · {p.type}</span>
                     </span>
-                    <span className={p.required ? "text-amber-300" : "text-slate-500"}>
+                    <span className={p.required ? "text-warn" : "text-fg-muted"}>
                       {p.required ? "required" : "optional"}
                     </span>
                   </div>
                   {p.description && (
-                    <div className="text-[11px] text-slate-500 leading-snug">{p.description}</div>
+                    <div className="text-2xs text-fg-muted leading-snug">{p.description}</div>
                   )}
                   <div className="mt-1">
                     {choice ? (
@@ -613,10 +684,10 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
                       {sugg.map((s) => (
                         <button key={s.value} data-testid="param-suggestion"
                           onClick={() => setField(t.name, p.name, s.value)}
-                          className={`px-1.5 py-0.5 rounded border text-[11px] max-w-full truncate
+                          className={`px-2 py-1 rounded border text-2xs max-w-full truncate
                                       ${val === s.value ? CHIP_ON : CHIP_OFF}`}>
                           <span className="font-mono">{s.value}</span>
-                          {s.label && <span className="text-slate-500"> {s.label}</span>}
+                          {s.label && <span className="text-fg-muted"> {s.label}</span>}
                         </button>
                       ))}
                     </div>
@@ -625,9 +696,9 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
               );
             })}
             {tried === t.name && toArgs(t, form).missing.length > 0 && (
-              <p className="text-xs text-red-300">Fill in: {toArgs(t, form).missing.join(", ")}</p>
+              <p className="text-xs text-danger">Fill in: {toArgs(t, form).missing.join(", ")}</p>
             )}
-            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+            <div className="flex flex-wrap items-center gap-2 pt-1">
               {t.params.length > 0 && (
                 <>
                   <button data-testid="tool-autofill"
@@ -635,21 +706,20 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
                     className={`${CHIP} ${CHIP_OFF}`}>Autofill</button>
                   <button data-testid="tool-clear"
                     onClick={() => { setForms((f) => ({ ...f, [t.name]: {} })); setTried(null); }}
-                    className={`${CHIP} border-transparent text-slate-500 hover:text-slate-300`}>Clear</button>
+                    className={`${CHIP} border-transparent text-fg-muted hover:text-fg`}>Clear</button>
                 </>
               )}
               <span className="flex-1" />
               <button data-testid="tool-raw" onClick={() => runDirect(t)} disabled={!!toolBusy}
                 title="run the tool without the assistant and show its raw result"
-                className={`${CHIP} border-transparent text-slate-500 hover:text-slate-300 disabled:opacity-40`}>
+                className={`${CHIP} border-transparent text-fg-muted hover:text-fg disabled:opacity-40`}>
                 raw result only
               </button>
-              <button data-testid="tool-run" onClick={() => (usable ? askAbout(t) : runDirect(t))}
+              <Button variant="primary" data-testid="tool-run" onClick={() => (usable ? askAbout(t) : runDirect(t))}
                 disabled={busy || !!toolBusy}
-                title={usable ? "the assistant runs the tool and answers" : "no model reachable — raw result"}
-                className="px-3 py-0.5 rounded bg-cyan-700 hover:bg-cyan-600 text-white text-xs disabled:opacity-50">
+                title={usable ? "the assistant runs the tool and answers" : "no model reachable — raw result"}>
                 Run
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -659,33 +729,28 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
 
   return (
     <div data-testid="agent-chat" className="h-full flex flex-col text-sm">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700 bg-slate-900">
-        <span className="flex items-center gap-2 text-slate-100 font-medium">
-          <MantaGlyph /> MANTA assistant
-        </span>
-        <button data-testid="agent-close" aria-label="Close" onClick={onClose}
-          className="text-slate-400 hover:text-white">✕</button>
-      </div>
+      <PanelHeader lead={<MantaGlyph />} title="MANTA assistant" onClose={onClose}
+        closeTestid="agent-close" />
 
-      <div className="px-4 py-2 border-b border-slate-700 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+      <div className="px-4 py-2 border-b border-line flex flex-wrap items-center gap-x-3 gap-y-2">
         <div className="relative" ref={menuRef}>
           <button data-testid="model-select" data-value={ownActive ? OWN_OPTION : model}
             disabled={busy} onClick={() => setMenuOpen((v) => !v)}
             aria-haspopup="menu" aria-expanded={menuOpen}
-            className="flex items-center gap-1.5 max-w-[17rem] px-2 py-0.5 rounded border border-slate-600
-                       hover:border-cyan-600 text-xs text-slate-200 disabled:opacity-60">
-            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${usable ? "bg-emerald-400" : "bg-amber-400"}`} />
+            className="flex items-center gap-2 max-w-[17rem] px-2 py-1 rounded border border-line-strong
+                       hover:border-accent text-xs text-fg disabled:opacity-60">
+            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${usable ? "bg-ok-fill" : "bg-warn-fill"}`} />
             <span className="truncate">{modelLabel}</span>
-            <span className="text-slate-500">▾</span>
+            <span className="text-fg-muted">▾</span>
           </button>
           {menuOpen && (
-            <div data-testid="model-menu" role="menu"
-              className="absolute left-0 top-full mt-1 z-30 w-80 rounded border border-slate-600 bg-slate-900 shadow-2xl py-1 text-xs">
-              <div className="px-3 pt-1 pb-0.5 text-[10px] uppercase tracking-wide text-slate-500">
+            <div data-testid="model-menu" role="menu" data-popup=""
+              className="absolute left-0 top-full mt-1 z-30 w-80 rounded-md border border-line bg-overlay shadow-2xl py-1 text-xs">
+              <div className="px-3 pt-1 pb-1 text-xs font-semibold text-fg-muted">
                 Models on this server
               </div>
               {models.length === 0 && (
-                <div className="px-3 py-1.5 text-amber-400">
+                <div className="px-3 py-2 text-warn">
                   {status?.remote?.configured
                     ? "the external provider is configured but answered nothing"
                     : "none reachable"}
@@ -696,19 +761,19 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
                   aria-checked={!ownActive && model === m.name}
                   disabled={m.supports_tools === false}
                   onClick={() => { chooseOwn(false); pickModel(m.name); setMenuOpen(false); }}
-                  className="w-full flex items-center justify-between gap-2 px-3 py-1.5 text-left hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent">
-                  <span className="flex items-center gap-1.5 min-w-0">
-                    <span className="w-3 text-cyan-300">{!ownActive && model === m.name ? "✓" : ""}</span>
-                    <span className="text-slate-200 truncate">{m.name}</span>
+                  className="w-full flex items-center justify-between gap-2 px-3 py-2 text-left hover:bg-control disabled:opacity-40 disabled:hover:bg-transparent">
+                  <span className="flex items-center gap-2 min-w-0">
+                    <span className="w-3 text-accent">{!ownActive && model === m.name ? "✓" : ""}</span>
+                    <span className="text-fg truncate">{m.name}</span>
                   </span>
-                  <span className="text-slate-500 shrink-0">
+                  <span className="text-fg-muted shrink-0">
                     {[m.parameter_size, m.remote ? "remote" : null,
                       m.supports_tools === false ? "no tool support" : null].filter(Boolean).join(" · ")}
                   </span>
                 </button>
               ))}
-              <div className="my-1 border-t border-slate-700" />
-              <div className="px-3 pt-1 pb-0.5 text-[10px] uppercase tracking-wide text-slate-500">
+              <div className="my-1 border-t border-line" />
+              <div className="px-3 pt-1 pb-1 text-xs font-semibold text-fg-muted">
                 Your own key · this tab only
               </div>
               {own ? (
@@ -716,38 +781,38 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
                   <button role="menuitemradio" data-testid="own-key-option" data-value={OWN_OPTION}
                     aria-checked={ownActive}
                     onClick={() => { chooseOwn(true); setMenuOpen(false); }}
-                    className="w-full flex items-center gap-1.5 px-3 py-1.5 text-left hover:bg-slate-800">
-                    <span className="w-3 text-cyan-300">{ownActive ? "✓" : ""}</span>
-                    <span className="text-slate-200 truncate">own key · {own.model} · {hostOf(own.base_url)}</span>
+                    className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-control">
+                    <span className="w-3 text-accent">{ownActive ? "✓" : ""}</span>
+                    <span className="text-fg truncate">own key · {own.model} · {hostOf(own.base_url)}</span>
                   </button>
                   <button data-testid="own-key-forget" onClick={forgetOwn}
                     title="forget the key (this tab only ever had it)"
-                    className="w-full px-3 py-1.5 pl-[1.9rem] text-left text-slate-400 hover:bg-slate-800 hover:text-red-300">
+                    className="w-full px-3 py-2 pl-[1.9rem] text-left text-fg-muted hover:bg-control hover:text-danger">
                     forget key
                   </button>
                 </>
               ) : (
                 <button data-testid="own-key-toggle"
                   onClick={() => { setOwnForm(true); setMenuOpen(false); }}
-                  className="w-full px-3 py-1.5 pl-[1.9rem] text-left text-cyan-300 hover:bg-slate-800">
+                  className="w-full px-3 py-2 pl-[1.9rem] text-left text-accent hover:bg-control">
                   Use your own key …
                 </button>
               )}
             </div>
           )}
         </div>
-        <div data-testid="agent-context" className="flex items-center gap-1.5 min-w-0 text-xs">
-          <span className="text-slate-500">Network</span>
+        <div data-testid="agent-context" className="flex items-center gap-2 min-w-0 text-xs">
+          <span className="text-fg-muted">Network</span>
           {datasetId ? (
-            <span className="truncate text-slate-200" title={datasetId}>
+            <span className="truncate text-fg" title={datasetId}>
               {datasets.find((d) => d.dataset_id === datasetId)?.region ?? datasetId}
-              <span className="font-mono text-slate-500"> · {datasetId}</span>
+              <span className="font-mono text-fg-muted"> · {datasetId}</span>
             </span>
           ) : (
-            <span className="text-slate-400">none selected</span>
+            <span className="text-fg-muted">none selected</span>
           )}
           {datasetId && asvId && (
-            <span data-testid="agent-context-asv" className="shrink-0 rounded border border-slate-700 px-1.5 font-mono text-cyan-300">
+            <span data-testid="agent-context-asv" className="shrink-0 rounded border border-line px-2 font-mono text-accent">
               {asvId}
             </span>
           )}
@@ -755,121 +820,181 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
       </div>
 
       {ownForm && !own && (
-        <div data-testid="own-key-form" className="mx-4 mt-3 p-3 rounded border border-slate-700 bg-slate-800/40 space-y-2">
+        <div data-testid="own-key-form" className="mx-4 mt-3 p-3 rounded border border-line bg-control/40 space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-slate-100 text-sm font-medium">Use your own key</span>
+            <span className="text-fg text-sm font-medium">Use your own key</span>
             <button onClick={() => setOwnForm(false)} aria-label="Cancel"
-              className="text-slate-400 hover:text-white text-xs">✕</button>
+              className="text-fg-muted hover:text-fg text-xs">✕</button>
           </div>
-          <p className="text-xs text-slate-400 leading-snug">
+          <p className="text-xs text-fg-muted leading-snug">
             Kept in this tab only and sent with each question. The server stores nothing.
           </p>
           {([
             ["Provider", (
               <select data-testid="own-key-preset" value={preset} onChange={(e) => pickPreset(e.target.value)}
-                className={`${FIELD} border-slate-700`}>
+                className={`${FIELD} border-line`}>
                 {Object.entries(PRESETS).map(([k, p]) => <option key={k} value={k}>{p.label}</option>)}
               </select>
             )],
             ["Address", (
               <input data-testid="own-key-url" value={draft.base_url} spellCheck={false}
                 onChange={(e) => setDraft((d) => ({ ...d, base_url: e.target.value }))}
-                placeholder="https://…/v1" className={`${FIELD} border-slate-700 font-mono`} />
+                placeholder="https://…/v1" className={`${FIELD} border-line font-mono`} />
             )],
             ["Model", (
               <input data-testid="own-key-model" value={draft.model} spellCheck={false}
                 onChange={(e) => setDraft((d) => ({ ...d, model: e.target.value }))}
-                placeholder="model name" className={`${FIELD} border-slate-700 font-mono`} />
+                placeholder="model name" className={`${FIELD} border-line font-mono`} />
             )],
             ["Key", (
               <input data-testid="own-key-secret" type="password" value={draft.key} autoComplete="off"
                 onChange={(e) => setDraft((d) => ({ ...d, key: e.target.value }))}
                 onKeyDown={(e) => { if (e.key === "Enter") useOwn(); }}
-                placeholder="sk-…" className={`${FIELD} border-slate-700 font-mono`} />
+                placeholder="sk-…" className={`${FIELD} border-line font-mono`} />
             )],
           ] as const).map(([label, control]) => (
-            <label key={label} className="flex items-center gap-2 text-xs text-slate-400">
+            <label key={label} className="flex items-center gap-2 text-xs text-fg-muted">
               <span className="w-16 shrink-0">{label}</span>
               <span className="flex-1 min-w-0">{control}</span>
             </label>
           ))}
-          <div className="flex justify-end gap-1.5 pt-0.5">
+          <div className="flex justify-end gap-2 pt-1">
             <button onClick={() => setOwnForm(false)}
-              className="px-2 py-0.5 rounded text-xs text-slate-400 hover:text-slate-200">cancel</button>
-            <button data-testid="own-key-save" onClick={useOwn}
-              disabled={!draft.base_url.trim() || !draft.model.trim() || !draft.key.trim()}
-              className="px-3 py-0.5 rounded bg-cyan-700 hover:bg-cyan-600 text-white text-xs disabled:opacity-50">
+              className="px-2 py-1 rounded text-xs text-fg-muted hover:text-fg">cancel</button>
+            <Button variant="primary" data-testid="own-key-save" onClick={useOwn}
+              disabled={!draft.base_url.trim() || !draft.model.trim() || !draft.key.trim()}>
               use in this tab
-            </button>
+            </Button>
           </div>
         </div>
       )}
 
       <div className="px-4 pt-3 flex items-center gap-1 text-xs">
-        <button data-testid="agent-tab-chat" onClick={() => setView("chat")}
-          className={`${CHIP} ${view === "chat" ? CHIP_ON : CHIP_OFF}`}>Chat</button>
-        <button data-testid="agent-help-toggle" onClick={() => setView(view === "tools" ? "chat" : "tools")}
-          className={`${CHIP} ${view === "tools" ? CHIP_ON : CHIP_OFF}`}>
+        <ToggleButton data-testid="agent-tab-chat" pressed={view === "chat"} onClick={() => setView("chat")}>
+          Chat</ToggleButton>
+        <ToggleButton data-testid="agent-help-toggle" pressed={view === "tools"}
+          onClick={() => setView(view === "tools" ? "chat" : "tools")}>
           Tools{tools ? ` · ${tools.length}` : ""}
-        </button>
-        <button data-testid="agent-ontology-toggle"
-          onClick={() => setView(view === "ontology" ? "chat" : "ontology")}
-          className={`${CHIP} ${view === "ontology" ? CHIP_ON : CHIP_OFF}`}>
+        </ToggleButton>
+        <ToggleButton data-testid="agent-ontology-toggle" pressed={view === "ontology"}
+          onClick={() => setView(view === "ontology" ? "chat" : "ontology")}>
           Ontology{concepts ? ` · ${concepts.n}` : ""}
-        </button>
+        </ToggleButton>
+        {signedIn && (
+          <ToggleButton data-testid="agent-history-tab" pressed={view === "history"}
+            onClick={() => { setReading(null); setView(view === "history" ? "chat" : "history"); }}>
+            History</ToggleButton>
+        )}
+        {turns.length > 0 && (
+          <Button data-testid="agent-new-conversation" onClick={newConversation} disabled={busy}
+            reason="wait for the answer first"
+            title="start an empty conversation on this dataset; this one stays under History"
+            className="ml-auto">New conversation</Button>
+        )}
       </div>
 
-      {view === "ontology" ? (
+      {view === "history" ? (
+        <div data-testid="agent-history" className="flex-1 min-h-0 overflow-auto px-4 py-3 space-y-3">
+          {reading ? (
+            <>
+              <button data-testid="history-back" onClick={() => setReading(null)}
+                className="text-xs text-fg-muted hover:text-fg">← all conversations</button>
+              <ConversationView id={reading} datasets={datasets} note={
+                <p className="text-xs text-fg-muted">
+                  Another dataset: open it to continue this conversation.
+                </p>} />
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-2">
+                <input data-testid="history-search" value={historyFilter} spellCheck={false}
+                  onChange={(e) => setHistoryFilter(e.target.value)}
+                  placeholder="Search questions and answers …"
+                  className={`${FIELD} border-line flex-1`} />
+                <button data-testid="history-scope" onClick={() => setHistoryAll((v) => !v)}
+                  className={`${CHIP} ${CHIP_OFF} shrink-0`}>
+                  {historyAll ? "all datasets" : "this dataset"}
+                </button>
+              </div>
+              {historyError && <div className="text-xs text-danger">{historyError}</div>}
+              {earlier === null && !historyError && <StateNotice state="loading" inline>loading …</StateNotice>}
+              {earlier && earlier.length === 0 && (
+                <StateNotice state="empty" inline testid="history-empty">
+                  {historyFilter.trim() ? "No conversation matches." : "No earlier conversations here."}
+                </StateNotice>
+              )}
+              <div className="space-y-2">
+                {(earlier ?? []).map((c) => (
+                  <button key={c.id} data-testid="history-item" data-id={c.id}
+                    data-dataset={c.dataset_id} onClick={() => openConversation(c)}
+                    className={`w-full text-left rounded border px-3 py-2 ${
+                      c.id === thread.conversationId ? "border-accent bg-control/50"
+                                                     : "border-line hover:border-line-strong"}`}>
+                    <div className="text-xs text-fg line-clamp-2">{c.title || "(no question)"}</div>
+                    <div className="mt-1 text-2xs text-fg-muted">
+                      {new Date(c.updated_at * 1000).toLocaleString()} · {c.n_turns}{" "}
+                      {c.n_turns === 1 ? "question" : "questions"} ·{" "}
+                      {c.dataset_id ? (datasets.find((d) => d.dataset_id === c.dataset_id)?.region
+                                       ?? c.dataset_id) : "no dataset"}
+                      {c.id === thread.conversationId ? " · open" : ""}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      ) : view === "ontology" ? (
         <div data-testid="agent-ontology" className="flex-1 min-h-0 overflow-auto px-4 py-3 space-y-4">
           <div className="flex items-center gap-2">
             <input data-testid="ontology-search" value={conceptFilter} spellCheck={false}
               onChange={(e) => setConceptFilter(e.target.value)} placeholder="Filter terms …"
-              className={`${FIELD} border-slate-700 flex-1`} />
+              className={`${FIELD} border-line flex-1`} />
             <button data-testid="agent-ontology-close" onClick={() => setView("chat")}
-              className="text-xs text-slate-400 hover:text-white shrink-0">← chat</button>
+              className="text-xs text-fg-muted hover:text-fg shrink-0">← chat</button>
           </div>
-          <p className="text-xs text-slate-400 leading-snug">
+          <p className="text-xs text-fg-muted leading-snug">
             What a word means here, and which published term it maps to.
           </p>
           {concepts && !termsLoaded && (
-            <p data-testid="ontology-terms-note" className="text-xs text-slate-500 leading-snug">
+            <p data-testid="ontology-terms-note" className="text-xs text-fg-muted leading-snug">
               {concepts.note ?? "The mapping to published standard terms is not available in this installation."}
             </p>
           )}
-          {conceptsError && <div className="text-xs text-red-300">{conceptsError}</div>}
-          {concepts === null && !conceptsError && <div className="text-xs text-slate-500">loading …</div>}
+          {conceptsError && <div className="text-xs text-danger">{conceptsError}</div>}
+          {concepts === null && !conceptsError && <StateNotice state="loading" inline>loading …</StateNotice>}
           {gruppen.map((g) => (
             <section key={g.title}>
-              <h3 className="text-[11px] uppercase tracking-wide text-slate-500 mb-1.5">
+              <SectionHeading className="mb-2">
                 {g.title} · {g.items.length}
-              </h3>
-              <div className="space-y-1.5">
+              </SectionHeading>
+              <div className="space-y-2">
                 {g.items.map((c) => (
                   <div key={c.key} data-testid="ontology-term" data-key={c.key}
-                    className="rounded border border-slate-700 px-3 py-2">
+                    className="rounded border border-line px-3 py-2">
                     <div className="flex items-baseline justify-between gap-2">
-                      <span className="text-slate-200">{c.label}</span>
-                      <code className="text-[11px] text-slate-500">{c.key}</code>
+                      <span className="text-fg">{c.label}</span>
+                      <code className="text-2xs text-fg-muted">{c.key}</code>
                     </div>
-                    <div className="text-xs text-slate-400 mt-0.5 leading-snug">{c.definition}</div>
-                    {c.unit && <div className="text-[11px] text-slate-500 mt-0.5">unit: {c.unit}</div>}
+                    <div className="text-xs text-fg-muted mt-1 leading-snug">{c.definition}</div>
+                    {c.unit && <div className="text-2xs text-fg-muted mt-1">unit: {c.unit}</div>}
                     {c.standard_term ? (
-                      <div className="mt-1 text-[11px]" data-testid="ontology-standard-term">
+                      <div className="mt-1 text-2xs" data-testid="ontology-standard-term">
                         <span className={`px-1 rounded border mr-1 ${
-                          matchLabel(c.standard_term.match) === "exact" ? "border-emerald-700 text-emerald-300"
-                          : "border-slate-600 text-slate-400"}`}>{matchLabel(c.standard_term.match)}</span>
+                          matchLabel(c.standard_term.match) === "exact" ? "border-ok text-ok"
+                          : "border-line-strong text-fg-muted"}`}>{matchLabel(c.standard_term.match)}</span>
                         <a href={c.standard_term.uri} target="_blank" rel="noreferrer"
-                           className="text-cyan-400 hover:underline break-all">
+                           className="text-accent hover:underline break-all">
                           {c.standard_term.curie ?? c.standard_term.uri}
                         </a>
                       </div>
                     ) : termsLoaded ? (
-                      <div className="mt-1 text-[11px] text-slate-500">
+                      <div className="mt-1 text-2xs text-fg-muted">
                         no published term covers this — MANTA&rsquo;s own, defined above
                       </div>
                     ) : null}
                     {c.tools.length > 0 && (
-                      <div className="mt-0.5 text-[11px] text-slate-500">
+                      <div className="mt-1 text-2xs text-fg-muted">
                         tools: {c.tools.join(", ")}
                       </div>
                     )}
@@ -879,7 +1004,7 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
             </section>
           ))}
           {concepts && gruppen.length === 0 && (
-            <div className="text-xs text-slate-500">No term matches “{conceptFilter}”.</div>
+            <div className="text-xs text-fg-muted">No term matches “{conceptFilter}”.</div>
           )}
         </div>
       ) : view === "tools" ? (
@@ -887,36 +1012,36 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
           <div className="flex items-center gap-2">
             <input data-testid="tool-search" value={toolFilter} spellCheck={false}
               onChange={(e) => setToolFilter(e.target.value)} placeholder="Filter tools …"
-              className={`${FIELD} border-slate-700 flex-1`} />
+              className={`${FIELD} border-line flex-1`} />
             <button data-testid="agent-help-close" onClick={() => setView("chat")}
-              className="text-xs text-slate-400 hover:text-white shrink-0">← chat</button>
+              className="text-xs text-fg-muted hover:text-fg shrink-0">← chat</button>
           </div>
-          <p className="text-xs text-slate-400 leading-snug">
+          <p className="text-xs text-fg-muted leading-snug">
             Click a tool, fill it in or use Autofill, then run it. Every result carries its query.
           </p>
-          {toolsError && <div className="text-xs text-red-300">{toolsError}</div>}
-          {tools === null && !toolsError && <div className="text-xs text-slate-500">loading …</div>}
+          {toolsError && <div className="text-xs text-danger">{toolsError}</div>}
+          {tools === null && !toolsError && <StateNotice state="loading" inline>loading …</StateNotice>}
           {grouped.map((g) => (
             <section key={g.title}>
-              <h3 className="text-[11px] uppercase tracking-wide text-slate-500 mb-1.5">{g.title}</h3>
-              <div className="space-y-1.5">{g.tools.map(renderTool)}</div>
+              <SectionHeading className="mb-2">{g.title}</SectionHeading>
+              <div className="space-y-2">{g.tools.map(renderTool)}</div>
             </section>
           ))}
           {tools && grouped.length === 0 && (
-            <div className="text-xs text-slate-500">No tool matches “{toolFilter}”.</div>
+            <div className="text-xs text-fg-muted">No tool matches “{toolFilter}”.</div>
           )}
         </div>
       ) : (
         <div className="flex-1 min-h-0 overflow-auto px-4 py-3 space-y-4">
           {status && !status.ok && !own && (
-            <div data-testid="agent-unavailable" className="rounded border border-amber-500/40 bg-amber-500/5 p-3">
-              <div className="text-amber-300 text-xs font-medium">No model reachable</div>
-              <p className="mt-1 text-xs text-slate-300 leading-snug">
+            <div data-testid="agent-unavailable" className="rounded border border-warn bg-warn-soft p-3">
+              <div className="text-warn text-xs font-medium">No model reachable</div>
+              <p className="mt-1 text-xs text-fg leading-snug">
                 Start a local model with tool support, or pick “Use your own key” in the model menu.
               </p>
-              {status.error && <p className="mt-1 text-[11px] text-slate-500">{status.error}</p>}
+              {status.error && <p className="mt-1 text-2xs text-fg-muted">{status.error}</p>}
               {status.setup_hint && (
-                <p className="mt-1.5 text-[11px] text-slate-400 whitespace-pre-wrap">{status.setup_hint}</p>
+                <p className="mt-2 text-2xs text-fg-muted whitespace-pre-wrap">{status.setup_hint}</p>
               )}
             </div>
           )}
@@ -924,21 +1049,21 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
           {turns.length === 0 && (
             <div className="space-y-4">
               <div className="flex items-start gap-3">
-                <div className="mt-0.5 rounded-full bg-cyan-500/10 border border-cyan-700/40 p-1.5">
+                <div className="mt-1 rounded-full bg-accent-soft border border-accent p-2">
                   <MantaGlyph size={22} />
                 </div>
                 <div className="min-w-0">
-                  <div className="text-slate-100 font-medium">
+                  <div className="text-fg font-medium">
                     {asvId ? `Ask about ${asvId}` : datasetId ? "Ask about this dataset" : "Ask about the datasets"}
                   </div>
-                  <p className="text-xs text-slate-400 mt-0.5 leading-snug">
+                  <p className="text-xs text-fg-muted mt-1 leading-snug">
                     Pick a question or ask in your own words. Answers come only from audited tools.
                   </p>
                 </div>
               </div>
               <div>
                 <div data-testid="agent-entry-title"
-                  className="text-[11px] uppercase tracking-wide text-slate-500 mb-1">
+                  className="text-xs font-semibold text-fg-muted mb-1">
                   {asvId ? `What I can tell you about ${asvId}`
                     : datasetId ? "What I can tell you about this dataset" : "Where to start"}
                 </div>
@@ -946,13 +1071,13 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
                   {entry.main.map(frageZeile)}
                   {entry.more.length > 0 && (
                     <button data-testid="agent-entry-more" onClick={() => setMoreOpen((v) => !v)}
-                      className="text-left text-xs text-slate-500 hover:text-slate-300 mt-1">
+                      className="text-left text-xs text-fg-muted hover:text-fg mt-1">
                       {moreOpen ? "▾" : "▸"} {asvId ? "about the dataset, and in general" : "in general"} ({entry.more.length})
                     </button>
                   )}
                   {moreOpen && entry.more.map(frageZeile)}
                   <button onClick={() => setView("tools")}
-                    className="text-left text-xs text-cyan-300 hover:underline mt-1">
+                    className="text-left text-xs text-accent hover:underline mt-1">
                     all tools →
                   </button>
                 </div>
@@ -964,13 +1089,13 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
             <div key={i}>
               {t.role === "user" && (
                 <div className="flex justify-end">
-                  <div className="max-w-[85%] rounded-lg rounded-br-sm bg-cyan-500/10 border border-cyan-700/40 px-3 py-2 text-slate-100">
+                  <div className="max-w-[85%] rounded-lg rounded-br-sm bg-accent-soft border border-accent px-3 py-2 text-fg">
                     {t.tool ? (
                       <span data-testid="user-tool-call" className="flex flex-wrap items-center gap-1">
-                        <code className="text-cyan-300 text-xs">{t.tool.name}</code>
+                        <code className="text-accent text-xs">{t.tool.name}</code>
                         {Object.entries(t.tool.args).map(([k, v]) => (
-                          <span key={k} className="font-mono text-[11px] text-slate-400">
-                            {k}=<span className="text-slate-200">{formatArg(v)}</span>
+                          <span key={k} className="font-mono text-2xs text-fg-muted">
+                            {k}=<span className="text-fg">{formatArg(v)}</span>
                           </span>
                         ))}
                       </span>
@@ -979,54 +1104,81 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
                 </div>
               )}
               {t.role === "error" && (
-                <div data-testid="agent-error" className="rounded border border-red-500/40 bg-red-500/5 px-3 py-2 text-xs text-red-300">
-                  {t.text}
+                <div className="space-y-2">
+                  <div data-testid="agent-error" data-kind={t.kind ?? ""} role="alert"
+                    className="rounded border border-danger bg-danger-soft px-3 py-2 text-xs text-danger">
+                    {t.title && <p className="font-medium text-danger" data-testid="agent-error-what">{t.title}</p>}
+                    <p className={t.title ? "mt-1" : ""} data-testid="agent-error-why">{t.text}</p>
+                    {t.todo && (
+                      <p className="mt-1 flex flex-wrap items-center gap-2 text-fg-muted" data-testid="agent-error-todo">
+                        <span>{t.todo}</span>
+                        {t.retry && i === turns.length - 1 && (
+                          <Button type="button" data-testid="agent-error-retry" disabled={busy}
+                            onClick={() => void send(t.retry!.text, t.retry!.tool, t.retry!.concept)}>
+                            Try again
+                          </Button>
+                        )}
+                        {t.retry && remoteNow && localModel && i === turns.length - 1 && (
+                          <Button type="button" data-testid="agent-error-local" disabled={busy}
+                            onClick={switchToLocal}>
+                            use the local model {localModel.name}
+                          </Button>
+                        )}
+                      </p>
+                    )}
+                  </div>
+                  {t.turnId != null && (
+                    <button data-testid="protocol-toggle"
+                      onClick={() => setOpenProtocol(openProtocol === i ? null : i)}
+                      className="text-xs text-accent hover:underline">
+                      {openProtocol === i ? "▾" : "▸"} What happened?
+                    </button>
+                  )}
+                  {openProtocol === i && t.turnId != null && <TurnProtocol turnId={t.turnId} />}
                 </div>
               )}
               {t.role === "tool" && (
-                <div data-testid="tool-run-result" className="rounded border border-slate-700 bg-slate-800/40">
-                  <div className="flex items-center gap-2 px-3 py-1.5 border-b border-slate-700">
-                    <span className="text-[10px] uppercase tracking-wide text-slate-500">tool</span>
-                    <code className="text-xs text-cyan-300">{t.run.tool}</code>
-                    <span className="ml-auto text-[11px]">
+                <div data-testid="tool-run-result" className="rounded border border-line bg-control/40">
+                  <div className="flex items-center gap-2 px-3 py-2 border-b border-line">
+                    <span className="text-xs font-semibold text-fg-muted">tool</span>
+                    <code className="text-xs text-accent">{t.run.tool}</code>
+                    <span className="ml-auto text-2xs">
                       {t.run.error
-                        ? <span className="text-red-300">refused</span>
-                        : <span className="text-slate-500">{t.run.provenance?.n_results ?? "?"} results</span>}
+                        ? <span className="text-danger">refused</span>
+                        : <span className="text-fg-muted">{t.run.provenance?.n_results ?? "?"} results</span>}
                     </span>
                   </div>
                   <div className="px-3 py-2 space-y-2">
                     {Object.keys(t.run.arguments).length > 0 && (
                       <div className="flex flex-wrap gap-1">
                         {Object.entries(t.run.arguments).map(([k, v]) => (
-                          <span key={k} className="rounded border border-slate-700 bg-slate-950 px-1.5 py-0.5 text-[11px] font-mono text-slate-300">
-                            {k}=<span className="text-slate-100">{formatArg(v)}</span>
+                          <span key={k} className="rounded border border-line bg-surface px-2 py-1 text-2xs font-mono text-fg">
+                            {k}=<span className="text-fg">{formatArg(v)}</span>
                           </span>
                         ))}
                       </div>
                     )}
-                    {t.run.error && <div className="text-xs text-red-300 leading-snug">{t.run.error}</div>}
+                    {t.run.error && <div className="text-xs text-danger leading-snug">{t.run.error}</div>}
                     {!t.run.error && (
                       <details>
-                        <summary className="cursor-pointer text-xs text-cyan-400 hover:underline">result</summary>
-                        <pre data-testid="tool-run-json" className="mt-1 max-h-72 overflow-auto rounded bg-slate-950 border border-slate-800 p-2 text-[11px] text-slate-300">
-                          {JSON.stringify(Object.fromEntries(Object.entries(t.run.result)
-                            .filter(([k]) => k !== "provenance")), null, 2).slice(0, 20000)}
-                        </pre>
+                        <summary className="cursor-pointer text-xs text-accent hover:underline">result</summary>
+                        <RawJson value={Object.fromEntries(Object.entries(t.run.result)
+                          .filter(([k]) => k !== "provenance"))} />
                       </details>
                     )}
                     {Array.isArray(t.run.provenance?.cypher) && t.run.provenance!.cypher.length > 0 && (
                       <details>
-                        <summary className="cursor-pointer text-xs text-cyan-400 hover:underline">
+                        <summary className="cursor-pointer text-xs text-accent hover:underline">
                           {t.run.provenance!.cypher.length} {t.run.provenance!.cypher.length === 1 ? "query" : "queries"}
                         </summary>
-                        <ol className="mt-1 text-[11px] text-slate-500 space-y-1 list-decimal list-inside">
+                        <ol className="mt-1 text-2xs text-fg-muted space-y-1 list-decimal list-inside">
                           {t.run.provenance!.cypher.map((q, k) => (
                             <li key={k}><span className="whitespace-pre-wrap">{q.cypher}</span></li>
                           ))}
                         </ol>
                       </details>
                     )}
-                    <div className="flex gap-1.5">
+                    <div className="flex gap-2">
                       <button data-testid="tool-run-edit"
                         onClick={() => openToolForm(t.run.tool, false, Object.fromEntries(
                           Object.entries(t.run.arguments).map(([k, v]) => [k, formatArg(v)])))}
@@ -1045,67 +1197,83 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
                 </div>
               )}
               {t.role === "agent" && (
-                <div className="space-y-1.5">
-                  <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-2xs text-fg-muted">
                     <MantaGlyph size={14} />
                     <span>assistant{t.model ? ` · ${t.model}` : ""}</span>
                   </div>
-                  <div data-testid="agent-answer" className="text-slate-200 leading-relaxed space-y-1.5">
+                  <div data-testid="agent-answer" className="text-fg leading-relaxed space-y-2">
                     <AnswerText text={t.text} />
                   </div>
                   {t.own_key && (
-                    <div data-testid="own-key-mark" className="text-[11px] text-emerald-400">
+                    <div data-testid="own-key-mark" className="text-2xs text-ok">
                       via your own key · {t.model}
                     </div>
                   )}
                   {t.ungrounded && t.ungrounded.length > 0 && (
-                    <div data-testid="ungrounded" className="text-xs text-red-300 rounded border border-red-500/40 bg-red-500/5 px-3 py-2">
+                    <div data-testid="ungrounded" className="text-xs text-danger rounded border border-danger bg-danger-soft px-3 py-2">
                       No tool result contains {t.ungrounded.length === 1 ? "this number" : "these numbers"}:{" "}
                       <span className="font-medium">{t.ungrounded.join(", ")}</span>. They are marked in
                       the text above and must not be used as a result
                       {t.corrected ? " — the model was already asked to correct itself once" : ""}.
                     </div>
                   )}
+                  {(t.grounding || t.truncated) && !(t.ungrounded && t.ungrounded.length > 0) && (
+                    <div data-testid="answer-check" className="text-2xs text-fg-muted">
+                      {t.truncated ? "stopped at the step limit — no complete answer"
+                        : `evidence check: ${checkText(t)}`}
+                    </div>
+                  )}
+                  {t.turnId != null && (
+                    <div>
+                      <button data-testid="protocol-toggle"
+                        onClick={() => setOpenProtocol(openProtocol === i ? null : i)}
+                        className="text-xs text-accent hover:underline">
+                        {openProtocol === i ? "▾" : "▸"} How was this answered?
+                      </button>
+                      {openProtocol === i && <div className="mt-2"><TurnProtocol turnId={t.turnId} /></div>}
+                    </div>
+                  )}
                   {t.evidence?.length > 0 ? (
                     <div>
                       <button data-testid="evidence-toggle"
                         onClick={() => setOpenEvidence(openEvidence === i ? null : i)}
-                        className="text-xs text-cyan-400 hover:underline">
+                        className="text-xs text-accent hover:underline">
                         {openEvidence === i ? "▾" : "▸"} show tool call{t.evidence.length === 1 ? "" : "s"} and
                         {" "}{t.evidence.length === 1 ? "query" : `queries (${t.evidence.length})`}
                       </button>
                       {openEvidence === i && (
-                        <div data-testid="evidence-panel" className="mt-1.5 space-y-1.5">
+                        <div data-testid="evidence-panel" className="mt-2 space-y-2">
                           {t.evidence.map((ev, j) => (
-                            <div key={j} className="text-[11px] rounded border border-slate-700 bg-slate-800/40 p-2">
+                            <div key={j} className="text-2xs rounded border border-line bg-control/40 p-2">
                               <div className="flex items-center gap-2">
-                                <code className="text-cyan-300">{ev.tool}</code>
+                                <code className="text-accent">{ev.tool}</code>
                                 {ev.error
-                                  ? <span className="text-red-300">refused</span>
-                                  : <span className="text-slate-500">{ev.provenance?.n_results} results</span>}
+                                  ? <span className="text-danger">refused</span>
+                                  : <span className="text-fg-muted">{ev.provenance?.n_results} results</span>}
                                 {tools?.some((x) => x.name === ev.tool) && (
                                   <button data-testid="evidence-rerun"
                                     onClick={() => openToolForm(ev.tool, false, Object.fromEntries(
                                       Object.entries(ev.arguments ?? {}).map(([k, v]) => [k, formatArg(v)])))}
-                                    className="ml-auto text-slate-400 hover:text-cyan-300">open in tools</button>
+                                    className="ml-auto text-fg-muted hover:text-accent">open in tools</button>
                                 )}
                               </div>
                               {ev.error
-                                ? <div className="text-red-300 mt-0.5">{ev.error}</div>
+                                ? <div className="text-danger mt-1">{ev.error}</div>
                                 : Array.isArray(ev.provenance?.cypher)
-                                  ? <ol className="text-slate-500 mt-1 space-y-0.5 list-decimal list-inside">
+                                  ? <ol className="text-fg-muted mt-1 space-y-1 list-decimal list-inside">
                                       {ev.provenance!.cypher.map((q, k) => (
                                         <li key={k}><span className="whitespace-pre-wrap">{q.cypher}</span></li>
                                       ))}
                                     </ol>
-                                  : <pre className="text-slate-500 whitespace-pre-wrap mt-1">{ev.provenance?.cypher as unknown as string}</pre>}
+                                  : <pre className="text-fg-muted whitespace-pre-wrap mt-1">{ev.provenance?.cypher as unknown as string}</pre>}
                             </div>
                           ))}
                         </div>
                       )}
                     </div>
                   ) : (
-                    <div data-testid="no-evidence" className="text-xs text-amber-400">
+                    <div data-testid="no-evidence" className="text-xs text-warn">
                       no tool evidence — do not use this as a result
                     </div>
                   )}
@@ -1114,34 +1282,46 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
             </div>
           ))}
           {busy && (
-            <div data-testid="agent-busy" className="flex items-center gap-2 text-xs text-slate-500">
+            <div data-testid="agent-busy" className="flex items-center gap-2 text-xs text-fg-muted">
               <MantaGlyph size={14} /> thinking and calling tools …
             </div>
           )}
           {toolBusy && (
-            <div data-testid="tool-busy" className="text-xs text-slate-500">
-              running <code className="text-cyan-300">{toolBusy}</code> …
+            <div data-testid="tool-busy" className="text-xs text-fg-muted">
+              running <code className="text-accent">{toolBusy}</code> …
             </div>
           )}
           <div ref={endRef} />
         </div>
       )}
 
-      <div className="px-4 py-3 border-t border-slate-700 bg-slate-900">
-        <div className="flex items-center gap-2 rounded-lg border border-slate-600 bg-slate-950 focus-within:border-cyan-600 pl-3 pr-1 py-1">
+      <div className="px-4 py-3 border-t border-line bg-raised">
+        <div className="flex items-center gap-2 rounded-lg border border-line-strong bg-surface focus-within:border-accent pl-3 pr-1 py-1">
           <input data-testid="agent-input" value={input} disabled={busy}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") send(); }}
             placeholder={asvId ? `Ask about ${asvId} …` : "Ask about the dataset …"}
-            className="flex-1 min-w-0 bg-transparent outline-none py-1 text-sm text-slate-100 placeholder:text-slate-500 disabled:opacity-60" />
-          <button data-testid="agent-send" onClick={() => send()} disabled={busy || !input.trim()}
-            className="px-3 py-1 rounded-md bg-cyan-700 hover:bg-cyan-600 text-white text-xs disabled:opacity-40">
+            className="flex-1 min-w-0 bg-transparent outline-none py-1 text-sm text-fg placeholder:text-fg-muted disabled:opacity-60" />
+          <Button variant="primary" data-testid="agent-send" onClick={() => send()}
+            disabled={busy || !input.trim() || tooLong}>
             Send
-          </button>
+          </Button>
         </div>
-        <div className="mt-1 text-[10px] text-slate-500">
-          Enter to send · type <code className="text-slate-400">help</code> for all tools
+        <div className="mt-1 flex items-baseline gap-2 text-2xs text-fg-muted">
+          <span>Enter to send · type <code className="text-fg-muted">help</code> for all tools</span>
+          {maxQ != null && qLen >= 0.9 * maxQ && (
+            <span data-testid="agent-input-count"
+              className={`ml-auto shrink-0 tabular-nums ${tooLong ? "text-danger" : ""}`}>
+              {qLen} / {maxQ} characters{tooLong ? " — too long, please shorten" : ""}
+            </span>
+          )}
         </div>
+        {signedIn && adminsRead !== null && (
+          <div data-testid="agent-transcript-note" className="mt-1 text-2xs text-fg-muted">
+            Saved to your account
+            {adminsRead && <span data-testid="agent-admins-read"> · administrators can read it</span>}
+          </div>
+        )}
       </div>
     </div>
   );

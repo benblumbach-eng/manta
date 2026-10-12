@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
+import re
 import sys
 from pathlib import Path
 
@@ -109,6 +111,47 @@ def _hash_id(seq: str) -> str:
     return "asv_" + hashlib.sha1(seq.upper().encode()).hexdigest()[:12]
 
 
+DATUM = re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})(T\d{2}:\d{2}:\d{2})?$")
+
+
+def _datum(roh: str) -> "tuple[str, datetime.datetime] | None":
+    if not isinstance(roh, str):
+        return None
+    m = DATUM.match(roh.strip())
+    if not m:
+        return None
+    try:
+        tag = datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except ValueError:
+        return None
+    zeit = m.group(4) or ""
+    try:
+        punkt = datetime.datetime.fromisoformat(tag.isoformat() + zeit)
+    except ValueError:
+        return None
+    return tag.isoformat() + zeit, punkt
+
+
+DEZIMALKOMMA = re.compile(r"^-?\d+,\d+$")
+
+
+def _dezimalkomma(meta: "pd.DataFrame", env_cols: list[str]) -> None:
+    for col in env_cols:
+        werte = [str(v).strip() for v in meta[col] if isinstance(v, str) and str(v).strip()]
+        unlesbar = []
+        for v in werte:
+            try:
+                float(v)
+            except ValueError:
+                unlesbar.append(v)
+        if unlesbar and all(DEZIMALKOMMA.match(v) for v in unlesbar):
+            raise InputError(f"the column {col!r} of the metadata uses a decimal comma "
+                             f"(e.g. {unlesbar[0]!r} in {len(unlesbar)} of {len(werte)} cells). "
+                             f"Write numbers with a decimal point (e.g. "
+                             f"{unlesbar[0].replace(',', '.')!r}); decimal commas are not "
+                             f"converted, because '1,234' could also be a thousands separator.")
+
+
 def convert(in_dir: Path, out_dir: Path, track_path: Path, min_retain: float) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -154,15 +197,39 @@ def convert(in_dir: Path, out_dir: Path, track_path: Path, min_retain: float) ->
         raise InputError(f"the FASTA lacks sequences for: {missing_seq[:5]}")
 
     samples = list(abund.columns)
+    doppelt = sorted({str(x) for x in meta.loc[meta["sample"].duplicated(keep=False), "sample"]})
+    if doppelt:
+        raise InputError(f"the metadata has more than one row for these samples: {doppelt[:5]} "
+                         f"(one row per sample)")
     s2d = dict(zip(meta["sample"], meta["date"]))
     missing_meta = [s for s in samples if s not in s2d]
     if missing_meta:
         raise InputError(f"the metadata has no row for these samples: {missing_meta} "
                          f"(the 'sample' column must match the sample names exactly)")
 
+    gelesen = {s: _datum(s2d[s]) for s in samples}
+    falsch = [s for s in samples if gelesen[s] is None]
+    if falsch:
+        beispiele = ", ".join(f"{s}={s2d[s]!r}" for s in falsch[:5])
+        raise InputError(f"the 'date' of {len(falsch)} sample(s) is not a valid date in the form "
+                         f"YYYY-MM-DD (four-digit year, two-digit month and day): {beispiele}. "
+                         f"Dates like dd.mm.yyyy or m/d/yyyy are not accepted, because their "
+                         f"order cannot be read safely.")
+    label = {s: gelesen[s][0] for s in samples}
+    je_datum: dict[str, list[str]] = {}
+    for s in samples:
+        je_datum.setdefault(label[s], []).append(s)
+    gleich = {d: ss for d, ss in je_datum.items() if len(ss) > 1}
+    if gleich:
+        beispiele = "; ".join(f"{d}: {', '.join(map(str, ss))}" for d, ss in list(gleich.items())[:3])
+        raise InputError(f"{len(gleich)} date(s) are shared by more than one sample ({beispiele}). "
+                         f"Each sample needs its own time point; for a second or third sample on "
+                         f"the same day write the date as YYYY-MM-DDT00:00:01, YYYY-MM-DDT00:00:02.")
+    zeitfolge = sorted(samples, key=lambda s: (gelesen[s][1], s))
+
     ab = abund.T.copy()
-    ab.index = [s2d[s] for s in ab.index]
-    ab = ab.sort_index()
+    ab = ab.loc[zeitfolge]
+    ab.index = [label[s] for s in ab.index]
     ab.index.name = None
     ab.to_csv(out_dir / "abundance.csv", sep=SEP)
 
@@ -171,9 +238,11 @@ def convert(in_dir: Path, out_dir: Path, track_path: Path, min_retain: float) ->
     tx.to_csv(out_dir / "taxa_info.csv", sep=SEP, na_rep="")
 
     env_cols = [c for c in meta.columns if c not in ("sample", "date")]
-    env = meta[["date"] + env_cols].copy()
-    env = env[env["date"].isin(set(s2d[s] for s in samples))]
-    env = env.sort_values("date").set_index("date")
+    _dezimalkomma(meta[meta["sample"].isin(samples)], env_cols)
+    zeile = meta.set_index("sample")
+    env = zeile.loc[zeitfolge, env_cols].copy()
+    env.index = [label[s] for s in zeitfolge]
+    env.index.name = "date"
     env.to_csv(out_dir / "environment_info.csv", sep=SEP, na_rep="")
 
     id_rows = [{"ordinal_id": a, "hash_id": _hash_id(seqs[a]), "sequence": seqs[a]} for a in asvs]

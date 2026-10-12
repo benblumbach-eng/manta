@@ -1,3 +1,4 @@
+import { Button, StateNotice } from "./ui";
 import { useEffect, useState } from "react";
 import InfoTip from "./InfoTip";
 import {
@@ -6,8 +7,9 @@ import {
 } from "../api";
 
 export default function AccessRequests(
-  { onAccountsChanged, focusRequest }:
-  { onAccountsChanged: () => void; focusRequest?: number | null },
+  { onAccountsChanged, focusRequest, minPassword = 8 }:
+  { onAccountsChanged: () => void; focusRequest?: number | null;
+    minPassword?: number },
 ) {
   const [requests, setRequests] = useState<AccessRequest[]>([]);
   const [routes, setRoutes] = useState<RequestRoute[]>([]);
@@ -53,16 +55,16 @@ export default function AccessRequests(
     setD(r, { password: Array.from(bytes, (b) => alphabet[b % alphabet.length]).join("") });
   };
 
-  const input = "px-2 py-1 rounded bg-slate-950 border border-slate-700 text-sm text-slate-100 " +
-                "focus:border-cyan-500 focus:outline-none";
+  const input = "px-2 py-1 rounded-md bg-control border border-line-strong text-sm text-fg " +
+                "focus:border-accent focus:outline-none";
 
   const open = requests.filter((r) => r.status === "open");
   const decided = requests.filter((r) => r.status !== "open");
 
   return (
     <section className="space-y-3" data-testid="admin-requests">
-      <h3 className="flex items-center text-sm font-medium text-slate-200">
-        Access requests{open.length ? <span className="ml-2 text-cyan-300">{open.length} open</span> : null}
+      <h3 className="flex items-center text-sm font-medium text-fg">
+        Access requests{open.length ? <span className="ml-2 text-accent">{open.length} open</span> : null}
         <InfoTip title="What a request is">
           <p>Filed through the form on the sign-in screen. Nothing here is an account yet —
           approving creates one with the same rules as the Accounts section below.</p>
@@ -73,108 +75,106 @@ export default function AccessRequests(
 
       {error && (
         <p data-testid="requests-error"
-           className="text-sm text-red-400 border border-red-400/30 rounded px-3 py-2">
+           className="text-sm text-danger border border-danger bg-danger-soft rounded-md px-3 py-2">
           Access requests could not be loaded: {error}
         </p>
       )}
 
       {!mail.configured && (
         <p data-testid="requests-nomail"
-           className="text-xs text-amber-300 border border-amber-400/40 rounded px-3 py-2">
+           className="text-xs text-warn border border-warn rounded px-3 py-2">
           No mail server is configured (MANTA_SMTP_HOST). Requests are still recorded, but nobody
           is notified — this page is then the only place they appear.
         </p>
       )}
       {mail.configured && mail.collect_to.length === 0 && (
-        <p className="text-xs text-amber-300 border border-amber-400/40 rounded px-3 py-2">
+        <p className="text-xs text-warn border border-warn rounded px-3 py-2">
           A mail server is configured, but no collection address (MANTA_REQUEST_MAILTO). Only
           requests with a matching topic below reach anyone.
         </p>
       )}
 
       {open.length === 0 && (
-        <p className="text-xs text-slate-500" data-testid="requests-empty">No open requests.</p>
+        <StateNotice state="empty" inline testid="requests-empty">No open requests.</StateNotice>
       )}
 
       {open.map((r) => (
         <div key={r.id} data-testid={`request-${r.id}`}
-             className={"rounded p-3 space-y-2 bg-slate-800/40 border " +
+             className={"rounded p-3 space-y-2 bg-control/40 border " +
                         (r.id === focusRequest
-                          ? "border-cyan-500 ring-1 ring-cyan-500/40"
-                          : "border-slate-700")}>
+                          ? "border-accent ring-1 ring-accent"
+                          : "border-line")}>
           <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <div className="text-sm text-slate-200">
+            <div className="text-sm text-fg">
               {r.full_name}{" "}
-              <a href={`mailto:${r.email}`} className="text-cyan-300 hover:underline">{r.email}</a>
+              <a href={`mailto:${r.email}`} className="text-accent hover:underline">{r.email}</a>
             </div>
-            <div className="text-[11px] text-slate-500">
+            <div className="text-2xs text-fg-muted">
               {new Date(r.created_at * 1000).toLocaleString()}
             </div>
           </div>
 
-          <div className="text-xs text-slate-400 space-x-3">
+          <div className="text-xs text-fg-muted space-x-3">
             {r.institution && <span>{r.institution}</span>}
-            {r.topic && <span className="text-slate-300">topic: {r.topic}</span>}
+            {r.topic && <span className="text-fg">topic: {r.topic}</span>}
             {r.wanted_username && <span>wants: {r.wanted_username}</span>}
           </div>
 
-          <p className="text-xs text-slate-300 whitespace-pre-wrap">{r.reason}</p>
+          <p className="text-xs text-fg whitespace-pre-wrap">{r.reason}</p>
 
-          <p className="text-[11px] text-slate-500">
+          <p className="text-2xs text-fg-muted">
             notification:{" "}
-            <span className={r.mail_status === "sent" ? "text-slate-400" : "text-amber-300"}>
+            <span className={r.mail_status === "sent" ? "text-fg-muted" : "text-warn"}>
               {r.mail_status || "—"}
             </span>
-            {r.mail_to && <span className="text-slate-600"> → {r.mail_to}</span>}
+            {r.mail_to && <span className="text-fg-muted"> → {r.mail_to}</span>}
           </p>
 
-          <div className="flex flex-wrap items-end gap-2 pt-1 border-t border-slate-800">
+          <div className="flex flex-wrap items-end gap-2 pt-1 border-t border-line-subtle">
             <input className={input} placeholder="user name" value={d(r).username}
                    data-testid={`request-user-${r.id}`}
                    onChange={(e) => setD(r, { username: e.target.value })} />
-            <input className={input} placeholder="password (min. 8)" value={d(r).password}
+            <input className={input} placeholder={`password (min. ${minPassword})`} value={d(r).password}
                    data-testid={`request-pw-${r.id}`}
                    onChange={(e) => setD(r, { password: e.target.value })} />
-            <button className="text-xs text-slate-400 hover:text-cyan-300"
+            <button className="text-xs text-fg-muted hover:text-accent"
                     onClick={() => generate(r)}>generate</button>
             <select className={input} value={d(r).role}
                     onChange={(e) => setD(r, { role: e.target.value })}>
               {roles.map((x) => <option key={x} value={x}>{x}</option>)}
             </select>
             <label className={"text-xs flex items-center gap-1 " +
-                              (mail.configured ? "text-slate-400" : "text-slate-600")}
+                              (mail.configured ? "text-fg-muted" : "text-fg-disabled")}
                    title={mail.configured ? "send them a short note (never the password)"
                                           : "no mail server configured"}>
               <input type="checkbox" checked={d(r).notify} disabled={!mail.configured}
                      onChange={(e) => setD(r, { notify: e.target.checked })} />
               tell them
             </label>
-            <button data-testid={`request-approve-${r.id}`}
-                    className="px-3 py-1 rounded bg-cyan-600 text-sm text-white hover:bg-cyan-500
-                               disabled:opacity-40"
-                    disabled={!d(r).username || d(r).password.length < 8}
+            <Button variant="primary" size="md" data-testid={`request-approve-${r.id}`}
+                    disabled={!d(r).username || d(r).password.length < minPassword}
+                    reason={`a user name and a password of at least ${minPassword} characters`}
                     onClick={() => run(adminApproveRequest(r.id, {
                       username: d(r).username, password: d(r).password, role: d(r).role,
                       notify: d(r).notify,
                     }).then(onAccountsChanged))}>
               approve
-            </button>
+            </Button>
           </div>
 
           <div className="flex flex-wrap items-end gap-2">
             <input className={input + " flex-1 min-w-[12rem]"} placeholder="reason for declining"
                    value={d(r).note} onChange={(e) => setD(r, { note: e.target.value })} />
-            <button data-testid={`request-reject-${r.id}`}
-                    className="px-3 py-1 rounded border border-slate-700 text-sm text-slate-300
-                               hover:border-red-400 hover:text-red-300"
+            <Button size="md" data-testid={`request-reject-${r.id}`}
+                    className="hover:border-danger hover:text-danger"
                     onClick={() => run(adminRejectRequest(r.id,
                       { note: d(r).note, notify: d(r).notify }))}>
               decline
-            </button>
+            </Button>
           </div>
 
           {d(r).password && (
-            <p className="text-[11px] text-amber-300">
+            <p className="text-xs text-warn">
               Note the password down now and pass it on in person, by phone or by chat — it is
               never sent by e-mail and cannot be read back afterwards.
             </p>
@@ -184,7 +184,7 @@ export default function AccessRequests(
 
       {decided.length > 0 && (
         <div className="pt-2">
-          <button className="text-xs text-slate-400 hover:text-cyan-300"
+          <button className="text-xs text-fg-muted hover:text-accent"
                   data-testid="requests-toggle-decided"
                   onClick={() => setShowDecided(!showDecided)}>
             {showDecided ? "hide" : "show"} {decided.length} decided
@@ -193,16 +193,16 @@ export default function AccessRequests(
             <table className="w-full text-xs mt-2">
               <tbody>
                 {decided.map((r) => (
-                  <tr key={r.id} className="border-t border-slate-800">
-                    <td className="py-1 text-slate-400">{r.full_name}</td>
-                    <td className="py-1 text-slate-500">{r.email}</td>
-                    <td className={"py-1 " + (r.status === "approved" ? "text-cyan-300" : "text-slate-500")}>
+                  <tr key={r.id} className="border-t border-line-subtle">
+                    <td className="py-1 text-fg-muted">{r.full_name}</td>
+                    <td className="py-1 text-fg-muted">{r.email}</td>
+                    <td className={"py-1 " + (r.status === "approved" ? "text-accent" : "text-fg-muted")}>
                       {r.status}{r.created_user ? ` → ${r.created_user}` : ""}
                     </td>
-                    <td className="py-1 text-slate-600">{r.decided_by ?? ""}</td>
+                    <td className="py-1 text-fg-muted">{r.decided_by ?? ""}</td>
                     <td className="py-1 text-right">
-                      <button className="text-red-400 hover:text-red-300"
-                              onClick={() => run(adminDeleteRequest(r.id))}>delete</button>
+                      <Button variant="ghost" className="text-danger hover:text-danger"
+                              onClick={() => run(adminDeleteRequest(r.id))}>delete</Button>
                     </td>
                   </tr>
                 ))}
@@ -231,8 +231,8 @@ function Routes({ routes, onSave, input, collect }: {
   };
 
   return (
-    <div className="pt-4 border-t border-slate-800 space-y-2" data-testid="request-routes">
-      <h4 className="flex items-center text-xs font-medium text-slate-300">
+    <div className="pt-4 border-t border-line-subtle space-y-2" data-testid="request-routes">
+      <h4 className="flex items-center text-xs font-medium text-fg">
         Where requests are sent
         <InfoTip title="Collection address and topics">
           <p>The collection address comes from the deployment configuration and is always in the
@@ -242,9 +242,9 @@ function Routes({ routes, onSave, input, collect }: {
           address.</p>
         </InfoTip>
       </h4>
-      <p className="text-xs text-slate-500">
+      <p className="text-xs text-fg-muted">
         Collection address:{" "}
-        <span className="text-slate-300">{collect.join(", ") || "— none configured —"}</span>
+        <span className="text-fg">{collect.join(", ") || "— none configured —"}</span>
       </p>
 
       {rows.map((r, i) => (
@@ -255,24 +255,22 @@ function Routes({ routes, onSave, input, collect }: {
                  onChange={(e) => patch(i, { label: e.target.value })} />
           <input className={input + " flex-1 min-w-[12rem]"} placeholder="address" value={r.email}
                  onChange={(e) => patch(i, { email: e.target.value })} />
-          <button className="text-xs text-red-400 hover:text-red-300"
+          <Button variant="ghost" className="text-danger hover:text-danger"
                   onClick={() => { setRows(rows.filter((_, j) => j !== i)); setDirty(true); }}>
             remove
-          </button>
+          </Button>
         </div>
       ))}
 
       <div className="flex gap-3 items-center">
-        <button className="text-xs text-slate-400 hover:text-cyan-300" data-testid="route-add"
+        <Button variant="ghost" data-testid="route-add"
                 onClick={() => { setRows([...rows, { topic: "", label: "", email: "" }]); setDirty(true); }}>
           add topic
-        </button>
-        <button data-testid="routes-save" disabled={!dirty}
-                className="px-3 py-1 rounded bg-cyan-600 text-xs text-white hover:bg-cyan-500
-                           disabled:opacity-40"
+        </Button>
+        <Button variant="primary" data-testid="routes-save" disabled={!dirty} reason="nothing changed"
                 onClick={() => { onSave(rows); setDirty(false); }}>
           save routing
-        </button>
+        </Button>
       </div>
     </div>
   );

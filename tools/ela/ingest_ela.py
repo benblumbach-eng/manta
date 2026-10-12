@@ -44,13 +44,15 @@ def main() -> int:
                               seed:$seed, ath:$ath, minoc:$minoc, maxoc:$maxoc,
                               nmax:$nmax, rep:$rep, totalit:$totalit, boot:$boot,
                               n_species_model:$n_model, tool:$tool, reference:$ref,
-                              model:$model, mode:'base'})
+                              model:$model, mode:'base',
+                              n_samples_dropped_empty:$n_empty})
             CREATE (e)-[:OF_DATASET]->(d)
             """,
             d=ds, run=run_id, seed=int(p["seed"]), ath=p["ath"], minoc=p["minoc"],
             maxoc=p["maxoc"], nmax=int(p["nmax"]), rep=int(p["rep"]),
             totalit=int(p["totalit"]), boot=int(p["boot"]),
             n_model=r["preprocessing"]["n_species_model"],
+            n_empty=r["preprocessing"].get("n_samples_dropped_empty"),
             tool=r["provenance"]["tool"], ref=r["provenance"]["reference"],
             model=r["provenance"]["model"])
 
@@ -75,9 +77,11 @@ def main() -> int:
                 """
                 MATCH (a:StableState {dataset_id:$d, state_id:$s1}),
                       (b:StableState {dataset_id:$d, state_id:$s2})
-                CREATE (a)-[:TIPPING {dataset_id:$d, energy:$energy}]->(b)
+                CREATE (a)-[:TIPPING {dataset_id:$d, energy:$energy,
+                                      rela_path_energy:$rela}]->(b)
                 """,
-                d=ds, s1=tp["ss1"], s2=tp["ss2"], energy=tp["energy"])
+                d=ds, s1=tp["ss1"], s2=tp["ss2"], energy=tp["energy"],
+                rela=tp.get("rela_path_energy"))
 
         obs = (r.get("observed_communities") or {}).get("samples", [])
         n_obs = 0

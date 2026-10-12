@@ -3,10 +3,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import re
 import sqlite3
 import secrets
 import sys
+import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,9 +29,40 @@ MIN_PASSWORD_LEN = int(os.environ.get("MANTA_MIN_PASSWORD_LEN", "8"))
 
 _SCRYPT = dict(n=2 ** 14, r=8, p=1, dklen=32)
 
-_FAILS: dict[str, list[float]] = {}
+_FAILS: "OrderedDict[str, list[float]]" = OrderedDict()
+_IP_FAILS: "OrderedDict[str, list[float]]" = OrderedDict()
+_FAILS_LOCK = threading.Lock()
 MAX_FAILS = 8
+MAX_FAILS_PER_IP = int(os.environ.get("MANTA_MAX_FAILS_PER_IP", "30"))
 FAIL_WINDOW = 300.0
+MAX_TRACKED = 10_000
+MAX_USERNAME_LEN = 64
+MAX_PASSWORD_LEN = 1024
+_SCRYPT_SLOTS = threading.BoundedSemaphore(int(os.environ.get("MANTA_SCRYPT_SLOTS", "2")))
+SCRYPT_WAIT = 10.0
+_calls = 0
+
+
+class TooManyAttempts(PermissionError):
+    pass
+
+
+def _recent(store: OrderedDict, key: str, now: float) -> list[float]:
+    return [t for t in store.get(key, []) if now - t < FAIL_WINDOW]
+
+
+def _note_fail(store: OrderedDict, key: str, now: float) -> None:
+    liste = _recent(store, key, now) + [now]
+    store.pop(key, None)
+    store[key] = liste
+    while len(store) > MAX_TRACKED:
+        store.popitem(last=False)
+
+
+def _sweep(now: float) -> None:
+    for store in (_FAILS, _IP_FAILS):
+        for key in [k for k, v in store.items() if not v or now - v[-1] >= FAIL_WINDOW]:
+            del store[key]
 
 
 @dataclass(frozen=True)
@@ -97,10 +131,20 @@ def _dummy_hash() -> str:
 
 
 
+USERNAME_RE = re.compile(r"[a-z0-9][a-z0-9._-]{1,59}")
+
+
+def valid_username(name: str) -> bool:
+    return bool(USERNAME_RE.fullmatch(name or ""))
+
+
 def create_user(username: str, password: str, role: str = "viewer") -> User:
     username = username.strip().lower()
     if not username:
         raise ValueError("The username must not be empty.")
+    if not valid_username(username):
+        raise ValueError("Usernames use letters, digits, dot, hyphen and underscore, start with "
+                         "a letter or digit and have 2 to 60 characters.")
     if role not in ROLES:
         raise ValueError(f"Unknown role {role!r}; allowed: {list(ROLES)}.")
     if len(password) < MIN_PASSWORD_LEN:
@@ -146,10 +190,78 @@ def set_disabled(username: str, disabled: bool) -> None:
 
 
 def delete_user(username: str) -> None:
-    with _conn() as c:
-        n = c.execute("DELETE FROM users WHERE username=?", (username.strip().lower(),)).rowcount
-    if not n:
-        raise ValueError(f"Unknown user {username!r}.")
+    username = username.strip().lower()
+    c = _immediate()
+    try:
+        row = c.execute("SELECT role, disabled FROM users WHERE username=?",
+                        (username,)).fetchone()
+        if row is None:
+            raise UnknownUser(f"Unknown user {username!r}.")
+        if row["role"] == "admin" and not row["disabled"]:
+            _require_other_admin(c, username)
+        c.execute("DELETE FROM users WHERE username=?", (username,))
+        c.execute("COMMIT")
+    except BaseException:
+        c.execute("ROLLBACK")
+        raise
+    finally:
+        c.close()
+
+
+class UnknownUser(ValueError):
+    pass
+
+
+def _immediate() -> sqlite3.Connection:
+    init_db()
+    c = sqlite3.connect(DB_PATH, timeout=10, isolation_level=None)
+    c.row_factory = sqlite3.Row
+    c.execute("PRAGMA foreign_keys=ON")
+    c.execute("BEGIN IMMEDIATE")
+    return c
+
+
+def _require_other_admin(c: sqlite3.Connection, username: str) -> None:
+    andere = c.execute("SELECT COUNT(*) FROM users WHERE role='admin' AND disabled=0 "
+                       "AND username<>?", (username,)).fetchone()[0]
+    if andere == 0:
+        raise ValueError("At least one active administrator must remain.")
+
+
+def update_user(username: str, password: str | None = None, role: str | None = None,
+                disabled: bool | None = None) -> None:
+    username = username.strip().lower()
+    if role is not None and role not in ROLES:
+        raise ValueError(f"Unknown role {role!r}; allowed: {list(ROLES)}.")
+    if password is not None and len(password) < MIN_PASSWORD_LEN:
+        raise ValueError(f"The password must have at least {MIN_PASSWORD_LEN} characters.")
+    pw_hash = _hash(password) if password is not None else None
+    c = _immediate()
+    try:
+        row = c.execute("SELECT role, disabled FROM users WHERE username=?",
+                        (username,)).fetchone()
+        if row is None:
+            raise UnknownUser(f"Unknown user {username!r}.")
+        ist_admin = row["role"] == "admin" and not row["disabled"]
+        bleibt_admin = ((role or row["role"]) == "admin"
+                        and not (row["disabled"] if disabled is None else disabled))
+        if ist_admin and not bleibt_admin:
+            _require_other_admin(c, username)
+        if pw_hash is not None:
+            c.execute("UPDATE users SET pw_hash=? WHERE username=?", (pw_hash, username))
+        if role is not None:
+            c.execute("UPDATE users SET role=? WHERE username=?", (role, username))
+        if disabled is not None:
+            c.execute("UPDATE users SET disabled=? WHERE username=?",
+                      (1 if disabled else 0, username))
+        c.execute("COMMIT")
+    except BaseException:
+        c.execute("ROLLBACK")
+        raise
+    finally:
+        c.close()
+    if password is not None or disabled:
+        revoke_all(username)
 
 
 def list_users() -> list[dict]:
@@ -160,6 +272,14 @@ def list_users() -> list[dict]:
             "(SELECT COUNT(*) FROM sessions s WHERE s.username=u.username AND s.expires_at>?) "
             "AS sessions FROM users u ORDER BY u.username", (time.time(),)).fetchall()
     return [dict(r) for r in rows]
+
+
+def account_since(username: str) -> float | None:
+    init_db()
+    with _conn() as c:
+        row = c.execute("SELECT created_at FROM users WHERE username=?",
+                        ((username or "").strip().lower(),)).fetchone()
+    return row["created_at"] if row else None
 
 
 def count_admins() -> int:
@@ -173,25 +293,41 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def login(username: str, password: str) -> str:
+def login(username: str, password: str, ip: str = "") -> str:
+    global _calls
     username = (username or "").strip().lower()
+    if len(username) > MAX_USERNAME_LEN or len(password or "") > MAX_PASSWORD_LEN:
+        raise PermissionError("Wrong username or password.")
+    ip = (ip or "")[:64]
     init_db()
     now = time.time()
-    recent = [t for t in _FAILS.get(username, []) if now - t < FAIL_WINDOW]
-    _FAILS[username] = recent
-    if len(recent) >= MAX_FAILS:
-        raise PermissionError("Too many failed attempts. Please try again later.")
+    with _FAILS_LOCK:
+        _calls += 1
+        if _calls % 256 == 0:
+            _sweep(now)
+        if (len(_recent(_FAILS, username, now)) >= MAX_FAILS
+                or (ip and len(_recent(_IP_FAILS, ip, now)) >= MAX_FAILS_PER_IP)):
+            raise TooManyAttempts("Too many failed attempts. Please try again later.")
 
     with _conn() as c:
         row = c.execute("SELECT pw_hash, role, disabled FROM users WHERE username=?",
                         (username,)).fetchone()
     stored = row["pw_hash"] if row else _dummy_hash()
-    ok = _verify(password or "", stored) and row is not None and not row["disabled"]
+    if not _SCRYPT_SLOTS.acquire(timeout=SCRYPT_WAIT):
+        raise TooManyAttempts("The server is busy with sign-ins. Please try again shortly.")
+    try:
+        ok = _verify(password or "", stored) and row is not None and not row["disabled"]
+    finally:
+        _SCRYPT_SLOTS.release()
     if not ok:
-        _FAILS.setdefault(username, []).append(now)
+        with _FAILS_LOCK:
+            _note_fail(_FAILS, username, now)
+            if ip:
+                _note_fail(_IP_FAILS, ip, now)
         raise PermissionError("Wrong username or password.")
 
-    _FAILS.pop(username, None)
+    with _FAILS_LOCK:
+        _FAILS.pop(username, None)
     token = secrets.token_urlsafe(32)
     with _conn() as c:
         c.execute("INSERT INTO sessions(token_hash,username,created_at,expires_at) VALUES (?,?,?,?)",

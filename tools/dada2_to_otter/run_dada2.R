@@ -4,7 +4,7 @@ invisible(Sys.setLanguage("en"))
 args  <- commandArgs(trailingOnly = TRUE)
 if (any(args %in% c("-h", "--help"))) {
   cat(paste(
-    "usage: Rscript run_dada2.R FASTQ_DIR OUT_DIR [TOP_N]",
+    "usage: Rscript run_dada2.R FASTQ_DIR OUT_DIR",
     "",
     "Runs cutadapt and DADA2 on gzipped paired-end Illumina reads and writes the files that",
     "convert.py turns into otter's input tables.",
@@ -13,13 +13,15 @@ if (any(args %in% c("-h", "--help"))) {
     "             the sample name is the part before _S<n>_L001",
     "  OUT_DIR    output folder, created if missing; intermediate files and the resume caches",
     "             go to OUT_DIR/tmp (a rerun into the same OUT_DIR skips the finished DADA2 steps)",
-    "  TOP_N      keep the N ASVs with the most reads (default 500, or MANTA_TOP_N)",
+    "  Every ASV DADA2 finds is kept; nothing is filtered by abundance.",
     "",
     "Environment variables:",
     "  MANTA_METADATA     metadata.csv with the real sampling dates: ';'-separated, columns",
     "                     'sample' and 'date', dates as YYYY-MM-DD, one row per sample; checked",
     "                     before DADA2 starts. Without it the samples get placeholder dates that",
-    "                     only encode their order, marked by OUT_DIR/placeholder_dates.txt.",
+    "                     only encode their order, marked by OUT_DIR/placeholder_dates.txt; the",
+    "                     order is a natural sort of the sample names (S2 before S10), written to",
+    "                     OUT_DIR/sample_order.csv.",
     "  MANTA_PR2          PR2 reference in DADA2 format for assignTaxonomy; empty = no taxonomy,",
     "                     the ASVs stay 'unassigned'",
     "  MANTA_NCORES       threads (default 4)",
@@ -36,9 +38,8 @@ if (any(args %in% c("-h", "--help"))) {
 
 suppressMessages({ library(dada2); library(Biostrings); library(ShortRead) })
 
-src   <- if (length(args) >= 1) args[1] else stop("usage: Rscript run_dada2.R FASTQ_DIR OUT_DIR [TOP_N]")
-out   <- if (length(args) >= 2) args[2] else stop("usage: Rscript run_dada2.R FASTQ_DIR OUT_DIR [TOP_N]")
-TOP_N <- if (length(args) >= 3) as.integer(args[3]) else as.integer(Sys.getenv("MANTA_TOP_N", "500"))
+src   <- if (length(args) >= 1) args[1] else stop("usage: Rscript run_dada2.R FASTQ_DIR OUT_DIR")
+out   <- if (length(args) >= 2) args[2] else stop("usage: Rscript run_dada2.R FASTQ_DIR OUT_DIR")
 NCORES <- as.integer(Sys.getenv("MANTA_NCORES", "4"))
 PR2 <- Sys.getenv("MANTA_PR2", "")
 HAS_TAX <- nzchar(PR2) && file.exists(PR2)
@@ -55,6 +56,36 @@ KINGDOM <- Sys.getenv("MANTA_KINGDOM", "unassigned")
 cat("Cores:", NCORES, "· taxonomy:", if (HAS_TAX) PR2 else "OFF (ASVs stay unassigned)", "\n")
 if (nzchar(PR2) && !HAS_TAX)
   message("WARNING: MANTA_PR2 is set, but the file does not exist: ", PR2, " - taxonomy is skipped")
+
+RANKS7 <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
+REF <- NULL
+if (HAS_TAX) {
+  kopf <- tryCatch(readLines(gzfile(PR2), n = 1, warn = FALSE), error = function(e) character(0))
+  n_ranks <- if (length(kopf) && startsWith(kopf[1], ">"))
+    length(strsplit(sub("^>", "", kopf[1]), ";", fixed = TRUE)[[1]]) else 0L
+  ident <- function(levels) setNames(levels, levels)
+  REF <- switch(as.character(n_ranks),
+    "9" = list(levels = c("Domain", "Supergroup", "Division", "Subdivision", "Class", "Order",
+                          "Family", "Genus", "Species"),
+               src = c(Kingdom = "Domain", Phylum = "Division", Class = "Class", Order = "Order",
+                       Family = "Family", Genus = "Genus", Species = "Species"),
+               label = "PR2 v5 (9 ranks): Domain -> Kingdom, Division -> Phylum; Supergroup and Subdivision dropped"),
+    "8" = list(levels = c("Kingdom", "Supergroup", "Division", "Class", "Order", "Family",
+                          "Genus", "Species"),
+               src = c(Kingdom = "Kingdom", Phylum = "Division", Class = "Class", Order = "Order",
+                       Family = "Family", Genus = "Genus", Species = "Species"),
+               label = "PR2 4.x (8 ranks): Kingdom -> Kingdom, Division -> Phylum; Supergroup dropped"),
+    "7" = list(levels = RANKS7, src = ident(RANKS7),
+               label = "SILVA-style (7 ranks): Kingdom..Species taken 1:1"),
+    "6" = list(levels = RANKS7[1:6], src = ident(RANKS7[1:6]),
+               label = "SILVA-style (6 ranks): Kingdom..Genus taken 1:1; Species stays unassigned"),
+    NULL)
+  if (is.null(REF))
+    stop("MANTA_PR2: cannot use ", PR2, " - its first FASTA header has ", n_ranks,
+         " ';'-separated ranks. Supported: 9 (PR2 v5), 8 (PR2 4.x), 7 or 6 (SILVA-style, ",
+         "Kingdom first). Use a reference in DADA2 assignTaxonomy format.", call. = FALSE)
+  cat("Reference ranks:", REF$label, "\n")
+}
 
 split_csv_line <- function(line) {
   ch <- strsplit(line, "", fixed = TRUE)[[1]]
@@ -89,7 +120,8 @@ read_metadata <- function(path) {
     if (is.na(j)) return(NULL)
     vapply(rows, function(r) if (length(r) >= j) r[j] else "", character(1))
   }
-  list(names = head, sample = col("sample"), date = col("date"))
+  list(names = head, sample = col("sample"), date = col("date"),
+       columns = setNames(lapply(head, col), head))
 }
 meta_user <- NULL
 if (nzchar(META_IN)) {
@@ -102,6 +134,12 @@ if (nzchar(META_IN)) {
     stop("MANTA_METADATA must be a ';'-separated CSV with the columns 'sample' and 'date'; found: ",
          paste(meta_user$names, collapse = ", "), call. = FALSE)
 }
+natural_key <- function(s) {
+  m <- gregexpr("[0-9]+", s)
+  regmatches(s, m) <- lapply(regmatches(s, m), function(d)
+    paste0(strrep("0", pmax(0L, 30L - nchar(d))), d))
+  s
+}
 check_metadata <- function(samples) {
   if (is.null(meta_user)) return(invisible(NULL))
   missing <- setdiff(samples, meta_user$sample)
@@ -109,12 +147,38 @@ check_metadata <- function(samples) {
     stop("MANTA_METADATA has no row for ", length(missing), " sample(s): ",
          paste(head(missing, 5), collapse = ", "), ". The 'sample' column must hold the FASTQ ",
          "name before _S<n>_L001, e.g. ", samples[1], call. = FALSE)
-  d <- meta_user$date[match(samples, meta_user$sample)]
-  ok <- grepl("^[0-9]{4}-[0-9]{2}-[0-9]{2}", d) &
-    !is.na(as.Date(substr(d, 1, 10), format = "%Y-%m-%d"))
+  mehrfach <- unique(meta_user$sample[duplicated(meta_user$sample)])
+  if (length(mehrfach))
+    stop("MANTA_METADATA has more than one row for ", length(mehrfach), " sample(s): ",
+         paste(head(mehrfach, 5), collapse = ", "), " (one row per sample)", call. = FALSE)
+  d <- trimws(meta_user$date[match(samples, meta_user$sample)])
+  teile <- regmatches(d, regexec(
+    "^([0-9]{4})-([0-9]{1,2})-([0-9]{1,2})(T[0-9]{2}:[0-9]{2}:[0-9]{2})?$", d))
+  norm <- vapply(teile, function(x) {
+    if (length(x) == 0) return(NA_character_)
+    tag <- sprintf("%s-%02d-%02d", x[2], as.integer(x[3]), as.integer(x[4]))
+    if (is.na(as.Date(tag, format = "%Y-%m-%d"))) return(NA_character_)
+    paste0(tag, x[5])
+  }, "")
+  ok <- !is.na(norm)
   if (!all(ok))
     stop("MANTA_METADATA: the date of ", sum(!ok), " sample(s) is not a valid YYYY-MM-DD date: ",
-         paste(head(samples[!ok], 5), collapse = ", "), call. = FALSE)
+         paste(head(samples[!ok], 5), collapse = ", "),
+         ". Dates like dd.mm.yyyy or m/d/yyyy are not accepted.", call. = FALSE)
+  for (nm in setdiff(names(meta_user$columns), c("sample", "date"))) {
+    v <- trimws(meta_user$columns[[nm]]); v <- v[nzchar(v)]
+    bad <- v[is.na(suppressWarnings(as.numeric(v)))]
+    if (length(bad) && all(grepl("^-?[0-9]+,[0-9]+$", bad)))
+      stop("MANTA_METADATA: the column '", nm, "' uses a decimal comma (e.g. '", bad[1],
+           "'). Write numbers with a decimal point (e.g. '", sub(",", ".", bad[1], fixed = TRUE),
+           "').", call. = FALSE)
+  }
+  doppelt <- norm %in% norm[duplicated(norm)]
+  if (any(doppelt))
+    stop("MANTA_METADATA: ", sum(doppelt), " samples share a date (",
+         paste(head(paste0(samples[doppelt], "=", norm[doppelt]), 6), collapse = ", "),
+         "). Each sample needs its own time point; for a second or third sample on the same day ",
+         "write the date as YYYY-MM-DDT00:00:01, YYYY-MM-DDT00:00:02.", call. = FALSE)
   invisible(NULL)
 }
 
@@ -130,9 +194,44 @@ cache_path <- function(name) {
   p
 }
 cache <- cache_path("_seqtab_cache.Rdata")
+
+params_now <- list(fwd_primer = FWD_PRIMER, rev_primer = REV_PRIMER,
+                   trunc_len_f = TRUNC_F, trunc_len_r = TRUNC_R,
+                   max_ee_f = MAXEE_F, max_ee_r = MAXEE_R,
+                   min_overlap = MIN_OVERLAP, min_len = 100)
+input_files <- function(dir) {
+  f <- sort(c(list.files(dir, pattern = "_R1_001.fastq.gz$", full.names = TRUE),
+              list.files(dir, pattern = "_R2_001.fastq.gz$", full.names = TRUE)))
+  data.frame(file = basename(f), size = as.numeric(file.size(f)), stringsAsFactors = FALSE)
+}
+PARAMS_SOURCE <- "this run"
 if (file.exists(cache)) {
   load(cache)
   cat("Cache loaded ->", ncol(seqtab.nochim), "ASVs x", nrow(seqtab.nochim), "samples\n")
+  if (exists("dada2_params")) {
+    anders <- names(params_now)[!vapply(names(params_now), function(k)
+      identical(as.character(params_now[[k]]), as.character(dada2_params[[k]])), logical(1))]
+    if (length(anders))
+      stop("the DADA2 cache ", cache, " was built with other parameters (",
+           paste0(anders, " ", vapply(anders, function(k) as.character(dada2_params[[k]]), ""),
+                  " -> ", vapply(anders, function(k) as.character(params_now[[k]]), ""),
+                  collapse = "; "),
+           "). Delete ", tmp, " or use a new OUT_DIR.", call. = FALSE)
+    jetzt <- input_files(src); vorher <- dada2_params$inputs
+    gleich <- identical(jetzt$file, as.character(vorher$file)) &&
+      isTRUE(all.equal(jetzt$size, as.numeric(vorher$size)))
+    if (nrow(jetzt) && !gleich)
+      stop("the DADA2 cache ", cache, " was built from other FASTQ files than those in ", src,
+           ". Delete ", tmp, " or use a new OUT_DIR.", call. = FALSE)
+    lft <- dada2_params$length_window_lo; rgt <- dada2_params$length_window_hi
+    PARAMS_SOURCE <- "cache (parameters and input files verified)"
+  } else {
+    message("WARNING: the DADA2 cache ", cache, " does not record the parameters and input ",
+            "files it was built with (written by an older version of this script). Its result is ",
+            "reused, but dada2_manifest.json records those parameters as unknown. Delete ", tmp,
+            " to recompute them with recorded parameters.")
+    PARAMS_SOURCE <- "unverified cache"
+  }
   check_metadata(sample.names)
 } else {
 
@@ -149,16 +248,31 @@ check_metadata(sample.names)
 
 FWD.RC <- dada2:::rc(FWD_PRIMER); REV.RC <- dada2:::rc(REV_PRIMER)
 
+stop_empty <- function(step, ok, reads = NULL) {
+  if (all(ok)) return(invisible(NULL))
+  info <- if (is.null(reads)) "" else paste0(" (reads in -> out: ",
+    paste(sprintf("%s %d -> %d", sample.names[!ok], as.integer(reads[!ok, 1]),
+                  as.integer(reads[!ok, 2])), collapse = ", "), ")")
+  stop("no reads of ", sum(!ok), " sample(s) passed ", step, ": ",
+       paste(head(sample.names[!ok], 10), collapse = ", "), info,
+       ". Remove these samples (and their rows in MANTA_METADATA) from the input and run ",
+       "again.", call. = FALSE)
+}
+
 fnFs.pre <- file.path(preFilt_dir, basename(fnFs)); fnRs.pre <- file.path(preFilt_dir, basename(fnRs))
-filterAndTrim(fnFs, fnFs.pre, fnRs, fnRs.pre, minLen = 100, multithread = NCORES)
+pre_ft <- filterAndTrim(fnFs, fnFs.pre, fnRs, fnRs.pre, minLen = 100, multithread = NCORES)
+stop_empty("the prefilter (minLen 100)", file.exists(fnFs.pre) & file.exists(fnRs.pre), pre_ft)
 cat("prefilter ok\n")
 
 fnFs.cut <- file.path(cut_dir, basename(fnFs)); fnRs.cut <- file.path(cut_dir, basename(fnRs))
 for (i in seq_along(fnFs)) {
-  system2("cutadapt", args = c(paste("-g", FWD_PRIMER, "-a", REV.RC),
-                               paste("-G", REV_PRIMER, "-A", FWD.RC), "-n", 2,
-                               "-o", fnFs.cut[i], "-p", fnRs.cut[i],
-                               fnFs.pre[i], fnRs.pre[i]), stdout = NULL)
+  rc <- system2("cutadapt", args = c(paste("-g", FWD_PRIMER, "-a", REV.RC),
+                                     paste("-G", REV_PRIMER, "-A", FWD.RC), "-n", 2,
+                                     "-o", fnFs.cut[i], "-p", fnRs.cut[i],
+                                     fnFs.pre[i], fnRs.pre[i]), stdout = NULL)
+  if (!identical(as.integer(rc), 0L) || !file.exists(fnFs.cut[i]) || !file.exists(fnRs.cut[i]))
+    stop("cutadapt failed for the sample ", sample.names[i], " (exit status ", rc, ").",
+         call. = FALSE)
 }
 cat("cutadapt ok\n")
 
@@ -167,6 +281,8 @@ names(filtFs) <- sample.names; names(filtRs) <- sample.names
 track_ft <- filterAndTrim(fnFs.cut, filtFs, fnRs.cut, filtRs, maxN = 0,
                           maxEE = c(MAXEE_F, MAXEE_R), truncLen = c(TRUNC_F, TRUNC_R),
                           rm.phix = TRUE, compress = TRUE, multithread = NCORES)
+stop_empty(sprintf("filterAndTrim (truncLen %d/%d, maxEE %s/%s)", TRUNC_F, TRUNC_R, MAXEE_F, MAXEE_R),
+           file.exists(filtFs) & file.exists(filtRs), track_ft)
 cat("filterAndTrim ok\n")
 
 errF <- learnErrors(filtFs, multithread = NCORES); errR <- learnErrors(filtRs, multithread = NCORES)
@@ -187,7 +303,9 @@ track <- cbind(track_ft, sapply(dadaFs, getN), sapply(dadaRs, getN),
                sapply(mergers, getN), rowSums(seqtab.nochim))
 colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
 rownames(track) <- sample.names
-save(seqtab.nochim, track, sample.names, file = cache)
+dada2_params <- c(params_now, list(length_window_lo = lft, length_window_hi = rgt,
+                                   inputs = input_files(src)))
+save(seqtab.nochim, track, sample.names, dada2_params, file = cache)
 
 }
 
@@ -196,10 +314,9 @@ cat("retained (nonchim/input):", round(track[, "nonchim"] / track[, "input"], 4)
 cat("ASVs before filter:", ncol(seqtab.nochim), "\n")
 
 tot <- colSums(seqtab.nochim)
-keep <- names(sort(tot, decreasing = TRUE))[seq_len(min(TOP_N, length(tot)))]
+keep <- names(sort(tot, decreasing = TRUE))
 seqtab.f <- seqtab.nochim[, keep, drop = FALSE]
-cat("Filter: top", length(keep), "ASVs by total reads ->",
-    round(100 * sum(seqtab.f) / sum(seqtab.nochim), 1), "% of the reads kept\n")
+cat("All", length(keep), "ASVs kept (no abundance filter)\n")
 
 seq <- colnames(seqtab.f)
 PREFIX <- Sys.getenv("MANTA_ASV_PREFIX", "asv")
@@ -221,29 +338,38 @@ if (!HAS_TAX) {
   prok_taxa[, "Kingdom"] <- KINGDOM
   save(prok_taxa, file = file.path(out, "taxa_prok.Rdata"))
   cat("Taxonomy skipped - ASVs stay unassigned\n")
-} else if (file.exists(tax_cache)) {
-  load(tax_cache); cat("Taxonomy cache loaded\n")
+} else if (file.exists(tax_cache) && {
+  load(tax_cache)
+  passt <- exists("taxa_key") && identical(taxa_key$reference_md5, unname(tools::md5sum(PR2))) &&
+    setequal(rownames(taxa_pr2), unname(seq)) && identical(colnames(taxa_pr2), REF$levels)
+  if (!passt) {
+    message("NOTE: the taxonomy cache ", tax_cache, " was built from another reference or other ",
+            "ASVs - assigning the taxonomy again.")
+    rm(taxa_pr2)
+  }
+  passt
+}) {
+  cat("Taxonomy cache loaded\n")
 } else {
-  cat("assignTaxonomy against PR2 (the most memory-hungry step of the run) ...\n")
+  cat("assignTaxonomy against", basename(PR2), "(the most memory-hungry step of the run) ...\n")
   t0 <- Sys.time()
-  PR2_RANKS <- c("Domain", "Supergroup", "Division", "Subdivision", "Class", "Order",
-                 "Family", "Genus", "Species")
-  taxa_pr2 <- assignTaxonomy(seqtab.f, PR2, taxLevels = PR2_RANKS,
+  taxa_pr2 <- assignTaxonomy(seqtab.f, PR2, taxLevels = REF$levels,
                              multithread = NCORES, verbose = TRUE)
   cat("assignTaxonomy done in", round(difftime(Sys.time(), t0, units = "mins"), 1), "min\n")
-  save(taxa_pr2, file = tax_cache)
+  taxa_key <- list(reference_md5 = unname(tools::md5sum(PR2)), reference = basename(PR2))
+  save(taxa_pr2, taxa_key, file = tax_cache)
 }
 
 
 if (HAS_TAX) {
 stopifnot(nrow(taxa_pr2) == length(seq))
-RANKS <- c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species")
-SRC   <- c(Kingdom = "Domain", Phylum = "Division", Class = "Class", Order = "Order",
-           Family = "Family", Genus = "Genus", Species = "Species")
+RANKS <- RANKS7
+SRC   <- REF$src
 prok_taxa <- matrix("unassigned", nrow = length(seq), ncol = length(RANKS),
                     dimnames = list(names(seq), RANKS))
 tax_by_asv <- taxa_pr2[match(unname(seq), rownames(taxa_pr2)), , drop = FALSE]
 for (r in RANKS) {
+  if (!(r %in% names(SRC))) next
   col <- SRC[[r]]
   if (col %in% colnames(tax_by_asv)) {
     v <- as.character(tax_by_asv[, col])
@@ -259,14 +385,22 @@ cat("Taxonomy assigned - genus known for",
 if (!is.null(meta_user)) {
   file.copy(META_IN, file.path(out, "metadata.csv"), overwrite = TRUE)
   unlink(file.path(out, PLACEHOLDER_DATES))
+  unlink(file.path(out, "sample_order.csv"))
   cat("metadata.csv copied from", META_IN, "\n")
 } else {
-  ord <- order(suppressWarnings(as.integer(sub(".*-", "", sample.names))))
+  ord <- order(natural_key(sample.names), sample.names, method = "radix")
   dates <- sprintf("2017-%02d-%02d", 1 + (seq_along(sample.names) - 1) %/% 28,
                    1 + (seq_along(sample.names) - 1) %% 28)
   meta <- data.frame(sample = sample.names[ord], date = dates, bottle = seq_along(sample.names))
   writeLines(c("sample;date;bottle", paste(meta$sample, meta$date, meta$bottle, sep = ";")),
              file.path(out, "metadata.csv"))
+  writeLines(c("position;sample", paste(seq_along(ord), sample.names[ord], sep = ";")),
+             file.path(out, "sample_order.csv"))
+  message("WARNING: without MANTA_METADATA the sample order is taken from a natural sort of ",
+          "the sample names (numbers compared as numbers, S2 before S10): ",
+          paste(head(sample.names[ord], 6), collapse = " < "),
+          if (length(ord) > 6) " < ..." else "", ". OTTER treats this order as the time axis. ",
+          "Check it in ", file.path(out, "sample_order.csv"), ".")
   writeLines(c(
     "The dates in metadata.csv are placeholders written by run_dada2.R because MANTA_METADATA",
     "was not set. They only encode the order of the samples; they are not sampling dates.",
@@ -307,29 +441,32 @@ si <- sessionInfo()
 pkgs <- c(si$otherPkgs, si$loadedOnly)
 pkg_lines <- paste0(names(pkgs), " ", vapply(pkgs, function(p) as.character(p$Version), ""))
 
+P <- if (PARAMS_SOURCE == "unverified cache") lapply(params_now, function(x) NA) else params_now
+
 manifest <- j_obj(list(
   tool = j_str("dada2"),
   dada2_version = j_str(as.character(packageVersion("dada2"))),
   r_version = j_str(R.version.string),
   written_at = j_str(format(Sys.time(), "%Y-%m-%dT%H:%M:%SZ", tz = "UTC")),
   params = j_obj(list(
-    trunc_len_f = j_num(TRUNC_F),
-    trunc_len_r = j_num(TRUNC_R),
-    max_ee_f = j_num(MAXEE_F),
-    max_ee_r = j_num(MAXEE_R),
-    min_overlap = j_num(MIN_OVERLAP),
-    min_len = j_num(100),
-    fwd_primer = j_str(FWD_PRIMER),
-    rev_primer = j_str(REV_PRIMER),
+    params_source = j_str(PARAMS_SOURCE),
+    trunc_len_f = j_num(P$trunc_len_f),
+    trunc_len_r = j_num(P$trunc_len_r),
+    max_ee_f = j_num(P$max_ee_f),
+    max_ee_r = j_num(P$max_ee_r),
+    min_overlap = j_num(P$min_overlap),
+    min_len = j_num(P$min_len),
+    fwd_primer = j_str(P$fwd_primer),
+    rev_primer = j_str(P$rev_primer),
     chimera_method = j_str("consensus"),
     reference = j_str(ref_name),
     reference_version = j_str(ref_ver),
     reference_md5 = j_str(ref_md5),
-    kingdom_filter = j_str(if (HAS_TAX) "PR2 Domain -> Kingdom" else KINGDOM),
-    top_n = j_num(TOP_N),
+    kingdom_filter = j_str(if (HAS_TAX) REF$label else KINGDOM),
+    top_n = j_str("all"),
     asv_prefix = j_str(PREFIX),
-    length_window_lo = if (exists("lft")) j_num(lft) else "null",
-    length_window_hi = if (exists("rgt")) j_num(rgt) else "null",
+    length_window_lo = if (exists("lft") && !is.null(lft)) j_num(lft) else "null",
+    length_window_hi = if (exists("rgt") && !is.null(rgt)) j_num(rgt) else "null",
     num_cores = j_num(NCORES)
   ), indent = 6),
   session_info = paste0("[", paste0(vapply(pkg_lines, j_str, ""), collapse = ", "), "]")
