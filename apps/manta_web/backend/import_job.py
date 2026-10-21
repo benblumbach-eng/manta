@@ -150,6 +150,7 @@ ENV_LINKS_SCRIPT = REPO / "tools" / "env_links" / "compute.py"
 POST_STAGE_AT = 0.98
 NOTE_NO_READ_TRACKING = ("Read tracking not provided: the per-sample read-retention check "
                          "was skipped.")
+READ_RETAIN_MIN = 0.2
 NOTE_TRAITS_MISSING = ("No function annotation: run bash tools/traits/fetch_sources.sh — "
                        "imports after that are annotated.")
 DADA2_SCRIPT = CONVERT_DIR / "run_dada2.R"
@@ -324,8 +325,17 @@ def _run(job_id: str, rdata_dir: Path, dataset_id: str, run_id: str,
             _set(job_id, stage="convert", progress=round(_stage_base("convert"), 4), stage_detail="format conversion")
             _run_sub("convert", [str(CONVERT_DIR / ".venv/bin/python"), str(CONVERT_DIR / "convert.py"),
                                  "--in", str(rdata_dir), "--out", str(csv_dir)])
-            if not (csv_dir / "read_tracking_report.csv").exists():
+            report = csv_dir / "read_tracking_report.csv"
+            if not report.exists():
                 notes.append(NOTE_NO_READ_TRACKING)
+            else:
+                with report.open(newline="", encoding="utf-8") as fh:
+                    low = [r["sample"] for r in csv.DictReader(fh, delimiter=";")
+                           if r.get("pass") == "False"]
+                if low:
+                    notes.append(f"Read tracking: {len(low)} sample(s) kept less than "
+                                 f"{READ_RETAIN_MIN:.0%} of their reads and were imported "
+                                 f"anyway: {', '.join(low)}")
             if time_axis is None:
                 time_axis = ("dates" if echte_daten and not synthetic_dates(rdata_dir, csv_dir)
                              and _abundance_axis(csv_dir) == "dates" else "ordinal")

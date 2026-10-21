@@ -278,9 +278,8 @@ def _read_tracking_gate(track_path: Path, out_dir: Path, min_retain: float) -> i
     report.to_csv(out_dir / "read_tracking_report.csv", sep=SEP)
 
     if failed:
-        print(f"READ-TRACKING GATE FAIL: {len(failed)} sample(s) below the threshold "
-              f"(min_retain={min_retain}): {', '.join(failed)}", file=sys.stderr)
-        return 3
+        print(f"WARNING: read tracking: {len(failed)} sample(s) below the threshold "
+              f"(min_retain={min_retain}), kept anyway: {', '.join(failed)}", file=sys.stderr)
     return 0
 
 
@@ -289,7 +288,7 @@ def main(argv=None) -> int:
         description="Convert DADA2 outputs (.Rdata files, a FASTA of the ASVs and metadata.csv) "
                     "into otter's input tables abundance.csv, taxa_info.csv and "
                     "environment_info.csv.",
-        epilog="Exit codes: 0 ok, 2 input error, 3 read-tracking gate failed.")
+        epilog="Exit codes: 0 ok, 2 input error.")
     p.add_argument("--in", dest="in_dir", required=True,
                    help="folder with the DADA2 outputs, e.g. the OUT_DIR of run_dada2.R; files are "
                         "recognized by content and extension, not by name")
@@ -299,8 +298,8 @@ def main(argv=None) -> int:
                    help="read-tracking .Rdata (default: recognized in --in; without it the "
                         "read-retention check is skipped)")
     p.add_argument("--min-retain", type=float, default=0.2,
-                   help="read-tracking gate: minimum nonchim/input fraction per sample "
-                        "(default 0.2)")
+                   help="read-tracking check: minimum nonchim/input fraction per sample; "
+                        "samples below it are reported, not removed (default 0.2)")
     args = p.parse_args(argv)
 
     in_dir = Path(args.in_dir)
