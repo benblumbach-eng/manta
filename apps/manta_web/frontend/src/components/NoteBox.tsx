@@ -148,13 +148,7 @@ export default function NoteBox({ value, savedAt, onSave, testid = "note", readO
 
   return (
     <section data-testid={testid}>
-      <h3 className="text-fg font-medium mb-1 flex items-center gap-2">
-        Note
-        <span data-testid={`${testid}-badge`}
-          className="text-xs font-normal uppercase tracking-wide text-warn border border-warn rounded px-1">
-          private to your account · your input, not a measurement
-        </span>
-      </h3>
+      <h3 className="text-fg font-medium mb-1">Note</h3>
       <textarea
         data-testid={`${testid}-input`}
         value={text}
