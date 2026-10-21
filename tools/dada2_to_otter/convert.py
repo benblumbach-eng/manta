@@ -183,10 +183,7 @@ def convert(in_dir: Path, out_dir: Path, track_path: Path, min_retain: float) ->
                                 if str(c).strip().lower() in ("sample", "date")})
 
     if track_path is None:
-        if "track" not in rollen:
-            raise InputError("the input folder lacks DADA2's read tracking (.Rdata with columns "
-                             f"{', '.join(TRACKSPALTEN)}); pass it with --track")
-        track_path = rollen["track"]
+        track_path = rollen.get("track")
 
     asvs = list(abund.index)
     if set(asvs) != set(taxa.index):
@@ -249,6 +246,10 @@ def convert(in_dir: Path, out_dir: Path, track_path: Path, min_retain: float) ->
     pd.DataFrame(id_rows, columns=["ordinal_id", "hash_id", "sequence"]).to_csv(
         out_dir / "id_map.csv", sep=SEP, index=False)
 
+    if track_path is None:
+        (out_dir / "read_tracking_report.csv").unlink(missing_ok=True)
+        print("  read tracking: not in the input - read-retention check skipped")
+        return 0
     rc = _read_tracking_gate(track_path, out_dir, min_retain)
     return rc
 
@@ -295,7 +296,8 @@ def main(argv=None) -> int:
     p.add_argument("--out", dest="out_dir", required=True,
                    help="folder for otter's input tables (created if missing)")
     p.add_argument("--track", dest="track", default=None,
-                   help="read-tracking .Rdata (default: recognized in --in)")
+                   help="read-tracking .Rdata (default: recognized in --in; without it the "
+                        "read-retention check is skipped)")
     p.add_argument("--min-retain", type=float, default=0.2,
                    help="read-tracking gate: minimum nonchim/input fraction per sample "
                         "(default 0.2)")

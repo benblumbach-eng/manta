@@ -148,6 +148,8 @@ STAGES_INGEST = ("ingest", POST_STAGE)
 TRAITS_SCRIPT = REPO / "tools" / "traits" / "annotate.py"
 ENV_LINKS_SCRIPT = REPO / "tools" / "env_links" / "compute.py"
 POST_STAGE_AT = 0.98
+NOTE_NO_READ_TRACKING = ("Read tracking not provided: the per-sample read-retention check "
+                         "was skipped.")
 NOTE_TRAITS_MISSING = ("No function annotation: run bash tools/traits/fetch_sources.sh — "
                        "imports after that are annotated.")
 DADA2_SCRIPT = CONVERT_DIR / "run_dada2.R"
@@ -303,6 +305,7 @@ def _run(job_id: str, rdata_dir: Path, dataset_id: str, run_id: str,
     entry_point = ("otter_output" if otter_out_dir is not None else
                    "otter_input" if tables_dir is not None else
                    "fastq" if fastq_dir is not None else "dada2_output")
+    notes: list[str] = []
     try:
         if otter_out_dir is not None:
             csv_dir = otter_out = otter_out_dir
@@ -321,6 +324,8 @@ def _run(job_id: str, rdata_dir: Path, dataset_id: str, run_id: str,
             _set(job_id, stage="convert", progress=round(_stage_base("convert"), 4), stage_detail="format conversion")
             _run_sub("convert", [str(CONVERT_DIR / ".venv/bin/python"), str(CONVERT_DIR / "convert.py"),
                                  "--in", str(rdata_dir), "--out", str(csv_dir)])
+            if not (csv_dir / "read_tracking_report.csv").exists():
+                notes.append(NOTE_NO_READ_TRACKING)
             if time_axis is None:
                 time_axis = ("dates" if echte_daten and not synthetic_dates(rdata_dir, csv_dir)
                              and _abundance_axis(csv_dir) == "dates" else "ordinal")
@@ -366,7 +371,7 @@ def _run(job_id: str, rdata_dir: Path, dataset_id: str, run_id: str,
         if zurueck is not None:
             zurueck()
 
-        notes = _post_stage(job_id, dataset_id)
+        notes += _post_stage(job_id, dataset_id)
         _set(job_id, status="done", stage="done", progress=1.0, notes=notes)
     except Exception as e:
         fehler = str(e)

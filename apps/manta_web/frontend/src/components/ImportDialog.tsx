@@ -60,13 +60,15 @@ const SOURCE_DETAIL: Record<Source, React.ReactNode> = {
   dada2: <>
     <p><strong>Either</strong> the DADA2 artefacts: raw ASV × sample count matrix
     (RawAbundanceMat), taxonomic assignments (assignTaxonomy), representative ASV sequences
-    (FASTA), read tracking across the pipeline steps (input … nonchim), and sample metadata
-    (sample;date;environment…).</p>
+    (FASTA), sample metadata (sample;date;environment…) and, optionally, read tracking across
+    the pipeline steps (input … nonchim) — if present, MANTA checks that each sample kept enough
+    of its reads.</p>
     <p><strong>Or</strong> the three otter tables: abundance (sampling date × ASV read counts),
     taxa_info (ASV; Kingdom…Species), environment_info (date-indexed environmental variables; may
     hold dates only). An optional id_map.csv attaches the representative ASV sequences. No read
     tracking is required for them — it does not exist for external tables and is not fabricated.</p>
-    <p>Processing: for the artefacts, format conversion with read-retention QC first; then, for
+    <p>Processing: for the artefacts, format conversion first (with read-retention QC if read
+    tracking is present); then, for
     both, the otter community network analysis (Co-Occurrence network, Louvain clustering,
     Convergent Cross Mapping), then graph ingest.</p>
   </>,
@@ -181,7 +183,7 @@ export default function ImportDialog({ onClose, onStarted }:
   const has = (n: string) => files.some((f) => f.name === n);
   const dada2Missing = [
     files.filter((f) => RDATA.test(f.name)).length >= 2 ? ""
-      : "at least two .Rdata (abundance matrix and taxonomy; read tracking as well)",
+      : "at least two .Rdata (abundance matrix and taxonomy; read tracking optional)",
     files.some((f) => FASTA.test(f.name)) ? "" : "a FASTA with the ASV sequences",
     files.some((f) => CSVNAME.test(f.name)) ? "" : "a .csv with the columns sample and date",
   ].filter(Boolean);
@@ -374,8 +376,8 @@ export default function ImportDialog({ onClose, onStarted }:
         <Field label={source === "fastq" ? "FASTQ files (paired _R1_/_R2_)"
             : source === "dada2" ? "DADA2 output — .Rdata files, a FASTA and a sample/date .csv, or 3 tables"
             : "OTTER output — network tables + abundance/environment (manta_manifest.json recommended)"}
-          tip={source === "dada2" ? <p>The .Rdata files (abundance matrix, taxonomy, read
-            tracking), a FASTA with the ASV sequences and a .csv with sample and date; the file
+          tip={source === "dada2" ? <p>The .Rdata files (abundance matrix, taxonomy,
+            optionally read tracking), a FASTA with the ASV sequences and a .csv with sample and date; the file
             names do not matter. Or the 3 tables abundance.csv, taxa_info.csv and
             environment_info.csv (id_map.csv optional).</p> : undefined}>
           <input data-testid="import-files" type="file" multiple className={input + " file:mr-2 file:text-xs"}

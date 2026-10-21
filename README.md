@@ -312,7 +312,7 @@ Open **Import a dataset** and choose what you have. A dataset needs at least 8 s
 | In the dialog | Files | MANTA then runs |
 |---|---|---|
 | Raw reads (FASTQ) | paired, gzipped files named `<sample>_S<n>_L001_R1_001.fastq.gz` and `…_R2_001.fastq.gz`; optionally a `metadata.csv` with the real sampling dates | DADA2 → OTTER → database |
-| DADA2 output (ASVs) | the `.Rdata` files (abundance matrix, taxonomy, read tracking), a FASTA of the ASVs and a `metadata.csv` — MANTA recognizes the files by content, so only the extensions (`.Rdata`, `.fa`/`.fasta`, `.csv`) matter; or the three tables `abundance.csv`, `taxa_info.csv`, `environment_info.csv` | OTTER → database |
+| DADA2 output (ASVs) | the `.Rdata` files (abundance matrix, taxonomy and, optionally, read tracking — if present, MANTA checks that each sample kept enough of its reads), a FASTA of the ASVs and a `metadata.csv` — MANTA recognizes the files by content, so only the extensions (`.Rdata`, `.fa`/`.fasta`, `.csv`) matter; or the three tables `abundance.csv`, `taxa_info.csv`, `environment_info.csv` | OTTER → database |
 | OTTER output (network) | OTTER's network tables with `abundance.csv` and `environment_info.csv` (and the run's `manta_manifest.json`, if there is one) | database only |
 
 `metadata.csv` is `;`-separated with the columns `sample` and `date` (`YYYY-MM-DD`); further
