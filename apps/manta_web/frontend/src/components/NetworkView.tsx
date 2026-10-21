@@ -991,13 +991,11 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         onClearKind={(k) => setFilters((f) => clearKind(f, k))}
         onClearAll={() => setFilters(emptyFilters())}
         order={order} chipCounts={chipCounts} unknownAsvIds={unknownAsvIds}
-        counts={drawnCounts}
         taxaMode={taxaMode} onTaxaMode={setTaxaMode} taxaLayers={taxaLayers}
         linkLength={linkLen} linkLengthDefault={LINK_LENGTH_DEFAULT}
         onLinkLength={(v) => { roam.current = null; setLinkLen(v); }}
         colorMode={colorMode} onColorMode={setColorMode} functionClasses={functionClasses}
         sizeAbsent={sizePresent === false}
-        countsState={net ? "ready" : err != null ? "error" : "loading"}
         views={{ anyViewOpen: anyViewOpen || selectedCluster != null || openAsvId != null,
                  onShowNet: () => { onShowNet(); setSelectedCluster(null); setLegendeOffen(false); },
                  items: viewItems }}
@@ -1006,7 +1004,6 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         onPickTaxon={(rank, value) => setSel({ kind: "taxon", rank, value })}
         onPickCluster={(label) => setSel({ kind: "cluster", label })}
         onOpenClusterPanel={(label) => setSelectedCluster(label)}
-        reloadKey={reloadKey}
       />
 
       <div className="flex-1 relative" data-testid="network-canvas" data-layout-hash={layoutHash}

@@ -3,7 +3,6 @@ import { getStarred, type Capabilities, type Criterion2Summary, type Dataset,
          type Network, type NetNode, type Thresholds } from "../api";
 import DataAvailability from "./DataAvailability";
 import { useModules } from "../modules";
-import ProvenanceFooter from "./ProvenanceFooter";
 import { fmtRun, fmtUtc } from "../format";
 import { isActive, type Filters, type FilterKind, layerLabel, layersDefault, functionLabel } from "../networkFilters";
 import { FUNCTION_NONE, functionOther } from "../clusterPalette";
@@ -42,8 +41,6 @@ export type SidebarProps = {
   order: FilterKind[];
   chipCounts: Map<FilterKind, number>;
   unknownAsvIds: string[];
-  counts: { nodes: number; edges: number; cross: number; ccm: number; rejected?: number;
-            c2?: number };
   taxaMode: boolean;
   onTaxaMode: (v: boolean) => void;
   linkLength: number;
@@ -56,7 +53,6 @@ export type SidebarProps = {
                 n_con_with_ccm: number; n_asv_ccm: number;
                 n_con_with_rejected: number; n_asv_rejected: number } | null;
   sizeAbsent: boolean;
-  countsState?: "loading" | "error" | "ready";
   views: { anyViewOpen: boolean; onShowNet: () => void; items: ViewItem[] };
   onPickAsv: (id: string) => void;
   onOpenAsv: (id: string) => void;
@@ -64,7 +60,6 @@ export type SidebarProps = {
   onPickCluster: (label: number) => void;
   onOpenClusterPanel: (label: number) => void;
   nSamples: number;
-  reloadKey?: number;
 };
 
 const PRESENCE_START = 5;
@@ -866,36 +861,6 @@ export default function NetworkSidebar(p: SidebarProps) {
             </div>
           )}
         </div>
-      </div>
-
-      <div className="mt-auto space-y-2">
-        <div className="text-2xs leading-snug">
-          {(p.countsState ?? "ready") !== "ready" ? (
-            <div className="mt-1 text-fg-muted tabular-nums" data-testid="legend-counts">
-              <span data-testid="counts-pending">
-                {p.countsState === "error" ? "— (network not loaded)" : "loading …"}
-              </span>
-            </div>
-          ) : (
-          <div className="mt-1 text-fg-muted tabular-nums" data-testid="legend-counts">
-            <span data-testid="node-count">{p.counts.nodes}</span>{" "}
-            {p.taxaMode ? "taxa" : "ASVs"} ·{" "}
-            <span data-testid="edge-count">{p.counts.edges}</span> edges ·{" "}
-            <span data-testid="ccm-count" className="text-accent">{p.counts.ccm}</span> with CCM ·{" "}
-            {p.counts.rejected != null && net?.layers?.ccm_tested_recorded && (
-              <><span data-testid="rejected-count">{p.counts.rejected}</span> with a rejected direction ·{" "}</>
-            )}
-            <span data-testid="cross-count" className="text-warn">{p.counts.cross}</span> crossing modules
-            {c2 && !p.taxaMode && (() => {
-              const n = p.counts.c2 ?? c2.n_pass;
-              return <> · <span data-testid="c2-count">{n}</span> hubs
-                {n !== c2.n_pass && <span data-testid="c2-count-total"> (of {c2.n_pass} in the network)</span>}</>;
-            })()}
-          </div>
-          )}
-        </div>
-
-        <ProvenanceFooter datasetId={dataset.dataset_id} refreshKey={p.reloadKey} />
       </div>
     </aside>
   );

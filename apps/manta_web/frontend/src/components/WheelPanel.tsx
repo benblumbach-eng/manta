@@ -485,47 +485,7 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
       )}
 
       {w && (
-        <div className="p-4 pt-2 space-y-2 text-sm border-t border-line-subtle" data-testid="wheel-pairs">
-          <h3 className="text-fg font-medium flex items-center">
-            Transitions between communities
-
-          </h3>
-          {w.pairs.length === 0 ? (
-            <p className="text-xs text-fg-muted" data-testid="wheel-pairs-empty">
-              No link crosses a cluster border — the clusters are unconnected parts.
-            </p>
-          ) : (
-            <div className="space-y-1">
-              {w.pairs.map((p) => (
-                <div key={`${p.ca}-${p.cb}`} data-testid={`wheel-pair-${p.ca}-${p.cb}`}
-                  className="flex items-center gap-2 px-2 py-1 rounded bg-surface/40">
-                  <span className="inline-block w-3 h-3 rounded-sm shrink-0"
-                        style={{ background: modules.color(p.ca) }} />
-                  <button className="text-fg hover:underline shrink-0"
-                          onClick={() => onOpenCluster(p.ca)}>{modules.label(p.ca)}</button>
-                  <span className="text-fg-muted shrink-0">↔</span>
-                  <span className="inline-block w-3 h-3 rounded-sm shrink-0"
-                        style={{ background: modules.color(p.cb) }} />
-                  <button className="text-fg hover:underline shrink-0"
-                          onClick={() => onOpenCluster(p.cb)}>{modules.label(p.cb)}</button>
-                  <span className="text-xs text-fg-muted flex-1 text-right tabular-nums">
-                    {p.n_con} link{p.n_con === 1 ? "" : "s"} · {p.n_with_ccm} with direction
-                    {p.mean_nmi != null && <> · mean NMI {p.mean_nmi.toFixed(2)}</>}
-                  </span>
-                  {p.n_with_ccm === 0 && (
-                    <span className="text-xs text-warn shrink-0"
-                          data-testid="wheel-pair-reset">
-                      no measurable direction
-                    </span>
-                  )}
-                </div>
-              ))}
-              <p className="text-2xs text-fg-muted">
-                Links are co-occurrences (similar temporal pattern, not interaction); a direction
-                is a pruned CCM annotation. Pairs sorted by how strongly they are connected.
-              </p>
-            </div>
-          )}
+        <div className="p-4 pt-2 text-sm border-t border-line-subtle">
           <ProvenanceFooter datasetId={datasetId} />
         </div>
       )}
