@@ -3,8 +3,8 @@
 (tools/otter_runner/run_otter.py) and once with OTTER's own terminal entry
 (run_on_terminal_main.main), and compare the tables cell by cell.
 
-Run with OTTER's venv, from the MANTA clone:
-  submodules/otter/.venv/bin/python tools/checks/vergleiche_mit_otter.py --ordner ~/otter_sicherung
+Run with OTTER's venv:
+  ~/manta/submodules/otter/.venv/bin/python vergleiche_mit_otter.py --ordner ~/otter_sicherung
 """
 from __future__ import annotations
 
@@ -17,13 +17,11 @@ from pathlib import Path
 
 import pandas as pd
 
-REPO = Path(__file__).resolve().parents[2]
-OTTER = REPO / "submodules" / "otter"
 TOL = 1e-9
 
 
-def tabelle(ordner: Path, muster: str) -> pd.DataFrame:
-    treffer = sorted(ordner.glob(muster))
+def tabelle(ordner: Path, muster: str, ohne: tuple[str, ...] = ()) -> pd.DataFrame:
+    treffer = sorted(f for f in ordner.glob(muster) if not any(x in f.name for x in ohne))
     if len(treffer) != 1:
         raise SystemExit(f"{muster}: {len(treffer)} Dateien in {ordner} gefunden, erwartet 1")
     return pd.read_csv(treffer[0], sep=";")
@@ -51,11 +49,29 @@ def vergleiche(name: str, a: pd.DataFrame, b: pd.DataFrame, schluessel: list[str
     return ok
 
 
+def vergleiche_module(a: pd.DataFrame, b: pd.DataFrame) -> bool:
+    # Module numbers are arbitrary; the two entry points number the same modules differently.
+    gruppen = lambda t: {frozenset(g["Nodes"]) for _, g in t.groupby("LouvainLabelD")}
+    ga, gb = gruppen(a), gruppen(b)
+    ok = ga == gb
+    print(f"  {'✓ stimmt     ' if ok else '✗ WEICHT AB  '} Module (Louvain): {len(ga)} über MANTA, {len(gb)} mit "
+          f"OTTER allein, {'dieselben ASVs in denselben Modulen' if ok else 'andere Aufteilung der ASVs'} "
+          f"(die Modulnummern selbst dürfen sich unterscheiden)")
+    if not ok:
+        for g in list(ga - gb)[:5]:
+            print(f"                nur über MANTA: Modul mit {sorted(g)[:6]}")
+    return ok
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Rechnet einen Ausschnitt über MANTA und mit OTTER allein und vergleicht.")
     ap.add_argument("--ordner", required=True, type=Path, help="gesicherter Arbeitsordner mit csv/ und otter/")
     ap.add_argument("--asvs", type=int, default=200, help="so viele ASVs (die ersten der Tabelle) rechnen (Standard: %(default)s)")
+    ap.add_argument("--manta", type=Path, default=Path.home() / "manta",
+                    help="MANTA-Ordner mit submodules/otter (Standard: %(default)s)")
     a = ap.parse_args()
+    REPO = a.manta.expanduser().resolve()
+    OTTER = REPO / "submodules" / "otter"
     ordner = a.ordner.expanduser()
     p = json.loads((ordner / "otter" / "manta_manifest.json").read_text(encoding="utf-8")).get("params", {})
     perm, samp = int(p.get("num_permutations", 999)), int(p.get("num_samples", 10))
@@ -102,13 +118,12 @@ def main() -> int:
         vergleiche("Gemeinsam-Verbindungen (CON)", tabelle(m, "*_Pearson_FFT__complete_network_table_0*"),
                    tabelle(o, "*_Pearson_FFT__complete_network_table_0*"), ["from", "to"],
                    ["corr", "p-value", "p-value_adj_fdr_bh"]),
-        vergleiche("Module (Louvain)", tabelle(m, "*_Louvain_*_meta_*"), tabelle(o, "*_Louvain_*_meta_*"),
-                   ["Nodes"], ["LouvainLabelD"]),
+        vergleiche_module(tabelle(m, "*_Louvain_*_meta_*"), tabelle(o, "*_Louvain_*_meta_*")),
         vergleiche("Einfluss-Stärke aller ASV-Paare (CCM, alle Richtungen)",
                    tabelle(m, "*_NMI__complete_network_table_0*[!a].csv"),
                    tabelle(o, "*_NMI__complete_network_table_0*[!a].csv"), ["from", "to"], ["corr"]),
-        vergleiche("Einfluss-Richtungen auf den Verbindungen (CCM)", tabelle(m, "*_[0-9]_CCM_CON_MAP_Network.csv"),
-                   tabelle(o, "*_[0-9]_CCM_CON_MAP_Network.csv"), ["from", "to"], ["corr"]),
+        vergleiche("Einfluss-Richtungen auf den Verbindungen (CCM)", tabelle(m, "*_CCM_CON_MAP_Network.csv", ("_PV_", "_Pruned_")),
+                   tabelle(o, "*_CCM_CON_MAP_Network.csv", ("_PV_", "_Pruned_")), ["from", "to"], ["corr"]),
         vergleiche("p-Werte aller getesteten Richtungen", tabelle(m, "*_PV_CCM_CON_MAP_Network.csv"),
                    tabelle(o, "*_PV_CCM_CON_MAP_Network.csv"), ["from", "to"], ["corr", "p-value"]),
         vergleiche("Richtungen, die den Test bestanden haben", tabelle(m, "*_Pruned_CCM_CON_MAP_Network.csv"),
