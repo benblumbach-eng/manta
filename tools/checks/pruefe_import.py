@@ -219,7 +219,9 @@ def pruefe_datenbank(session, d: str, dateien: dict):
                      ((k, v, db_zellen[k]) for k, v in zellen.items() if k in db_zellen))
 
     taxa = lies_taxa(dateien["taxa"])
-    db_gattung = {r["a"]: r["g"] for r in q("MATCH (a:ASV {dataset_id:$d}) RETURN a.id AS a, a.genus AS g")}
+    # OTTER fills a missing rank with "Environment_Condition"; MANTA reads it as "no genus".
+    db_gattung = {r["a"]: (None if r["g"] == "Environment_Condition" else r["g"])
+                  for r in q("MATCH (a:ASV {dataset_id:$d}) RETURN a.id AS a, a.genus AS g")}
     falsch = [f"{a}: Tabelle {g!r}, Datenbank {db_gattung.get(a)!r}"
               for a, g in taxa.items() if a in db_gattung and g != db_gattung[a]]
     melde("Gattung jeder ASV", not falsch, beispiele(falsch) if falsch else "")
