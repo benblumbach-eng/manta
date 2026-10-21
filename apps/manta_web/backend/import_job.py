@@ -154,6 +154,7 @@ NOTE_NO_READ_TRACKING = ("Read tracking not provided: the per-sample read-retent
 NOTE_TRAITS_MISSING = ("No function annotation: run bash tools/traits/fetch_sources.sh — "
                        "imports after that are annotated.")
 DADA2_SCRIPT = CONVERT_DIR / "run_dada2.R"
+OTTER_BACKUP = Path.home() / "otter_sicherung"
 
 _jobs: dict[str, dict] = {}
 _lock = threading.Lock()
@@ -318,7 +319,8 @@ def _run(job_id: str, rdata_dir: Path, dataset_id: str, run_id: str,
          time_axis: str | None = None, thresholds: dict | None = None,
          tables_dir: Path | None = None, otter_out_dir: Path | None = None,
          source_doi: str | None = None, citation: str | None = None,
-         replace_wipe: "Callable[[], Callable[[], None] | None] | None" = None) -> None:
+         replace_wipe: "Callable[[], Callable[[], None] | None] | None" = None,
+         keep_otter: bool = False) -> None:
     work = Path(tempfile.mkdtemp(prefix=f"manta_import_{job_id}_"))
     alt_geloescht = False
     csv_dir, otter_out = work / "csv", work / "otter"
@@ -378,6 +380,11 @@ def _run(job_id: str, rdata_dir: Path, dataset_id: str, run_id: str,
                      on_line=_otter_progress_cb(job_id, _stage_base("otter"),
                                                 gewicht.get("otter", 1) / summe,
                                                 _otter_spans(csv_dir, thresholds)))
+            if keep_otter:
+                ziel = OTTER_BACKUP / f"{dataset_id}_{datetime.datetime.now():%Y-%m-%d_%H%M%S}"
+                shutil.copytree(csv_dir, ziel / "input")
+                shutil.copytree(otter_out, ziel / "otter")
+                notes.append(f"OTTER input and output saved to {ziel}")
 
         _set(job_id, stage="ingest", progress=round(_stage_base("ingest"), 4),
              stage_detail="loading the graph")
@@ -612,7 +619,8 @@ def start_import(dataset_id: str, marker: str = "18S",
                  tables_dir: Path | None = None, otter_out_dir: Path | None = None,
                  source_doi: str | None = None, citation: str | None = None,
                  reserved: bool = False,
-                 replace_wipe: "Callable[[], Callable[[], None] | None] | None" = None) -> str:
+                 replace_wipe: "Callable[[], Callable[[], None] | None] | None" = None,
+                 keep_otter: bool = False) -> str:
     rdata_dir = (Path(rdata_dir) if rdata_dir
                  else (None if (fastq_dir or tables_dir or otter_out_dir) else FIXTURE))
     if rdata_dir == FIXTURE and not ensure_fixture():
@@ -633,5 +641,5 @@ def start_import(dataset_id: str, marker: str = "18S",
                          "started_at": time.time(), "stage_started_at": time.time()}
     args = (job_id, rdata_dir, dataset_id, run_id, marker, region, station, lat, lon,
             fastq_dir, dada2_env, time_axis, thresholds, tables_dir, otter_out_dir,
-            source_doi, citation, replace_wipe)
+            source_doi, citation, replace_wipe, keep_otter)
     return _start(_run, args, job_id, dataset_id, reserved, background)

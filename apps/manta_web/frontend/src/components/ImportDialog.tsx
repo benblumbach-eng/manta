@@ -172,6 +172,7 @@ export default function ImportDialog({ onClose, onStarted }:
   const [showThresholds, setShowThresholds] = useState(false);
   const [showMap, setShowMap] = useState(false);
   const [thr, setThr] = useState<ThresholdInput>(DEFAULT_THRESHOLDS);
+  const [keepOtter, setKeepOtter] = useState(false);
 
   const [tools, setTools] = useState<ImportTools | null>(null);
 
@@ -211,10 +212,11 @@ export default function ImportDialog({ onClose, onStarted }:
       const res = source === "fastq"
         ? await uploadFastq(files, datasetId, opts.region,
             { metadata, station: opts.station, lat: opts.lat, lon: opts.lon, marker,
-              thresholds: thr })
+              thresholds: thr, keep_otter: keepOtter })
         : await uploadImport(files, datasetId, opts.region,
             { station: opts.station, lat: opts.lat, lon: opts.lon, marker,
-              thresholds: source === "otterout" ? undefined : thr });
+              thresholds: source === "otterout" ? undefined : thr,
+              keep_otter: source === "otterout" ? undefined : keepOtter });
       onStarted(res.job_id);
     } catch (e) {
       setErr(String(e instanceof Error ? e.message : e));
@@ -373,6 +375,13 @@ export default function ImportDialog({ onClose, onStarted }:
               </div>
             )}
           </fieldset>
+        )}
+
+        {source !== "otterout" && (
+          <label className="flex items-center gap-2 text-xs" data-testid="import-keep-otter">
+            <input type="checkbox" checked={keepOtter} onChange={(e) => setKeepOtter(e.target.checked)} />
+            Keep a copy of OTTER&rsquo;s input and output in ~/otter_sicherung on the server
+          </label>
         )}
 
         <Field label={source === "fastq" ? "FASTQ files (paired _R1_/_R2_)"
