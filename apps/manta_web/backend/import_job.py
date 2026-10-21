@@ -381,9 +381,15 @@ def _run(job_id: str, rdata_dir: Path, dataset_id: str, run_id: str,
                                                 gewicht.get("otter", 1) / summe,
                                                 _otter_spans(csv_dir, thresholds)))
             if keep_otter:
-                ziel = OTTER_BACKUP / f"{dataset_id}_{datetime.datetime.now():%Y-%m-%d_%H%M%S}"
+                jetzt = datetime.datetime.now()
+                ziel = OTTER_BACKUP / dataset_id / f"{jetzt:%Y-%m-%d_%H%M%S}"
                 shutil.copytree(csv_dir, ziel / "input")
                 shutil.copytree(otter_out, ziel / "otter")
+                (ziel / "info.json").write_text(json.dumps({
+                    "dataset_id": dataset_id, "region": region, "marker": marker,
+                    "saved_at": jetzt.isoformat(timespec="seconds"), "entry_point": entry_point,
+                    "run_id": run_id, "thresholds": thresholds or "OTTER defaults"},
+                    indent=2), encoding="utf-8")
                 notes.append(f"OTTER input and output saved to {ziel}")
 
         _set(job_id, stage="ingest", progress=round(_stage_base("ingest"), 4),
