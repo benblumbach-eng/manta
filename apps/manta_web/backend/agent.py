@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -12,9 +13,12 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "manta_mcp"))
 
+import befunde
 import begriffe
+import frage_arten
 import grounding
 import registry
+import verstehen
 
 
 def _wert(name: str, default: str = "") -> str:
@@ -229,13 +233,16 @@ _log = logging.getLogger("manta.agent")
 
 def _chat_remote(messages: list[dict], tools: list[dict] | None, model: str,
                  timeout: float, base_url: str | None = None,
-                 api_key: str | None = None, own_key: bool = False) -> dict:
+                 api_key: str | None = None, own_key: bool = False,
+                 temperature: float | None = None) -> dict:
     base_url = (base_url or remote_base_url()).rstrip("/")
     api_key = api_key or remote_api_key()
     payload: dict = {"model": model, "messages": messages}
     if tools:
         payload["tools"] = tools
-    if OLLAMA_TEMPERATURE is not None:
+    if temperature is not None:
+        payload["temperature"] = temperature
+    elif OLLAMA_TEMPERATURE is not None:
         payload["temperature"] = float(OLLAMA_TEMPERATURE)
     try:
         r = httpx.post(f"{base_url}/chat/completions", json=payload,
@@ -284,20 +291,28 @@ def _chat_remote(messages: list[dict], tools: list[dict] | None, model: str,
                         "tool_calls": m.get("tool_calls") or []}}
 
 
+# fmt: a JSON schema the local model's output is forced into (Ollama `format`). Remote
+# providers get no schema; the prompt asks for the JSON and the caller validates it.
 def _chat(messages: list[dict], tools: list[dict] | None = None, timeout: float = 180.0,
-          model: str | None = None, provider: SessionProvider | None = None) -> dict:
+          model: str | None = None, provider: SessionProvider | None = None,
+          fmt: dict | None = None, temperature: float | None = None) -> dict:
     if provider is not None:
         return _chat_remote(messages, tools, provider.model, remote_timeout(),
-                            base_url=provider.base_url, api_key=provider.api_key, own_key=True)
+                            base_url=provider.base_url, api_key=provider.api_key, own_key=True,
+                            temperature=temperature)
     model = model or default_model()
     if is_remote(model):
-        return _chat_remote(messages, tools, model, remote_timeout())
+        return _chat_remote(messages, tools, model, remote_timeout(), temperature=temperature)
     options: dict = {"num_ctx": OLLAMA_NUM_CTX}
-    if OLLAMA_TEMPERATURE is not None:
+    if temperature is not None:
+        options["temperature"] = temperature
+    elif OLLAMA_TEMPERATURE is not None:
         options["temperature"] = float(OLLAMA_TEMPERATURE)
     payload = {"model": model, "messages": messages, "stream": False, "options": options}
     if tools:
         payload["tools"] = tools
+    if fmt:
+        payload["format"] = fmt
     try:
         r = httpx.post(f"{ollama_url()}/api/chat", json=payload, timeout=timeout)
     except httpx.TimeoutException as e:
@@ -685,19 +700,224 @@ def _recap(history: list[dict] | None) -> str:
     return "\n\n".join(teile)
 
 
-GROUNDING_ACTIONS = ("not checked", "clean", "correction requested", "marked", "refused")
+FORMULATE_PROMPT = """You are MANTA's analysis assistant and write for a marine ecologist. You get
+a question and a numbered list of findings that MANTA computed from the data. Answer the question
+from these findings only.
+
+- Open with the finding that answers the question. Two to five sentences, in English.
+- After every sentence put the findings it rests on in square brackets, like [F1] or [F2, F3].
+- Use only numbers and names that stand in the findings you cite. Add nothing of your own: no
+  numbers, no taxa, no causes, no ecological roles.
+- A finding marked "caveat" says what the data do not show; mention it in one sentence where it
+  matters.
+- Do not say which tools ran and do not close with a question."""
+
+SMALL_MODEL_BELOW_B = 7.0
+
+
+def _parameter_b(model: str) -> float | None:
+    try:
+        eintrag = next((m for m in list_models() if m["name"] == model), None)
+    except Exception:
+        return None
+    text = ((eintrag or {}).get("parameter_size") or "").strip().upper()
+    try:
+        return float(text[:-1]) / (1000 if text.endswith("M") else 1) if text else None
+    except ValueError:
+        return None
+
+
+def _small_local(model: str, provider: SessionProvider | None) -> bool:
+    if provider is not None or is_remote(model):
+        return False
+    b = _parameter_b(model)
+    return b is not None and b < SMALL_MODEL_BELOW_B
+
+
+def _kinds_text() -> str:
+    return "\n".join(f"- {frage_arten.beispiel(a)}" for a in frage_arten.GEPLANT)
+
+
+def _befund_zeilen(liste: list[dict]) -> str:
+    return "\n".join(f"{b['id']}{' (caveat)' if b['art'] == 'vorbehalt' else ''}: {b['text']}"
+                     for b in liste)
+
+
+def _als_liste(liste: list[dict]) -> str:
+    zeilen = [f"- {b['text']} [{b['id']}]" for b in liste if b["art"] != "vorbehalt"]
+    zeilen += [f"- Caveat: {b['text']} [{b['id']}]" for b in liste if b["art"] == "vorbehalt"]
+    return "\n".join(zeilen)
+
+
+def _run_planned(question: str, art: str, formular: dict, model: str,
+                 provider: SessionProvider | None, notiere, schritte: int) -> dict:
+    evidence: list[dict] = []
+    ergebnisse: dict[str, dict] = {}
+    for name, args in frage_arten.plan(art, formular):
+        t1 = time.time()
+        result = registry.call(name, args)
+        evidence.append({"tool": name, "arguments": args, "provenance": result.get("provenance"),
+                         "error": result.get("error")})
+        notiere("tool", step=schritte, name=name, arguments=args, dataset_id_from_context=True,
+                duration_ms=round((time.time() - t1) * 1000), error=result.get("error"),
+                output=result, shortened_for_model=False, model_saw=None)
+        if result.get("error"):
+            return {"answer": f"The query did not run, so there is no answer: {result['error']}",
+                    "evidence": evidence, "model": model, "steps": schritte, "ungrounded": [],
+                    "grounding": grounding.mode(), "corrected": False,
+                    "own_key": provider is not None, "question_kind": art, "findings": [],
+                    "check": "failed"}
+        ergebnisse[name] = result
+    liste = befunde.erzeuge(art, ergebnisse)
+    notiere("findings", step=schritte, question_kind=art, findings=liste)
+    if not liste:
+        return {"answer": "The data hold nothing to say on this question.", "evidence": evidence,
+                "model": model, "steps": schritte, "ungrounded": [], "grounding": grounding.mode(),
+                "corrected": False, "own_key": provider is not None, "question_kind": art,
+                "findings": [], "check": "listed"}
+
+    messages = [{"role": "system", "content": FORMULATE_PROMPT},
+                {"role": "user", "content": f"Question: {question}\n\nFindings:\n"
+                                            f"{_befund_zeilen(liste)}"}]
+    korrigiert = False
+    modus = grounding.mode()
+    while True:
+        schritte += 1
+        t0 = time.time()
+        msg = _chat(messages, model=model, provider=provider).get("message", {}) or {}
+        answer = (msg.get("content") or "").strip()
+        notiere("model", step=schritte, duration_ms=round((time.time() - t0) * 1000),
+                content=answer, tool_calls=[])
+        probleme = [] if modus == "off" else grounding.check_cited(answer, liste, question)
+        if not answer:
+            probleme = ["empty answer"]
+        if not probleme:
+            notiere("grounding", step=schritte, mode=modus, checked=modus != "off", numbers=[],
+                    action="not checked" if modus == "off" else "cited")
+            check = "off" if modus == "off" else "cited"
+            break
+        if not korrigiert:
+            korrigiert = True
+            notiz = ("Internal note, not a message from the user: these parts do not match the "
+                     "findings they cite — " + "; ".join(probleme) + ". Write the answer again "
+                     "from the findings only, with the brackets after every sentence.")
+            notiere("grounding", step=schritte, mode=modus, checked=True, numbers=probleme,
+                    action="correction requested", draft=answer, note=notiz)
+            messages += [{"role": "assistant", "content": answer},
+                         {"role": "user", "content": notiz}]
+            continue
+        notiere("grounding", step=schritte, mode=modus, checked=True, numbers=probleme,
+                action="listed", draft=answer)
+        answer, check = _als_liste(liste), "listed"
+        break
+    return {"answer": answer, "evidence": evidence, "model": model, "steps": schritte,
+            "ungrounded": [], "grounding": modus, "corrected": korrigiert,
+            "own_key": provider is not None, "question_kind": art, "findings": liste,
+            "check": check}
+
+
+_TEXT_CALL = re.compile(r"\{.*\}", re.S)
+_TOOL_NAMES = {spec["name"] for spec in registry.TOOL_SPECS}
+
+
+def _call_from_text(content: str) -> dict | None:
+    m = _TEXT_CALL.search(content or "")
+    if not m:
+        return None
+    try:
+        obj = json.loads(m.group())
+    except ValueError:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    name, args = obj.get("name"), obj.get("arguments", obj.get("parameters", {}))
+    if name not in _TOOL_NAMES or not isinstance(args, dict):
+        return None
+    return {"name": name, "arguments": args}
+
+
+def _synthetic_call(name: str, args: dict, remote: bool, n: int) -> dict:
+    if remote:
+        return {"id": f"manta_{n}", "type": "function",
+                "function": {"name": name, "arguments": json.dumps(args)}}
+    return {"function": {"name": name, "arguments": dict(args)}}
+
+
+def _suggested_args(name: str, dataset_id: str | None, asv_id: str | None,
+                    cluster: int | None) -> dict | None:
+    needs = (registry.QUESTIONS.get(name) or (None, None))[0]
+    args: dict = {}
+    if dataset_id and "dataset_id" in _tool_params(name):
+        args["dataset_id"] = dataset_id
+    if needs == "dataset" and not dataset_id:
+        return None
+    if needs == "asv":
+        if not (dataset_id and asv_id):
+            return None
+        args["asv_id"] = asv_id
+    if needs == "cluster":
+        if not (dataset_id and cluster is not None):
+            return None
+        args["cluster"] = cluster
+    return args
+
+
+GROUNDING_ACTIONS = ("not checked", "clean", "correction requested", "marked", "refused",
+                     "cited", "listed")
 
 
 def run(question: str, dataset_id: str | None = None, model: str | None = None,
         asv_id: str | None = None, cluster: int | None = None,
         provider: SessionProvider | None = None,
         history: list[dict] | None = None, concept: str | None = None,
-        trace: list[dict] | None = None) -> dict:
+        trace: list[dict] | None = None, question_kind: str | None = None) -> dict:
     def notiere(kind: str, **felder) -> None:
         if trace is not None:
             trace.append({"kind": kind, "at": time.time(), **felder})
 
     model = provider.model if provider is not None else (model or default_model())
+
+    art = question_kind if question_kind in registry.QUESTIONS else None
+    art = art or frage_arten.aus_vorschlag(question)
+    schritte = 0
+    if art is None and dataset_id and not concept:
+        def formular_chat(msgs: list[dict], schema: dict) -> str:
+            nonlocal schritte
+            schritte += 1
+            t0 = time.time()
+            m = _chat(msgs, model=model, provider=provider, fmt=schema,
+                      temperature=0.0).get("message", {}) or {}
+            notiere("model", step=schritte, duration_ms=round((time.time() - t0) * 1000),
+                    content=m.get("content") or "", tool_calls=[])
+            return m.get("content") or ""
+        formular, _ = verstehen.verstehe(question, formular_chat)
+        notiere("understanding", step=schritte, question_kind=formular.frage_art,
+                rank=formular.rang)
+        art = formular.frage_art
+        rang = None if formular.rang == verstehen.KEIN_RANG else formular.rang
+    else:
+        rang = None
+        if art:
+            notiere("understanding", step=0, question_kind=art, rank=None,
+                    source="suggested question")
+    if frage_arten.ist_geplant(art) and dataset_id:
+        return _run_planned(question, art, {"datensatz": dataset_id, "rang": rang}, model,
+                            provider, notiere, schritte)
+    if art == frage_arten.ANDERE and _small_local(model, provider):
+        notiere("grounding", step=schritte, mode=grounding.mode(), checked=False, numbers=[],
+                action="not checked")
+        return {
+            "answer": (f"With the small local model {model} I can only answer these kinds of "
+                       f"question reliably:\n{_kinds_text()}\nPick one of the suggested "
+                       f"questions, or switch to a larger model for anything else."),
+            "evidence": [], "model": model, "steps": schritte, "ungrounded": [],
+            "grounding": grounding.mode(), "corrected": False, "own_key": provider is not None,
+            "question_kind": art, "findings": [], "check": "none"}
+    vorgegeben = None
+    if art in registry.QUESTIONS:
+        args = _suggested_args(art, dataset_id, asv_id, cluster)
+        if args is not None:
+            vorgegeben = [_synthetic_call(art, args, provider is not None or is_remote(model), 0)]
     bestaende = _known_datasets()
     faehigkeiten = _capabilities_block(dataset_id)
     system = (SYSTEM_PROMPT + meaning_block() + bestaende
@@ -728,9 +948,17 @@ def run(question: str, dataset_id: str | None = None, model: str | None = None,
 
     for _step in range(MAX_STEPS):
         t0 = time.time()
-        data = _chat(messages, tools=registry.openai_tools(), model=model, provider=provider)
-        msg = data.get("message", {}) or {}
-        calls = msg.get("tool_calls") or []
+        if vorgegeben is not None:
+            msg, calls, vorgegeben = {"role": "assistant", "content": ""}, vorgegeben, None
+        else:
+            data = _chat(messages, tools=registry.openai_tools(), model=model, provider=provider)
+            msg = data.get("message", {}) or {}
+            calls = msg.get("tool_calls") or []
+            if not calls:
+                aus_text = _call_from_text(msg.get("content") or "")
+                if aus_text is not None:
+                    calls = [_synthetic_call(aus_text["name"], aus_text["arguments"],
+                                             provider is not None or is_remote(model), _step + 1)]
         verlangt = []
         for c in calls:
             if isinstance(c, dict):
@@ -782,6 +1010,9 @@ def run(question: str, dataset_id: str | None = None, model: str | None = None,
                 "grounding": grounding.mode(),
                 "corrected": korrigiert,
                 "own_key": provider is not None,
+                "question_kind": art,
+                "findings": [],
+                "check": "numbers",
             }
 
         messages.append({"role": "assistant", "content": msg.get("content", ""), "tool_calls": calls})
@@ -833,4 +1064,7 @@ def run(question: str, dataset_id: str | None = None, model: str | None = None,
         "grounding": grounding.mode(),
         "corrected": korrigiert,
         "own_key": provider is not None,
+        "question_kind": art,
+        "findings": [],
+        "check": "numbers",
     }

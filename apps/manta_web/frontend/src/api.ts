@@ -855,8 +855,10 @@ export type AgentStatus = {
 };
 export type AgentContext = {
   dataset_id?: string; asv_id?: string; cluster?: number | null;
-  concept?: string;
+  concept?: string; question_kind?: string;
 };
+export type Finding = { id: string; art: "befund" | "vorbehalt"; text: string;
+                        werte: number[]; namen: string[] };
 export type AgentEvidence = {
   tool: string;
   arguments: Record<string, unknown>;
@@ -875,6 +877,9 @@ export type AgentAnswer = {
   conversation_id?: string | null;
   turn_id?: number | null;
   admins_can_read?: boolean;
+  question_kind?: string | null;
+  findings?: Finding[];
+  check?: "cited" | "listed" | "numbers" | "off" | "failed" | "none";
 };
 
 export type OwnProvider = { base_url: string; model: string; key: string };
@@ -927,7 +932,7 @@ export const askAgent = (question: string, ctx: AgentContext, model?: string,
                            provider_url: own ? own.base_url : undefined,
                            dataset_id: ctx.dataset_id,
                            asv_id: ctx.asv_id, cluster: ctx.cluster ?? null,
-                           concept: ctx.concept,
+                           concept: ctx.concept, question_kind: ctx.question_kind,
                            history: history?.length ? history : undefined,
                            conversation_id: conversationId ?? undefined }),
   }).then(async (r) => {
@@ -953,6 +958,7 @@ export type StoredTurn = {
   model: string; provider: "local" | "operator" | "own" | ""; provider_host: string;
   grounding: string; ungrounded: string[]; corrected: boolean; own_key: boolean;
   steps: number | null; evidence: AgentEvidence[];
+  check?: AgentAnswer["check"] | null; findings?: Finding[];
 };
 export type TranscriptEvent = { kind: string; at: number; step?: number } & Record<string, unknown>;
 export type TurnRecord = StoredTurn & {

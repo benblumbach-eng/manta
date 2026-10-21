@@ -17,7 +17,8 @@ type Turn =
   | { role: "user"; text: string; tool?: { name: string; args: Record<string, unknown> } }
   | { role: "agent"; text: string; evidence: AgentAnswer["evidence"]; model?: string;
       steps?: number; ungrounded?: string[]; corrected?: boolean; own_key?: boolean;
-      turnId?: number | null; grounding?: string; truncated?: boolean }
+      turnId?: number | null; grounding?: string; truncated?: boolean;
+      check?: AgentAnswer["check"] | null; findings?: AgentAnswer["findings"] }
   | { role: "tool"; run: ToolRun }
   | { role: "error"; text: string; title?: string; kind?: string; todo?: string;
       retry?: { text: string; tool?: { name: string; args: Record<string, unknown> };
@@ -36,7 +37,7 @@ function fromStored(ts: StoredTurn[]): Turn[] {
     else out.push({ role: "agent", text: s.answer, evidence: s.evidence, model: s.model,
                     steps: s.steps ?? undefined, ungrounded: s.ungrounded, corrected: s.corrected,
                     own_key: s.own_key, turnId: s.id, grounding: s.grounding,
-                    truncated: s.status === "step_limit" });
+                    truncated: s.status === "step_limit", check: s.check, findings: s.findings });
   }
   return out;
 }
@@ -262,7 +263,8 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
   const [busy, setBusy] = useState(false);
   const [toolBusy, setToolBusy] = useState<string | null>(null);
   const [openEvidence, setOpenEvidence] = useState<number | null>(null);
-  useEffect(() => { setOpenEvidence(null); setOpenProtocol(null); }, [threadKey]);
+  const [openFindings, setOpenFindings] = useState<number | null>(null);
+  useEffect(() => { setOpenEvidence(null); setOpenFindings(null); setOpenProtocol(null); }, [threadKey]);
   const [caps, setCaps] = useState<{ ds: string; app: Applicability } | null>(null);
   const [whyOpen, setWhyOpen] = useState<string | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
@@ -407,7 +409,7 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
   const tooLong = maxQ != null && qLen > maxQ;
 
   async function send(text?: string, tool?: { name: string; args: Record<string, unknown> },
-                      concept?: string) {
+                      concept?: string, questionKind?: string) {
     const q = (text ?? input).trim();
     if (!q || busy) return;
     const k = threadKey;
@@ -435,14 +437,16 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
                         .map((e) => ({ name: e.tool, arguments: e.arguments ?? {} })) });
       }
       const verlauf = alle.slice(-8);
-      const res = await askAgent(q, { dataset_id: datasetId, asv_id: asvId, concept },
+      const res = await askAgent(q, { dataset_id: datasetId, asv_id: asvId, concept,
+                                      question_kind: questionKind },
                                  model || undefined,
                                  viaOwn, verlauf, fortsetzen);
       addTurn(k, { role: "agent", text: res.answer, evidence: res.evidence,
                    model: res.model, steps: res.steps,
                    ungrounded: res.ungrounded, corrected: res.corrected,
                    own_key: res.own_key, turnId: res.turn_id ?? null,
-                   grounding: res.grounding, truncated: res.truncated },
+                   grounding: res.grounding, truncated: res.truncated,
+                   check: res.check, findings: res.findings },
               res.conversation_id ?? fortsetzen);
       if (typeof res.admins_can_read === "boolean") setAdminsRead(res.admins_can_read);
     } catch (e) {
@@ -575,7 +579,7 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
     <button key={t.name} data-testid="agent-question" data-tool={t.name}
       data-state={a?.applicable ?? "yes"} disabled={busy}
       title={a?.applicable === "subject" && a.subject_condition ? a.subject_condition : undefined}
-      onClick={() => send(t.question!)}
+      onClick={() => send(t.question!, undefined, undefined, t.name)}
       className="text-left text-xs text-fg hover:text-accent hover:underline disabled:opacity-50">
       {t.question}
     </button>
@@ -1218,7 +1222,8 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
                       {t.corrected ? " — the model was already asked to correct itself once" : ""}.
                     </div>
                   )}
-                  {(t.grounding || t.truncated) && !(t.ungrounded && t.ungrounded.length > 0) && (
+                  {(t.grounding || t.truncated) && !(t.ungrounded && t.ungrounded.length > 0)
+                    && (t.truncated || (t.evidence?.length ?? 0) > 0) && (
                     <div data-testid="answer-check" className="text-2xs text-fg-muted">
                       {t.truncated ? "stopped at the step limit — no complete answer"
                         : `evidence check: ${checkText(t)}`}
@@ -1232,6 +1237,24 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
                         {openProtocol === i ? "▾" : "▸"} How was this answered?
                       </button>
                       {openProtocol === i && <div className="mt-2"><TurnProtocol turnId={t.turnId} /></div>}
+                    </div>
+                  )}
+                  {(t.findings?.length ?? 0) > 0 && (
+                    <div>
+                      <button data-testid="findings-toggle"
+                        onClick={() => setOpenFindings(openFindings === i ? null : i)}
+                        className="text-xs text-accent hover:underline">
+                        {openFindings === i ? "▾" : "▸"} show the findings ({t.findings!.length})
+                      </button>
+                      {openFindings === i && (
+                        <ul data-testid="findings-panel" className="mt-2 space-y-1 text-2xs">
+                          {t.findings!.map((f) => (
+                            <li key={f.id}><span className="text-accent">{f.id}</span>{" "}
+                              <span className={f.art === "vorbehalt" ? "text-fg-muted" : "text-fg"}>
+                                {f.art === "vorbehalt" ? "caveat: " : ""}{f.text}</span></li>
+                          ))}
+                        </ul>
+                      )}
                     </div>
                   )}
                   {t.evidence?.length > 0 ? (
