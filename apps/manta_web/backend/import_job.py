@@ -255,24 +255,50 @@ def _run_sub(name: str, cmd: list[str], cwd: Path | None = None, env: dict | Non
                            else f"Stage '{name}' exit {proc.returncode}: {txt}")
 
 
-_OTTER_SPANS = [(("[otter] CON",), 0.02, 0.05, "CON"), (("[otter] CCMN",), 0.05, 0.40, "CCMN"),
-                (("[otter] Louvain",), 0.40, 0.42, "Louvain"),
-                (("[otter] Mapping",), 0.42, 0.44, "Mapping"),
-                (("[otter] PVAL + Enrich",), 0.44, 0.99, "PVAL + Enrich"),
-                (("[otter] done",), 1.0, 1.0, "done")]
+# Share of the import bar per stage, by running time: DADA2 and OTTER take hours, the rest minutes.
+_STAGE_WEIGHTS = {"dada2": 20, "convert": 1, "otter": 20, "ingest": 1}
+_OTTER_STEPS = ["CON", "CCMN", "Louvain", "Mapping", "PVAL + Enrich"]
 _TQDM_PCT = re.compile(r"(\d{1,3})%\|")
 
 
-def _otter_progress_cb(job_id: str, base: float, span: float):
-    state = {"lo": 0.0, "hi": 0.02, "label": "otter", "best": 0.0}
+def _otter_spans(csv_dir: Path, thresholds: dict | None) -> list:
+    try:
+        n_asv, n_samples = abundance_size(csv_dir)
+    except OSError:
+        n_asv, n_samples = 0, 0
+    t = thresholds or {}
+    sek = otter_estimate.stage_seconds(n_asv, n_samples, t.get("num_permutations"),
+                                       t.get("num_samples"))
+    klein = 0.01 * (sum(sek.values()) or 1)
+    dauer = [sek.get(schritt, klein) or klein for schritt in _OTTER_STEPS]
+    gesamt = sum(dauer)
+    spans, lo = [], 0.0
+    for schritt, d in zip(_OTTER_STEPS, dauer):
+        spans.append(((f"[otter] {schritt}",), lo, lo + d / gesamt, schritt))
+        lo += d / gesamt
+    spans.append((("[otter] done",), 1.0, 1.0, "done"))
+    return spans
+
+
+def _rest(sekunden: float) -> str:
+    minuten = max(1, round(sekunden / 60))
+    return f"about {minuten} min left" if minuten < 60 else \
+        f"about {minuten // 60} h {minuten % 60:02d} min left"
+
+
+def _otter_progress_cb(job_id: str, base: float, span: float, spans: list):
+    state = {"lo": 0.0, "hi": 0.0, "label": "otter", "best": 0.0, "start": time.monotonic()}
 
     def _push(frac: float, label: str) -> None:
         if frac > state["best"]:
             state["best"] = frac
+            vergangen = time.monotonic() - state["start"]
+            if 0.02 <= frac < 1.0 and vergangen >= 60:
+                label += f" · {_rest(vergangen * (1 - frac) / frac)}"
             _set(job_id, progress=round(base + frac * span, 4), stage_detail=label)
 
     def cb(line: str) -> None:
-        for marks, lo, hi, label in _OTTER_SPANS:
+        for marks, lo, hi, label in spans:
             if line.startswith(marks):
                 state.update(lo=lo, hi=hi, label=label)
                 _push(lo, state["label"])
@@ -298,10 +324,13 @@ def _run(job_id: str, rdata_dir: Path, dataset_id: str, run_id: str,
     csv_dir, otter_out = work / "csv", work / "otter"
     stages_list = (get_status(job_id) or {}).get("stages") or list(STAGES)
     stages_main = [s for s in stages_list if s != POST_STAGE]
-    n_stages = max(1, len(stages_main))
+    gewicht = {s: _STAGE_WEIGHTS.get(s, 1) for s in stages_main}
+    summe = sum(gewicht.values()) or 1
 
     def _stage_base(name: str) -> float:
-        return stages_main.index(name) / n_stages if name in stages_main else 0.0
+        if name not in stages_main:
+            return 0.0
+        return sum(gewicht[s] for s in stages_main[:stages_main.index(name)]) / summe
 
     entry_point = ("otter_output" if otter_out_dir is not None else
                    "otter_input" if tables_dir is not None else
@@ -346,7 +375,9 @@ def _run(job_id: str, rdata_dir: Path, dataset_id: str, run_id: str,
                 if (thresholds or {}).get(key) is not None:
                     otter_cmd += [f"--{key.replace('_', '-')}", str(thresholds[key])]
             _run_sub("otter", otter_cmd, cwd=OTTER,
-                     on_line=_otter_progress_cb(job_id, _stage_base("otter"), 1.0 / n_stages))
+                     on_line=_otter_progress_cb(job_id, _stage_base("otter"),
+                                                gewicht.get("otter", 1) / summe,
+                                                _otter_spans(csv_dir, thresholds)))
 
         _set(job_id, stage="ingest", progress=round(_stage_base("ingest"), 4),
              stage_detail="loading the graph")
@@ -478,7 +509,8 @@ def _recompute(job_id: str, dataset_id: str, new_dataset_id: str, label: str, at
             if thresholds.get(key) is not None:
                 cmd += [f"--{key.replace('_', '-')}", str(thresholds[key])]
         lo, hi = RECOMPUTE_OTTER_SPAN
-        _run_sub("otter", cmd, cwd=OTTER, on_line=_otter_progress_cb(job_id, lo, hi - lo))
+        _run_sub("otter", cmd, cwd=OTTER, on_line=_otter_progress_cb(
+            job_id, lo, hi - lo, _otter_spans(csv_dir, thresholds)))
 
         _set(job_id, stage="copy", progress=hi, stage_detail="copying samples into the new dataset")
         kopiert = True

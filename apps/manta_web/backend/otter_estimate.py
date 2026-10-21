@@ -11,6 +11,9 @@ BASE_SECONDS = 2.9
 RANGE_LOW, RANGE_HIGH, RANGE_HIGH_EXTRAPOLATED = 0.8, 2.0, 3.0
 RANGE_HIGH_LOADED = 1.5
 MEASURED_UP_TO_ASVS = 400
+# OTTER passes over all ASV pairs twice: CON (Pearson_FFT) and CCMN (NMI, both directions).
+# Share of the pair time spent in CON: about 0.2 in a measured 150-ASV run (60 s CON, 252 s CCMN).
+CON_SHARE_OF_PAIRS = 0.2
 
 MEMORY_BASE_BYTES = 350 * 1024 ** 2
 MEMORY_PER_PAIR_BYTES = int(1.5 * 579)
@@ -41,15 +44,24 @@ def memory_budget_bytes() -> int | None:
     return int(ram * MEMORY_FRACTION) if ram else None
 
 
-def seconds(n_asv: int, n_samples: int, num_permutations: int | None = None,
-            num_samples: int | None = None,
-            per_permutation: float = SECONDS_PER_PERMUTATION_FIXED) -> float:
+def stage_seconds(n_asv: int, n_samples: int, num_permutations: int | None = None,
+                  num_samples: int | None = None,
+                  per_permutation: float = SECONDS_PER_PERMUTATION_FIXED) -> dict:
     n = max(0, int(n_asv))
     pairs = n * (n - 1) / 2
     per_pair = SECONDS_PER_PAIR_96 * max(1, int(n_samples)) / REFERENCE_SAMPLES
     perms = OTTER_PERMUTATIONS if num_permutations is None else max(0, int(num_permutations))
     drawn = min(OTTER_SAMPLES if num_samples is None else max(0, int(num_samples)), pairs)
-    return BASE_SECONDS + pairs * per_pair + perms * (per_permutation + drawn * per_pair)
+    return {"CON": pairs * per_pair * CON_SHARE_OF_PAIRS,
+            "CCMN": pairs * per_pair * (1 - CON_SHARE_OF_PAIRS),
+            "PVAL + Enrich": perms * (per_permutation + drawn * per_pair)}
+
+
+def seconds(n_asv: int, n_samples: int, num_permutations: int | None = None,
+            num_samples: int | None = None,
+            per_permutation: float = SECONDS_PER_PERMUTATION_FIXED) -> float:
+    return BASE_SECONDS + sum(stage_seconds(n_asv, n_samples, num_permutations, num_samples,
+                                            per_permutation).values())
 
 
 def memory_bytes(n_asv: int) -> int:
