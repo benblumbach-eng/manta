@@ -13,6 +13,7 @@ import pyreadr
 SEP = ";"
 DADA2_MANIFEST = "dada2_manifest.json"
 PLACEHOLDER_DATES = "placeholder_dates.txt"
+CONVERT_NOTES = "convert_notes.txt"
 
 
 class InputError(Exception):
@@ -22,6 +23,11 @@ class InputError(Exception):
 def _read_matrix(path: Path) -> pd.DataFrame:
     if not path.exists():
         raise InputError(f"file not found: {path}")
+    if path.suffix.lower() == ".csv":
+        with path.open(encoding="utf-8-sig") as fh:
+            kopf = fh.readline()
+        sep = SEP if kopf.count(SEP) >= kopf.count(",") else ","
+        return pd.read_csv(path, sep=sep, index_col=0, encoding="utf-8-sig")
     result = pyreadr.read_r(str(path))
     if not result:
         raise InputError(f"no R object in {path}")
@@ -29,6 +35,8 @@ def _read_matrix(path: Path) -> pd.DataFrame:
 
 
 RANGSPALTEN = ("kingdom", "phylum", "class", "order", "family", "genus", "species")
+PR2_RAENGE = ("Domain", "Supergroup", "Division", "Subdivision", "Class", "Order", "Family",
+              "Genus", "Species")
 TRACKSPALTEN = ("input", "merged", "nonchim")
 
 
@@ -65,6 +73,8 @@ def _zuordnen(in_dir: Path) -> dict[str, Path]:
                 kopf = pd.read_csv(p, sep=SEP, dtype=str, nrows=1)
                 if {"sample", "date"} <= {str(c).strip().lower() for c in kopf.columns}:
                     rolle = "metadata"
+                else:
+                    rolle = _rolle(_read_matrix(p))
             except Exception:
                 rolle = None
         gesehen.append(f"{p.name} -> {rolle or 'unknown'}")
@@ -78,6 +88,8 @@ def _zuordnen(in_dir: Path) -> dict[str, Path]:
                        ("metadata", "the sample metadata (';'-separated .csv with columns "
                                     "'sample' and 'date')")):
         if rolle not in gefunden:
+            if rolle == "metadata":
+                continue
             raise InputError(f"the input folder lacks {was}. Found: {liste}")
         if len(gefunden[rolle]) > 1:
             namen = ", ".join(p.name for p in gefunden[rolle])
@@ -132,6 +144,44 @@ def _datum(roh: str) -> "tuple[str, datetime.datetime] | None":
     return tag.isoformat() + zeit, punkt
 
 
+NAMENSDATUM = re.compile(r"^(\d{4})[.\-_](\d{1,2})[.\-_](\d{1,2})$")
+
+
+def _daten_aus_namen(samples: list) -> "dict[str, str] | None":
+    daten = {}
+    for s in samples:
+        m = NAMENSDATUM.match(str(s).strip())
+        if not m:
+            return None
+        daten[s] = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    return daten
+
+
+def _pr2_raenge(taxa: "pd.DataFrame", hinweise: list[str]) -> "pd.DataFrame":
+    spalten = [str(c).strip() for c in taxa.columns]
+    klein = [c.lower() for c in spalten]
+    if "supergroup" not in klein:
+        return taxa
+    if (len(spalten) == len(PR2_RAENGE) and klein[1] == "supergroup" and "subdivision" not in klein
+            and (klein[-1] in ("", "na", "nan", "none") or klein[-1].startswith("unnamed"))):
+        taxa = taxa.copy()
+        taxa.columns = list(PR2_RAENGE)
+        hinweise.append(f"The taxonomy header ({', '.join(spalten)}) does not fit its "
+                        f"{len(spalten)} columns of PR2 ranks; the columns were read by position "
+                        f"as {', '.join(PR2_RAENGE)}.")
+        klein = [r.lower() for r in PR2_RAENGE]
+    namen = dict(zip(klein, taxa.columns))
+    quelle = {"Kingdom": namen.get("domain", namen.get("kingdom")), "Phylum": namen.get("division"),
+              "Class": namen.get("class"), "Order": namen.get("order"),
+              "Family": namen.get("family"), "Genus": namen.get("genus"),
+              "Species": namen.get("species")}
+    if None in quelle.values():
+        return taxa
+    hinweise.append("PR2 taxonomy: Domain is stored as Kingdom and Division as Phylum; "
+                    "Supergroup and Subdivision are not carried over.")
+    return pd.DataFrame({ziel: taxa[q] for ziel, q in quelle.items()}, index=taxa.index)
+
+
 DEZIMALKOMMA = re.compile(r"^-?\d+,\d+$")
 
 
@@ -175,20 +225,42 @@ def convert(in_dir: Path, out_dir: Path, track_path: Path, min_retain: float) ->
     rollen = _zuordnen(in_dir)
     for rolle, pfad in sorted(rollen.items()):
         print(f"  {rolle:9} <- {pfad.name}")
+    hinweise: list[str] = []
     abund = _read_matrix(rollen["abundance"])
-    taxa = _read_matrix(rollen["taxa"])
+    leer = [s for s in abund.columns if abund[s].sum() == 0]
+    if leer:
+        abund = abund.drop(columns=leer)
+        hinweise.append(f"{len(leer)} sample(s) without any reads were left out: "
+                        f"{', '.join(map(str, leer))}")
+    taxa = _pr2_raenge(_read_matrix(rollen["taxa"]), hinweise)
     seqs = _parse_fasta(rollen["fasta"])
-    meta = pd.read_csv(rollen["metadata"], sep=SEP, dtype=str)
-    meta = meta.rename(columns={c: str(c).strip().lower() for c in meta.columns
-                                if str(c).strip().lower() in ("sample", "date")})
+    if "metadata" in rollen:
+        meta = pd.read_csv(rollen["metadata"], sep=SEP, dtype=str)
+        meta = meta.rename(columns={c: str(c).strip().lower() for c in meta.columns
+                                    if str(c).strip().lower() in ("sample", "date")})
+    else:
+        aus_namen = _daten_aus_namen(list(abund.columns))
+        if aus_namen is None:
+            raise InputError("the input folder lacks the sample metadata (';'-separated .csv with "
+                             "columns 'sample' and 'date'), and the sample names are not dates "
+                             "(YYYY.MM.DD or YYYY-MM-DD) to read them from")
+        meta = pd.DataFrame({"sample": list(aus_namen), "date": list(aus_namen.values())})
+        hinweise.append("No sample metadata: the sampling dates were read from the sample names "
+                        "(YYYY.MM.DD); there are no environmental variables.")
 
     if track_path is None:
         track_path = rollen.get("track")
 
     asvs = list(abund.index)
-    if set(asvs) != set(taxa.index):
-        raise InputError("the ASVs in the taxonomy differ from those in the abundance matrix "
-                         "(otter needs the same ASVs in both)")
+    ohne_taxa = [a for a in asvs if a not in set(taxa.index)]
+    if ohne_taxa:
+        raise InputError(f"the taxonomy lacks these ASVs of the abundance matrix: {ohne_taxa[:5]} "
+                         f"(otter needs the same ASVs in both)")
+    if set(taxa.index) != set(asvs):
+        n_extra = len(set(taxa.index) - set(asvs))
+        taxa = taxa[taxa.index.isin(asvs)]
+        hinweise.append(f"The taxonomy lists {n_extra} ASVs that are not in the abundance "
+                        f"matrix; they were left out.")
     missing_seq = [a for a in asvs if a not in seqs]
     if missing_seq:
         raise InputError(f"the FASTA lacks sequences for: {missing_seq[:5]}")
@@ -246,6 +318,13 @@ def convert(in_dir: Path, out_dir: Path, track_path: Path, min_retain: float) ->
     pd.DataFrame(id_rows, columns=["ordinal_id", "hash_id", "sequence"]).to_csv(
         out_dir / "id_map.csv", sep=SEP, index=False)
 
+    for h in hinweise:
+        print(f"NOTE: {h}")
+    if hinweise:
+        (out_dir / CONVERT_NOTES).write_text("\n".join(hinweise) + "\n", encoding="utf-8")
+    else:
+        (out_dir / CONVERT_NOTES).unlink(missing_ok=True)
+
     if track_path is None:
         (out_dir / "read_tracking_report.csv").unlink(missing_ok=True)
         print("  read tracking: not in the input - read-retention check skipped")
@@ -286,7 +365,8 @@ def _read_tracking_gate(track_path: Path, out_dir: Path, min_retain: float) -> i
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(
-        description="Convert DADA2 outputs (.Rdata files, a FASTA of the ASVs and metadata.csv) "
+        description="Convert DADA2 outputs (.Rdata or .csv tables, a FASTA of the ASVs and "
+                    "optionally metadata.csv) "
                     "into otter's input tables abundance.csv, taxa_info.csv and "
                     "environment_info.csv.",
         epilog="Exit codes: 0 ok, 2 input error, 3 read-tracking gate failed.")

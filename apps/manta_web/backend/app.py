@@ -634,9 +634,8 @@ FASTA_SUFFIXE = {".fa", ".fasta", ".fna"}
 
 def _sieht_nach_dada2_aus(names: set[str]) -> bool:
     endungen = [Path(n).suffix.lower() for n in names]
-    return (sum(e in RDATA_SUFFIXE for e in endungen) >= 2
-            and any(e in FASTA_SUFFIXE for e in endungen)
-            and any(e == ".csv" for e in endungen))
+    return (sum(e in RDATA_SUFFIXE or e == ".csv" for e in endungen) >= 2
+            and any(e in FASTA_SUFFIXE for e in endungen))
 
 REQUIRED_UPLOAD_TABLES = {"abundance.csv", "taxa_info.csv", "environment_info.csv"}
 
@@ -790,7 +789,8 @@ async def start_import_upload(
                                      "DADA2 output (5 files) OR the OTTER tables (3 CSVs)")
         if not (has_otter_out or has_tables or has_dada2):
             raise HTTPException(400, f"required files are missing. Upload either DADA2 output "
-                                     f"(at least two .Rdata, one FASTA and one .csv), "
+                                     f"(abundance matrix and taxonomy as .Rdata or .csv, one FASTA, "
+                                     f"optionally a sample;date .csv), "
                                      f"OTTER input "
                                      f"{sorted(REQUIRED_UPLOAD_TABLES)} or an OTTER result "
                                      f"(network tables + {sorted(REQUIRED_UPLOAD_OTTER_OUT)}, "

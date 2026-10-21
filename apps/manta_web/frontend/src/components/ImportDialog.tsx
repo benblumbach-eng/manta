@@ -58,11 +58,14 @@ const SOURCE_DETAIL: Record<Source, React.ReactNode> = {
     is loaded into the graph.</p>
   </>,
   dada2: <>
-    <p><strong>Either</strong> the DADA2 artefacts: raw ASV × sample count matrix
-    (RawAbundanceMat), taxonomic assignments (assignTaxonomy), representative ASV sequences
-    (FASTA), sample metadata (sample;date;environment…) and, optionally, read tracking across
-    the pipeline steps (input … nonchim) — if present, MANTA checks that each sample kept enough
-    of its reads.</p>
+    <p><strong>Either</strong> the DADA2 artefacts, as .Rdata or .csv: raw ASV × sample count
+    matrix (RawAbundanceMat), taxonomic assignments (assignTaxonomy; PR2 ranks are mapped,
+    Division to Phylum), representative ASV sequences (FASTA), sample metadata
+    (sample;date;environment…) — optional if the sample names are dates (YYYY.MM.DD) — and,
+    optionally, read tracking across the pipeline steps (input … nonchim) — if present, MANTA
+    checks that each sample kept enough of its reads. Taxonomy rows for ASVs that are not in the
+    count matrix and samples without any reads are left out; the import lists what was
+    adjusted.</p>
     <p><strong>Or</strong> the three otter tables: abundance (sampling date × ASV read counts),
     taxa_info (ASV; Kingdom…Species), environment_info (date-indexed environmental variables; may
     hold dates only). An optional id_map.csv attaches the representative ASV sequences. No read
@@ -182,10 +185,9 @@ export default function ImportDialog({ onClose, onStarted }:
   const fastqOk = nFastqPairs >= 8 && fq.unpaired.length === 0 && fq.offPattern.length === 0;
   const has = (n: string) => files.some((f) => f.name === n);
   const dada2Missing = [
-    files.filter((f) => RDATA.test(f.name)).length >= 2 ? ""
-      : "at least two .Rdata (abundance matrix and taxonomy; read tracking optional)",
+    files.filter((f) => RDATA.test(f.name) || CSVNAME.test(f.name)).length >= 2 ? ""
+      : "abundance matrix and taxonomy as .Rdata or .csv (read tracking optional)",
     files.some((f) => FASTA.test(f.name)) ? "" : "a FASTA with the ASV sequences",
-    files.some((f) => CSVNAME.test(f.name)) ? "" : "a .csv with the columns sample and date",
   ].filter(Boolean);
   const tablesMissing = TABLES_REQUIRED.filter((n) => !has(n));
   const otterOutMissing = OTTER_OUT_REQUIRED.filter((n) => !has(n));
@@ -374,11 +376,12 @@ export default function ImportDialog({ onClose, onStarted }:
         )}
 
         <Field label={source === "fastq" ? "FASTQ files (paired _R1_/_R2_)"
-            : source === "dada2" ? "DADA2 output — .Rdata files, a FASTA and a sample/date .csv, or 3 tables"
+            : source === "dada2" ? "DADA2 output — .Rdata or .csv tables and a FASTA, or 3 tables"
             : "OTTER output — network tables + abundance/environment (manta_manifest.json recommended)"}
-          tip={source === "dada2" ? <p>The .Rdata files (abundance matrix, taxonomy,
-            optionally read tracking), a FASTA with the ASV sequences and a .csv with sample and date; the file
-            names do not matter. Or the 3 tables abundance.csv, taxa_info.csv and
+          tip={source === "dada2" ? <p>The abundance matrix and taxonomy as .Rdata or .csv
+            (optionally read tracking), a FASTA with the ASV sequences and a .csv with sample and
+            date — not needed if the sample names are dates (YYYY.MM.DD); the file names do not
+            matter. Or the 3 tables abundance.csv, taxa_info.csv and
             environment_info.csv (id_map.csv optional).</p> : undefined}>
           <input data-testid="import-files" type="file" multiple className={input + " file:mr-2 file:text-xs"}
             accept={source === "fastq" ? ".gz" : undefined}

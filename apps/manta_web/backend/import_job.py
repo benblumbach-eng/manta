@@ -29,6 +29,7 @@ FIXTURE = BACKEND / "import_fixture"
 FIXTURE_SCRIPT = BACKEND / "make_import_fixture.R"
 DADA2_MANIFEST = "dada2_manifest.json"
 PLACEHOLDER_DATES = "placeholder_dates.txt"
+CONVERT_NOTES = "convert_notes.txt"
 
 NO_INPUT = ("No input given: the bundled demo dataset is not available on this installation. "
             "Upload your own files instead (DADA2 output, OTTER input tables or an OTTER result).")
@@ -326,6 +327,8 @@ def _run(job_id: str, rdata_dir: Path, dataset_id: str, run_id: str,
                                  "--in", str(rdata_dir), "--out", str(csv_dir)])
             if not (csv_dir / "read_tracking_report.csv").exists():
                 notes.append(NOTE_NO_READ_TRACKING)
+            if (csv_dir / CONVERT_NOTES).exists():
+                notes += (csv_dir / CONVERT_NOTES).read_text(encoding="utf-8").splitlines()
             if time_axis is None:
                 time_axis = ("dates" if echte_daten and not synthetic_dates(rdata_dir, csv_dir)
                              and _abundance_axis(csv_dir) == "dates" else "ordinal")
