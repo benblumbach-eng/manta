@@ -206,3 +206,57 @@ def apply(answer: str, tool_texts: list[str], pool: set[float] | None = None,
     if eingestellt == "refuse":
         return REFUSAL.format(zahlen=", ".join(schlecht)), schlecht
     return annotate(answer, schlecht), schlecht
+
+
+# The check for answers written from findings: every sentence cites at least one finding, and
+# every number and every name in it must come from a finding it cites, not from anywhere else.
+MARKE = re.compile(r"\[\s*(F\d+(?:\s*[,;]\s*F\d+)*)\s*\]")
+_SATZ = re.compile(r"(?<=[.!?])\s+(?=\S)")
+_ASV_KENNUNG = re.compile(r"\b\w*asv\w*\d\w*\b", re.I)
+_EIGENNAME = re.compile(r"\b[A-Z][a-z]{3,}\b")
+FREIE_NAMEN = frozenset({
+    "asv", "asvs", "ccm", "con", "nmi", "manta", "louvain", "otter",
+    "this", "these", "that", "those", "there", "here", "about", "only", "most", "next", "both",
+    "each", "over", "under", "across", "among", "with", "without", "from", "between", "within",
+    "however", "also", "while", "since", "because", "unlike", "like", "compared", "together",
+    "overall", "note", "still", "taken", "their", "they", "when", "where", "which", "what",
+    "some", "many", "several", "half", "more", "less", "fewer", "none", "just", "even", "after",
+    "before", "beyond", "behind", "almost", "nearly", "roughly", "around", "apart", "besides",
+    "instead", "then", "thus", "hence", "such", "every", "much",
+    "clearly", "directed", "cluster", "clusters", "module", "modules", "links", "link",
+    "network", "dataset", "genus", "genera", "family", "families", "read", "reads", "samples"})
+
+
+def saetze(answer: str) -> list[str]:
+    return [s for s in (t.strip() for z in (answer or "").splitlines()
+                        for t in _SATZ.split(z)) if s]
+
+
+def check_cited(answer: str, findings: list[dict], question: str = "") -> list[str]:
+    nach_id = {f["id"]: f for f in findings}
+    probleme: list[str] = []
+    for satz in saetze(answer):
+        ids = [i.strip() for m in MARKE.finditer(satz) for i in re.split(r"[,;]", m.group(1))]
+        if not ids:
+            probleme.append(f"no finding cited: \"{satz[:80]}\"")
+            continue
+        unbekannt = [i for i in ids if i not in nach_id]
+        if unbekannt:
+            probleme.append(f"unknown finding {', '.join(unbekannt)}")
+            continue
+        zitiert = [nach_id[i] for i in ids]
+        pool = {float(w) for f in zitiert for w in f["werte"]} | data_numbers(
+            [f["text"] for f in zitiert])
+        erlaubt = _tokens([f["text"] for f in zitiert] + [n for f in zitiert for n in f["namen"]]
+                          + [question]) | FREIE_NAMEN
+        text = MARKE.sub(" ", satz)
+        for m in _NUM.finditer(text):
+            v = _to_float(m.group())
+            if v is not None and not _covered(v, m.group(), pool):
+                probleme.append(f"{m.group()} is not in {', '.join(ids)}")
+        namen = {m.group() for m in _ASV_KENNUNG.finditer(text)}
+        namen |= {m.group() for m in _EIGENNAME.finditer(text)}
+        for n in sorted(namen):
+            if n.lower().rstrip(_TRAIL) not in erlaubt:
+                probleme.append(f"{n} is not in {', '.join(ids)}")
+    return probleme

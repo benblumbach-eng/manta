@@ -216,7 +216,8 @@ def _record_turn(*, user, conversation_id, dataset_id, question, asked_at, finis
         "request": request,
         "provider": provider,
         "result": {k: result.get(k) for k in ("model", "steps", "truncated", "grounding",
-                                              "corrected", "own_key")},
+                                              "corrected", "own_key", "question_kind", "check")},
+        "findings": result.get("findings") or [],
         "grounding": pruefung[-1] if pruefung else None,
         "evidence": result.get("evidence") or [],
         "events": ereignisse,
@@ -322,7 +323,8 @@ def _turn_summary(row: sqlite3.Row) -> dict:
             "provider_host": row["provider_host"], "grounding": row["grounding_mode"],
             "ungrounded": json.loads(row["ungrounded"] or "[]"),
             "corrected": bool(res.get("corrected")), "own_key": bool(res.get("own_key")),
-            "steps": res.get("steps"), "evidence": rec.get("evidence") or []}
+            "steps": res.get("steps"), "evidence": rec.get("evidence") or [],
+            "check": res.get("check"), "findings": rec.get("findings") or []}
 
 
 def conversation(conversation_id: str) -> dict | None:

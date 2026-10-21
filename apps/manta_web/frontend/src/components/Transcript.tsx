@@ -5,7 +5,9 @@ import { getConversation, getTurnRecord, type ConversationDetail, type Dataset,
 
 
 function inline(line: string) {
-  return line.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((part, i) => {
+  return line.split(/(\*\*[^*]+\*\*|`[^`]+`|\[F\d+(?:\s*[,;]\s*F\d+)*\])/g).map((part, i) => {
+    if (/^\[F\d/.test(part))
+      return <sup key={i} data-testid="finding-mark" className="ml-0.5 rounded bg-accent-soft px-1 text-2xs text-accent">{part.slice(1, -1)}</sup>;
     if (part.startsWith("**") && part.endsWith("**") && part.length > 4)
       return <strong key={i} className="text-fg font-semibold">{part.slice(2, -2)}</strong>;
     if (part.startsWith("`") && part.endsWith("`") && part.length > 2)
@@ -85,12 +87,16 @@ export function providerText(kind: string, host: string): string {
 }
 
 export function checkText(t: { grounding?: string; ungrounded?: string[]; corrected?: boolean;
-                               status?: string }): string {
+                               status?: string; check?: string | null }): string {
   if (t.status === "error" || t.status === "step_limit") return "no answer, so nothing to check";
   if (!t.grounding) return "not recorded";
-  if (t.grounding === "off") return "not checked (the check is switched off)";
-  const n = t.ungrounded?.length ?? 0;
+  if (t.grounding === "off" || t.check === "off") return "not checked (the check is switched off)";
   const again = t.corrected ? " · the model was asked once to correct itself" : "";
+  if (t.check === "cited") return `every sentence cites a finding, and its numbers and names match it${again}`;
+  if (t.check === "listed") return "the model's text did not match the findings, so the findings are shown as they are";
+  if (t.check === "none") return "no data were used for this reply";
+  if (t.check === "failed") return "the query did not run";
+  const n = t.ungrounded?.length ?? 0;
   if (n === 0) return `every number appears in a tool result${again}`;
   const what = t.grounding === "refuse" ? "answer replaced" : "marked in the answer";
   return `${n} number${n === 1 ? "" : "s"} without evidence (${t.ungrounded!.join(", ")}) — ${what}${again}`;
@@ -108,6 +114,8 @@ const ACTION_TEXT: Record<string, string> = {
   "correction requested": "numbers without evidence — the model was asked to write the answer again",
   marked: "numbers without evidence — marked in the answer",
   refused: "numbers without evidence — the answer was replaced",
+  cited: "every sentence cites a finding, and its numbers and names match it",
+  listed: "the text did not match its findings — the findings are shown as a list instead",
 };
 
 function Row({ label, children, testid }: { label: string; children: React.ReactNode; testid?: string }) {
@@ -225,6 +233,30 @@ function Step({ e }: { e: TranscriptEvent }) {
             <div className="whitespace-pre-wrap text-fg-muted">{str(e.note)}</div>
           </Fold>
         )}
+      </div>
+    );
+  }
+  if (e.kind === "understanding") {
+    return (
+      <div data-testid="protocol-step" data-kind="understanding" className="space-y-1">
+        <div className="text-fg">Question kind: <code className="text-accent">{str(e.question_kind)}</code>
+          {str(e.rank) && <span className="text-fg-muted"> · rank {str(e.rank)}</span>}
+          <span className="text-fg-muted"> · {str(e.source) || "understood by the model"}</span></div>
+      </div>
+    );
+  }
+  if (e.kind === "findings") {
+    const fs = Array.isArray(e.findings) ? (e.findings as { id: string; art: string; text: string }[]) : [];
+    return (
+      <div data-testid="protocol-step" data-kind="findings" className="space-y-1">
+        <div className="text-fg">Findings computed from the results ({fs.length})</div>
+        <ul className="space-y-0.5">
+          {fs.map((f) => (
+            <li key={f.id}><span className="text-accent">{f.id}</span>{" "}
+              <span className={f.art === "vorbehalt" ? "text-fg-muted" : "text-fg"}>
+                {f.art === "vorbehalt" ? "caveat: " : ""}{f.text}</span></li>
+          ))}
+        </ul>
       </div>
     );
   }
