@@ -106,14 +106,6 @@ export default function NeighbourNet({ asvId, cluster, neighbors, onOpenAsv, onO
         <circle cx={CX} cy={CY} r={10} fill="var(--accent)" stroke="var(--raised)" strokeWidth={2} />
         <text x={CX} y={CY + 24} fontSize={11} fill="var(--text)" textAnchor="middle">{asvId}</text>
       </svg>
-      <p className="text-2xs text-fg-muted">
-        Width = strength · dashed = leaves this module · arrow = a directed link (CCM), as stored
-      </p>
-      {alle.length > gezeigt.length && (
-        <p className="text-xs text-warn" data-testid="neighbour-net-truncated">
-          Showing the {gezeigt.length} strongest of {alle.length} neighbours.
-        </p>
-      )}
     </div>
   );
 }

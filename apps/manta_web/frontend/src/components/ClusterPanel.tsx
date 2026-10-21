@@ -63,7 +63,7 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
 
   useEffect(() => {
     setC(null); setErr(null); setGenusFilter(null);
-    setOpenPartners(new Set()); setAllGenera(false); setAllMembers(false); setAtSample(null);
+    setPartner(null); setAllGenera(false); setAllMembers(false); setAtSample(null);
     setAtErr(null); setAtBusy(false);
     let alive = true;
     getCluster(datasetId, label).then((x) => { if (alive) setC(x); })
@@ -92,8 +92,7 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
       edges: (shown.get(p.partner) ?? []).sort((a, b) => b.corr - a.corr || a.other.localeCompare(b.other)),
     })).sort((a, b) => b.total - a.total || a.partner - b.partner);
   }, [c]);
-  const [openPartners, setOpenPartners] = useState<Set<number>>(new Set());
-  const PREVIEW = 3;
+  const [partner, setPartner] = useState<number | null>(null);
   const GENERA_PREVIEW = 12;
   const MEMBERS_PREVIEW = 30;
   const [allGenera, setAllGenera] = useState(false);
@@ -263,35 +262,6 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
               )}
             </div>
 
-            {c.function_breakdown && (
-              <div className="mt-1" data-testid="cluster-functions"
-                data-n-annotated={c.function_breakdown.n_annotated}>
-                <div className="text-2xs text-fg-muted flex items-center">
-                  by function (literature)
-                  <InfoTip title="What these bars count">
-                    <p>{c.function_breakdown.note}</p>
-                    {c.trait_run?.statement && <p>{c.trait_run.statement}</p>}
-                    <p>An ASV with two labels counts in both bars; the bars do not add up to the
-                    member count.</p>
-                  </InfoTip>
-                </div>
-                <ul className="mt-1 text-2xs">
-                  {c.function_breakdown.functions.map((f) => (
-                    <li key={f.label} data-testid="cluster-function-row" data-label={f.label} data-n={f.n_asv}
-                      className="flex items-center gap-2 py-px">
-                      <span className={`w-28 shrink-0 truncate ${f.label === "not annotated" ? "text-fg-muted" : "text-fg"}`}
-                        title={f.label}>{f.label}</span>
-                      <span className="flex-1 h-2 bg-control rounded-sm overflow-hidden">
-                        <span className={`block h-full ${f.label === "not annotated" ? "bg-control-strong" : "bg-accent-fill"}`}
-                          style={{ width: `${Math.round(100 * (f.share ?? 0))}%` }} />
-                      </span>
-                      <span className="w-8 text-right tabular-nums text-fg-muted">{f.n_asv}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
             <div className="mt-1 flex flex-wrap gap-1">
               {(allGenera ? genera : genera.slice(0, GENERA_PREVIEW)).map(([g, n]) => (
                 <ToggleButton key={g} data-testid="genus-chip" pressed={genusFilter === g}
@@ -341,12 +311,7 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
           )}
 
           <section data-testid="cluster-connections">
-            <SectionHeading as="div">Connections</SectionHeading>
-            <p className="text-2xs text-fg-muted" data-testid="cluster-cohesion-line">
-              {c.cohesion.innen} links inside · {c.cohesion.aussen} leaving
-              {c.cohesion.corr_innen != null && <> · mean r inside {c.cohesion.corr_innen.toFixed(3)}</>}
-              {c.cohesion.corr_aussen != null && <>, outside {c.cohesion.corr_aussen.toFixed(3)}</>}
-            </p>
+            <h3 className="text-fg font-medium mb-1">Connections</h3>
 
             {c.cohesion.aussen === 0 ? (
               <p className="mt-1 text-fg" data-testid="cluster-isolated">
@@ -355,36 +320,14 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
               </p>
             ) : (
               <div className="mt-1 space-y-2">
-                <ClusterNet label={label} partners={byPartner}
-                  onOpenCluster={onOpenCluster} onOpenEdge={onOpenEdge} />
-                {(() => {
-                  const gelistet = byPartner.reduce((a, p) => a + p.total, 0);
-                  const fehlt = c.cohesion.aussen - gelistet;
-                  return fehlt > 0 ? (
-                    <p className="text-xs text-warn" data-testid="cluster-partners-cut">
-                      {fehlt} more leaving link{fehlt === 1 ? " is" : "s are"} not listed below: to
-                      ASVs without a module, or past a partner list cut short by the server.
-                    </p>
-                  ) : null;
-                })()}
-                {byPartner.map(({ partner, total, edges }) => {
-                  const open = openPartners.has(partner);
-                  const visible = open ? edges : edges.slice(0, PREVIEW);
-                  return (
-                  <div key={partner} className="rounded border border-line bg-surface/50">
-                    <div className="flex items-baseline gap-2 px-2 py-1">
-                      <Swatch n={partner} />
-                      <button data-testid="bridge-partner"
-                        onClick={() => onOpenCluster?.(partner)} disabled={!onOpenCluster}
-                        className="text-fg hover:underline disabled:hover:no-underline">
-                        {modules.label(partner)}
-                      </button>
-                      <span className="text-xs text-fg-muted ml-auto tabular-nums">
-                        {total} link{total === 1 ? "" : "s"}
-                      </span>
-                    </div>
-                    <ul className="px-2 pb-2 text-xs">
-                      {visible.map((e) => (
+                <ClusterNet label={label} partners={byPartner} selected={partner}
+                  onPick={(n) => setPartner((cur) => (cur === n ? null : n))}
+                  onOpenCluster={onOpenCluster} />
+                {byPartner.filter((b) => b.partner === partner).map(({ partner, edges }) => (
+                  <div key={partner} className="rounded border border-line bg-surface/50"
+                    data-testid="bridge-bundle">
+                    <ul className="px-2 py-1 text-xs">
+                      {edges.map((e) => (
                         <li key={`${e.mine}-${e.other}`} className="flex items-center gap-1">
                           <Swatch n={label} />
                           <button data-testid="bridge-asv" onClick={() => onOpenAsv?.(e.mine)}
@@ -410,27 +353,8 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
                         </li>
                       ))}
                     </ul>
-                    {edges.length > PREVIEW && (
-                      <button data-testid="bridge-more"
-                        onClick={() => setOpenPartners((s) => {
-                          const n = new Set(s);
-                          open ? n.delete(partner) : n.add(partner);
-                          return n;
-                        })}
-                        className="w-full px-2 pb-1 text-left text-2xs text-accent hover:underline">
-                        {open ? "show the strongest 3 only"
-                              : `show ${edges.length - PREVIEW} more`}
-                      </button>
-                    )}
-                    {total > edges.length && (
-                      <p className="px-2 pb-1 text-2xs text-fg-muted" data-testid="bridge-capped">
-                        {total - edges.length} further link{total - edges.length === 1 ? "" : "s"} to
-                        this cluster are not listed — the API returns the 50 strongest per cluster.
-                      </p>
-                    )}
                   </div>
-                  );
-                })}
+                ))}
               </div>
             )}
           </section>

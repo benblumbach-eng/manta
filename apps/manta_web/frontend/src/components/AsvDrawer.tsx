@@ -4,7 +4,6 @@ import { getAsv, getEnvironment, getTaxon, setAsvNote, setAsvStar,
          type AsvDetail, type Environment } from "../api";
 import type { EdgeRef } from "../App";
 import { useModules } from "../modules";
-import ProvenanceFooter from "./ProvenanceFooter";
 import FrequencyPanel from "./FrequencyPanel";
 import EnvironmentBars from "./EnvironmentBars";
 import NeighbourNet from "./NeighbourNet";
@@ -224,9 +223,6 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
 
           <section>
             <h3 className="text-fg font-medium mb-1 flex items-center">Neighbours</h3>
-            <p className="text-2xs text-fg-muted mb-1" data-testid="neighbours-declaration">
-              CON = co-occurrence (correlation, not an interaction) · CCM = predictive value without a convergence test — no evidence of causation
-            </p>
             <NeighbourNet asvId={asvId} cluster={d.cluster} neighbors={d.neighbors}
                           onOpenAsv={onOpenAsv} onOpenEdge={onOpenEdge} />
           </section>
@@ -236,26 +232,6 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
             onSave={(t, o) => setAsvNote(datasetId, asvId, t, o)
               .then((r) => setD((cur) => (cur ? { ...cur, note: r.note, note_at: r.note_at } : cur)))} />
 
-          <section data-testid="function-section" data-annotated={d.trait?.annotated ? "1" : "0"}>
-            {d.trait?.annotated && (
-              <div className="mb-1" data-testid="function-literature">
-                <div className="text-xs font-semibold text-fg-muted">annotated function (literature)</div>
-                <ul className="text-xs mt-1">
-                  {d.trait.functions.map((f, i) => (
-                    <li key={`${f}|${d.trait!.sources[i]}`} data-testid="function-entry" data-function={f}
-                      className="flex items-baseline gap-2">
-                      <span className="text-fg">{f}</span>
-                      <span className="text-fg-muted">— {d.trait!.sources[i]}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            <div className="text-xs text-fg-muted italic">
-              Ecological function — not derivable from amplicon data (a gene fragment, not an activity)
-            </div>
-          </section>
-          <ProvenanceFooter datasetId={datasetId} />
         </div>
       )}
     </div>

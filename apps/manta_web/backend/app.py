@@ -2739,39 +2739,7 @@ def wheel(dataset_id: str, year: str | None = Query(None)):
         raise HTTPException(404, f"no network for dataset_id={dataset_id!r}")
     axis = _time_axis(dataset_id)
 
-    pairs = _q(
-        """
-        MATCH (a:ASV {dataset_id:$d})-[r:CO_OCCURS_WITH {dataset_id:$d}]->(b:ASV {dataset_id:$d})
-        WHERE a.louvain_label IS NOT NULL AND b.louvain_label IS NOT NULL
-          AND a.louvain_label <> b.louvain_label
-        WITH CASE WHEN a.louvain_label < b.louvain_label THEN a.louvain_label
-             ELSE b.louvain_label END AS ca,
-             CASE WHEN a.louvain_label < b.louvain_label THEN b.louvain_label
-             ELSE a.louvain_label END AS cb,
-             size([(a)-[f:INFLUENCES {dataset_id:$d}]->(b) | f])
-           + size([(b)-[k:INFLUENCES {dataset_id:$d}]->(a) | k]) AS dirs
-        RETURN ca, cb, count(*) AS n_con,
-               sum(CASE WHEN dirs > 0 THEN 1 ELSE 0 END) AS n_with_ccm,
-               sum(dirs) AS n_ccm_directions
-        ORDER BY n_con DESC, ca, cb
-        """, d=dataset_id)
-    nmi_rows = _q(
-        """
-        MATCH (a:ASV {dataset_id:$d})-[f:INFLUENCES {dataset_id:$d}]->(b:ASV {dataset_id:$d})
-        WHERE a.louvain_label IS NOT NULL AND b.louvain_label IS NOT NULL
-          AND a.louvain_label <> b.louvain_label
-        WITH CASE WHEN a.louvain_label < b.louvain_label THEN a.louvain_label
-             ELSE b.louvain_label END AS ca,
-             CASE WHEN a.louvain_label < b.louvain_label THEN b.louvain_label
-             ELSE a.louvain_label END AS cb, f.nmi AS c
-        RETURN ca, cb, avg(c) AS mean_nmi
-        """, d=dataset_id)
-    nmi_mean = {(r["ca"], r["cb"]): r["mean_nmi"] for r in nmi_rows}
-    for p in pairs:
-        p["mean_nmi"] = nmi_mean.get((p["ca"], p["cb"]))
-
     base = {"dataset_id": dataset_id, "time_axis": axis, "months": semantics.MONTHS,
-            "pairs": pairs,
             "quantity": semantics.quantity(_q, dataset_id),
             "source_publication": {"citation": semantics.SOURCE_PUBLICATION,
                                    "doi": semantics.SOURCE_PUBLICATION_DOI}}

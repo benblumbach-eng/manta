@@ -1,4 +1,3 @@
-import type { EdgeRef } from "../App";
 import type { ClusterDetail } from "../api";
 import { useModules } from "../modules";
 import { pfeilPunkte } from "./netzpfeil";
@@ -10,11 +9,12 @@ type Buendel = {
 
 const MAX_GEZEIGT = 12;
 
-export default function ClusterNet({ label, partners, onOpenCluster, onOpenEdge }: {
+export default function ClusterNet({ label, partners, selected, onPick, onOpenCluster }: {
   label: number;
   partners: Buendel[];
+  selected: number | null;
+  onPick: (partner: number) => void;
   onOpenCluster?: (label: number) => void;
-  onOpenEdge?: (e: EdgeRef) => void;
 }) {
   const modules = useModules();
   const alle = [...partners].sort((a, b) => b.total - a.total || a.partner - b.partner);
@@ -33,21 +33,19 @@ export default function ClusterNet({ label, partners, onOpenCluster, onOpenEdge 
         {gezeigt.map((b, i) => {
           const [x, y] = punkt(i);
           const breite = 1 + 3 * (b.total / maxT);
-          const stark = b.edges[0];
+          const gewaehlt = selected === b.partner;
           const mx = (CX + x) / 2, my = (CY + y) / 2;
           const raus = b.raus ?? 0, rein = b.rein ?? 0;
           return (
-            <g key={b.partner} className={stark ? "cursor-pointer" : undefined}
-               onClick={() => stark && onOpenEdge?.({ source: stark.mine, target: stark.other,
-                                                      type: "con" })}>
+            <g key={b.partner} className="cursor-pointer" onClick={() => onPick(b.partner)}>
               <title>{`${b.total} link${b.total === 1 ? "" : "s"} to ${modules.label(b.partner)}`
                 + (raus || rein
                    ? ` · directed (CCM): ${raus} out, ${rein} in` : "")
-                + (stark ? ` — opens the strongest of them (r ${stark.corr.toFixed(2)})`
-                         : " — the individual links are not in this answer")}</title>
+                + " — show these links"}</title>
               <line x1={CX} y1={CY} x2={x} y2={y} stroke="transparent" strokeWidth={14} />
-              <line x1={CX} y1={CY} x2={x} y2={y} stroke="var(--chart-line)" strokeWidth={breite}
-                    opacity={0.75} />
+              <line x1={CX} y1={CY} x2={x} y2={y} strokeWidth={breite}
+                    stroke={gewaehlt ? "var(--accent)" : "var(--chart-line)"}
+                    opacity={gewaehlt ? 1 : 0.75} />
               {raus > 0 && (
                 <polygon data-testid="cluster-net-arrow" data-partner={b.partner} data-dir="out"
                          points={pfeilPunkte(CX, CY, x, y, 0.72, "hin")} fill="var(--text)"
@@ -86,17 +84,6 @@ export default function ClusterNet({ label, partners, onOpenCluster, onOpenEdge 
           {modules.label(label)}
         </text>
       </svg>
-      <p className="text-2xs text-fg-muted">
-        Every line leaves this module · width and number = links · arrow = a directed link (CCM)
-      </p>
-      <p className="text-2xs text-fg-muted">
-        A click opens the strongest link of that bundle
-      </p>
-      {alle.length > gezeigt.length && (
-        <p className="text-xs text-warn" data-testid="cluster-net-truncated">
-          Showing the {gezeigt.length} strongest of {alle.length} connected clusters.
-        </p>
-      )}
     </div>
   );
 }

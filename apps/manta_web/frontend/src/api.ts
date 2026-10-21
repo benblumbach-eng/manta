@@ -1175,16 +1175,11 @@ export type WheelCluster = {
   statement: string | null;
 };
 export type WheelEnvMonth = { month: number; mean: number | null; n: number };
-export type WheelPair = {
-  ca: number; cb: number; n_con: number; n_with_ccm: number; n_ccm_directions: number;
-  mean_nmi: number | null;
-};
 export type Wheel = {
   dataset_id: string;
   time_axis: "dates" | "ordinal";
   months: string[];
   clusters: WheelCluster[];
-  pairs: WheelPair[];
   environment: {
     variables: { key: string; label: string; unit: string; unit_note: string | null }[];
     monthly: Record<string, WheelEnvMonth[]>;
