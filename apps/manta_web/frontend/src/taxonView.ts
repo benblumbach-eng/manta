@@ -9,6 +9,8 @@ export const TAXONOMY_PLACEHOLDERS = [
   "unassigned", "NA", "", "Environment_Condition", "uncultured",
 ];
 
+export type TaxonRank = "genus" | "species";
+
 export type TaxonPoint = {
   id: string;
   label: string;
@@ -48,24 +50,28 @@ export function taxonLabel(path: Record<string, string | null>): string {
 
 const SEP = "\u0000";
 
-function keyOf(n: NetNode): string {
+function keyOf(n: NetNode, rank: TaxonRank): string {
+  if (rank === "genus") return (n.genus ?? "").trim();
   return TAXONOMY_RANKS
     .map((r) => (n as unknown as Record<string, string | null>)[r] ?? "")
     .join(SEP);
 }
 
-export function taxonPoints(nodes: NetNode[]): TaxonPoint[] {
+const genusOk = (n: NetNode) => !!(n.genus ?? "").trim() && !platzhalter(n.genus);
+
+export function taxonPoints(nodes: NetNode[], rank: TaxonRank = "species"): TaxonPoint[] {
   const groups = new Map<string, NetNode[]>();
   const einzeln: NetNode[] = [];
   for (const n of nodes) {
-    if (!groupable(n)) { einzeln.push(n); continue; }
-    const k = keyOf(n);
+    if (!(rank === "genus" ? genusOk(n) : groupable(n))) { einzeln.push(n); continue; }
+    const k = keyOf(n, rank);
     const g = groups.get(k);
     if (g) g.push(n); else groups.set(k, [n]);
   }
   const punkt = (id: string, members: NetNode[]): TaxonPoint => {
-    const path = Object.fromEntries(
-      TAXONOMY_RANKS.map((r) => [r, (members[0] as unknown as Record<string, string | null>)[r]]));
+    const wert = (m: NetNode, r: string) => (m as unknown as Record<string, string | null>)[r];
+    const path = Object.fromEntries(TAXONOMY_RANKS.map((r) => [r,
+      members.every((m) => wert(m, r) === wert(members[0], r)) ? wert(members[0], r) : null]));
     const cl = new Set(members.map((m) => m.cluster));
     const size = members.some((m) => m.size == null)
       ? null : members.reduce((a, m) => a + (m.size ?? 0), 0);
@@ -107,11 +113,4 @@ export function taxonLinks(points: TaxonPoint[], edges: NetEdge[]): TaxonLink[] 
   }
   return [...acc.values()].sort((x, y) =>
     x.source === y.source ? (x.target < y.target ? -1 : 1) : (x.source < y.source ? -1 : 1));
-}
-
-export function revolverPositions(n: number, radius: number): { dx: number; dy: number }[] {
-  return Array.from({ length: n }, (_, i) => {
-    const w = -Math.PI / 2 + (2 * Math.PI * i) / Math.max(1, n);
-    return { dx: radius * Math.cos(w), dy: radius * Math.sin(w) };
-  });
 }

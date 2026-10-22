@@ -10,7 +10,7 @@ export type Tokens = {
   accent: string; accentFill: string; accentSoft: string; onAccent: string;
   warn: string; warnFill: string; danger: string; dangerFill: string; ok: string;
   chartGrid: string; chartAxis: string; chartLine: string;
-  netLink: string; netNodeOutline: string; netLabel: string; netDisc: string;
+  netLink: string; netNodeOutline: string; netLabel: string;
   mark: string; crossLink: string;
 };
 
@@ -25,7 +25,7 @@ const NAMES: Record<Exclude<keyof Tokens, "light">, string> = {
   ok: "--ok",
   chartGrid: "--chart-grid", chartAxis: "--chart-axis", chartLine: "--chart-line",
   netLink: "--net-link", netNodeOutline: "--net-node-outline", netLabel: "--net-label",
-  netDisc: "--net-disc", mark: "--mark", crossLink: "--cross-link",
+  mark: "--mark", crossLink: "--cross-link",
 };
 
 export const isLight = () =>
