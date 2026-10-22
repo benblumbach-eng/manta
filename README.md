@@ -213,14 +213,17 @@ password before installing R. On Ubuntu it takes 10 to 30 minutes. With `--check
 what is missing. The versions are fixed on purpose, because other versions can turn the same
 reads into different ASVs.
 
-**Taxonomy for raw reads.** PR2 is a reference database of known DNA sequences. When MANTA
-runs DADA2 on raw reads, DADA2 compares each ASV with PR2 and assigns it a taxon name (from
-kingdom down to species, as far as the match allows). You only need it for raw reads; if you
-import DADA2 results, your taxonomy table already has the names. Download the PR2 file in DADA2
-format from the [PR2 releases](https://github.com/pr2database/pr2database/releases), set
+**Taxonomy for raw reads.** PR2 is a reference database of known 18S rRNA sequences, mostly
+from protists (single-celled eukaryotes). When MANTA runs DADA2 on raw reads, DADA2 compares each
+ASV with this reference and assigns it a taxon name (from kingdom down to species, as far as the
+match allows). For 16S data, a SILVA reference in the same DADA2 format works too. You only need
+a reference for raw reads; if you import DADA2 results, your taxonomy table already has the
+names. Download the PR2 file in DADA2 format from the
+[PR2 releases](https://github.com/pr2database/pr2database/releases), set
 `MANTA_PR2=<path to the file>` in `apps/manta_web/backend/.env` and run
-`bash apps/manta_web/dev.sh restart`. Without it, the import still works, but ASVs from raw
-reads stay `unassigned`.
+`bash apps/manta_web/dev.sh restart`. Without it, the import still works, but ASVs from raw reads
+stay `unassigned`. (The function filter uses its own copy of PR2's tables, which step 2 already
+downloads.)
 
 **Chat assistant.** Switch it on with:
 
