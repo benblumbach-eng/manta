@@ -41,7 +41,7 @@ export default function LegendPanel({ thr, c2, keyLabel, labelMax,
   const [sel, setSel] = useState<{ node: K } | { link: string } | null>(null);
   const on = (id: { node: K } | { link: string }) => sel == null || JSON.stringify(sel) === JSON.stringify(id);
   const part = (id: { node: K } | { link: string }, children: React.ReactNode, key: string) => (
-    <g key={key} data-testid={`legend-part-${key}`} onClick={() => setSel(id)}
+    <g key={key} data-testid={`legend-part-${key}`} onClick={() => select(id)}
        style={{ cursor: "pointer", opacity: on(id) ? 1 : 0.18 }}>
       {children}
     </g>
@@ -90,7 +90,7 @@ export default function LegendPanel({ thr, c2, keyLabel, labelMax,
   const mini = (
     <svg viewBox="0 0 400 180" className="w-full rounded-md border border-line bg-raised" data-testid="legend-mini-network"
          role="img" aria-label="example network; click a point or a link for its properties">
-      <rect width={400} height={180} fill="transparent" onClick={() => setSel(null)} />
+      <rect width={400} height={180} fill="transparent" onClick={() => select(null)} />
       {Object.keys(LINKS).map(drawLink)}
       {(Object.keys(P) as K[]).map((k) => part({ node: k }, <>
         <circle cx={P[k][0]} cy={P[k][1]} r={R[k] + 6} fill="transparent" />
@@ -101,92 +101,104 @@ export default function LegendPanel({ thr, c2, keyLabel, labelMax,
   );
 
   // Small samples for the value lists.
-  const W = 48, H = 20, MY = H / 2;
-  const Svg = ({ children }: { children: React.ReactNode }) => (
-    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="shrink-0" aria-hidden="true">{children}</svg>
+  const W = 32, H = 16, MY = H / 2;
+  const Svg = ({ children, w = W }: { children: React.ReactNode; w?: number }) => (
+    <svg width={w} height={H} viewBox={`0 0 ${w} ${H}`} className="shrink-0" aria-hidden="true">{children}</svg>
   );
-  const dot = (o: Outline) => <Svg><circle cx={W / 2} cy={MY} r={6} fill={c0} {...outlineStyle(o)} /></Svg>;
-  const arrowS = (dashed: boolean) => <Svg>
-    <line x1={6} y1={MY} x2={W - 12} y2={MY} stroke={LINE} strokeWidth={1.5} strokeDasharray={dashed ? "4 3" : undefined} />
-    {head(W - 6, MY, 1, 0, LINE)}</Svg>;
-  const lineS = (color: string, w = 1.5) => <Svg><line x1={6} y1={MY} x2={W - 6} y2={MY} stroke={color} strokeWidth={w} /></Svg>;
-  const Value = ({ sample, term, desc, here, testid }: { sample: React.ReactNode; term: string; desc: React.ReactNode; here?: boolean; testid?: string }) => (
-    <div className={`flex items-start gap-2 py-1 px-1 rounded-md${here ? " bg-accent-soft" : ""}`} data-testid={testid}
-         data-here={here ? "true" : undefined}>
-      {sample}
-      <div className="min-w-0">
-        <span className={here ? "text-accent font-medium" : "text-fg"}>{term}</span>
-        <span className="text-fg-muted"> — {desc}</span>
-      </div>
-    </div>
-  );
-  const Property = ({ name, children }: { name: string; children: React.ReactNode }) => (
-    <div className="pt-2 first:pt-0">
-      <div className="text-fg font-medium">{name}</div>
-      {children}
-    </div>
-  );
+  const dot = (o: Outline) => <Svg w={16}><circle cx={8} cy={MY} r={5} fill={c0} {...outlineStyle(o)} /></Svg>;
+  const lineS = (color: string, dashed = false, arrow = false) => <Svg>
+    <line x1={3} y1={MY} x2={arrow ? W - 8 : W - 3} y2={MY} stroke={color} strokeWidth={1.5} strokeDasharray={dashed ? "3 2" : undefined} />
+    {arrow && <polygon points={`${W - 3},${MY} ${W - 9},${MY - 3.5} ${W - 9},${MY + 3.5}`} fill={color} />}</Svg>;
 
-  const nodeCard = (k: K) => (
-    <>
-      <div className="text-fg font-medium">Point</div>
-      <p className="text-fg-muted leading-snug pb-1">one ASV, an exactly resolved sequence type — one circle each</p>
-      <Property name="Colour">
-        <Value testid="legend-colour-row" sample={<Svg><circle cx={14} cy={MY} r={5} fill={c0} /><circle cx={30} cy={MY} r={5} fill={c1} /></Svg>}
-               term="module" desc={`${modules.label(0)}, ${modules.label(1)}, …: a group with more links among themselves than chance would give`} />
-      </Property>
-      <Property name="Size">
-        <Value testid="legend-size-row" sample={<Svg><circle cx={14} cy={MY} r={3} fill={c1} /><circle cx={32} cy={MY} r={8} fill={c1} /></Svg>}
-               term="area" desc={sizeAbsent
-                 ? "not computed for this dataset: its values are a transform of unknown form — all circles are drawn the same size"
-                 : "circle area relative to the largest circle in view = stored value summed over all samples"} />
-      </Property>
-      <Property name="Outline">
-        <Value sample={dot("none")} term="none" desc="no mark" here={outlineOf[k] === "none"} />
-        {c2 && <Value sample={dot("keystone")} term="✦ Keystone" here={outlineOf[k] === "keystone"}
-                      desc={<span data-testid="legend-c2">{keyLabel}<Criterion2Details c2={c2} testid="legend-c2-declaration" /></span>} />}
-        <Value sample={dot("open")} term="Open" desc="the ASV whose page is open" here={outlineOf[k] === "open"} />
-        <Value sample={dot("marked")} term="Marked" desc="found by search, or member of the marked taxon or module" here={outlineOf[k] === "marked"} />
-      </Property>
-      <Property name="Name">
-        <Value sample={<Svg><text x={4} y={MY + 4} fontSize={11} fill="var(--text)">Genus</text></Svg>} term="label"
-               desc={`genus where known, otherwise the ASV id; shown up to ${labelMax} visible nodes`} />
-      </Property>
-    </>
-  );
-  const linkCard = (key: string) => {
-    const l = LINKS[key];
-    return (
-      <>
-        <div className="text-fg font-medium">Link</div>
-        <p className="text-fg-muted leading-snug pb-1" data-testid="legend-link-row">{(t?.recorded
-          ? `co-occurrence: r ≥ ${t.con_tr} and p < ${t.con_alpha} (Pearson on the Fourier coefficients)`
-          : "co-occurrence (Pearson on the Fourier coefficients); thresholds not recorded")
-          + " — positive correlations only; anti-correlated pairs are never linked"}</p>
-        <Property name="Colour">
-          <Value sample={lineS(LINE)} term="grey" desc="link within one module" here={!l.amber} />
-          <Value testid="legend-cross-row" sample={lineS(AMBER)} term="Amber" desc="link between two different modules" here={!!l.amber} />
-        </Property>
-        <Property name="Width">
-          <Value testid="legend-width-row" sample={<Svg><line x1={6} y1={MY - 4} x2={W - 6} y2={MY - 4} stroke={LINE} strokeWidth={1} />
-                                                       <line x1={6} y1={MY + 5} x2={W - 6} y2={MY + 5} stroke={LINE} strokeWidth={4} /></Svg>}
-                 term="strength" desc={widthText ?? `on a fixed scale, the same in every filter: r from ${t?.con_tr ?? "the threshold"}${t?.recorded ? "" : " (default)"} to 1; with Links off, the larger NMI from 0 to 1`} />
-        </Property>
-        <Property name="Direction">
-          <Value sample={lineS(LINE)} term="none" desc="no CCM direction drawn" here={l.dir === "none"} />
-          <Value sample={arrowS(false)} term="Arrow" here={l.dir === "arrow"}
-                 desc="CCM direction kept (p < 0.05): it points to the end that can be predicted from the other" />
-          <Value sample={arrowS(true)} term="Dashed arrow" here={l.dir === "dashed"}
-                 desc="CCM direction tested and rejected: p ≥ 0.05 (switch Rejected on)" />
-          <Value sample={<Svg>
-                   <line x1={6} y1={MY + 3} x2={W - 6} y2={MY + 3} stroke={LINE} strokeWidth={1.5} />
-                   <path d={`M ${W - 6} ${MY + 3} Q ${W / 2} ${MY - 9} 6 ${MY + 3}`} fill="none" stroke={LINE} strokeWidth={1} strokeDasharray="3 3" />
-                   <polygon points={`6,${MY + 3} 12,${MY - 1} 12,${MY + 5}`} fill={LINE} opacity={0.8} /></Svg>}
-                 term="Side arrow" here={l.dir === "side"} desc="a rejected direction shown beside a link that is drawn anyway" />
-        </Property>
-      </>
-    );
+  type Val = { term: string; sample: React.ReactNode; desc: React.ReactNode; testid?: string };
+  type Prop = { name: string; values: Val[]; current: number };
+  const nodeProps = (k: K): Prop[] => {
+    const outlines: [Outline, Val][] = [
+      ["none", { term: "none", sample: dot("none"), desc: "no mark" }],
+      ...(c2 ? [["keystone", { term: "✦ Keystone", sample: dot("keystone"),
+        desc: <span data-testid="legend-c2">{keyLabel}<Criterion2Details c2={c2} testid="legend-c2-declaration" /></span> }] as [Outline, Val]] : []),
+      ["open", { term: "Open", sample: dot("open"), desc: "the ASV whose page is open" }],
+      ["marked", { term: "Marked", sample: dot("marked"), desc: "found by search, or member of the marked taxon or module" }],
+    ];
+    return [
+      { name: "Colour", current: 0, values: [{ term: "module", testid: "legend-colour-row",
+        sample: <Svg><circle cx={10} cy={MY} r={4.5} fill={c0} /><circle cx={22} cy={MY} r={4.5} fill={c1} /></Svg>,
+        desc: `${modules.label(0)}, ${modules.label(1)}, …: a group with more links among themselves than chance would give` }] },
+      { name: "Size", current: 0, values: [{ term: "area", testid: "legend-size-row",
+        sample: <Svg><circle cx={9} cy={MY} r={2.5} fill={c1} /><circle cx={21} cy={MY} r={6.5} fill={c1} /></Svg>,
+        desc: sizeAbsent
+          ? "not computed for this dataset: its values are a transform of unknown form — all circles are drawn the same size"
+          : "circle area relative to the largest circle in view = stored value summed over all samples" }] },
+      { name: "Outline", current: outlines.findIndex(([o]) => o === outlineOf[k]), values: outlines.map(([, v]) => v) },
+      { name: "Name", current: 0, values: [{ term: "label",
+        sample: null,
+        desc: `genus where known, otherwise the ASV id; shown up to ${labelMax} visible nodes` }] },
+    ];
   };
+  const linkProps = (key: string): Prop[] => {
+    const l = LINKS[key];
+    const dirs: Dir[] = ["none", "arrow", "dashed", "side"];
+    return [
+      { name: "Colour", current: l.amber ? 1 : 0, values: [
+        { term: "grey", sample: lineS(LINE), desc: "link within one module" },
+        { term: "amber", sample: lineS(AMBER), desc: "link between two different modules", testid: "legend-cross-row" }] },
+      { name: "Width", current: 0, values: [{ term: "strength", testid: "legend-width-row",
+        sample: <Svg><line x1={3} y1={MY - 3} x2={W - 3} y2={MY - 3} stroke={LINE} strokeWidth={1} />
+                     <line x1={3} y1={MY + 3} x2={W - 3} y2={MY + 3} stroke={LINE} strokeWidth={3.5} /></Svg>,
+        desc: widthText ?? `on a fixed scale, the same in every filter: r from ${t?.con_tr ?? "the threshold"}${t?.recorded ? "" : " (default)"} to 1; with Links off, the larger NMI from 0 to 1` }] },
+      { name: "Direction", current: dirs.indexOf(l.dir), values: [
+        { term: "none", sample: lineS(LINE), desc: "no CCM direction drawn" },
+        { term: "arrow", sample: lineS(LINE, false, true),
+          desc: "CCM direction kept (p < 0.05): it points to the end that can be predicted from the other" },
+        { term: "dashed", sample: lineS(LINE, true, true), desc: "CCM direction tested and rejected: p ≥ 0.05 (switch Rejected on)" },
+        { term: "side arrow", sample: <Svg>
+            <line x1={3} y1={MY + 3} x2={W - 3} y2={MY + 3} stroke={LINE} strokeWidth={1.5} />
+            <path d={`M ${W - 3} ${MY + 3} Q ${W / 2} ${MY - 8} 6 ${MY + 1}`} fill="none" stroke={LINE} strokeWidth={1} strokeDasharray="2 2" />
+            <polygon points={`3,${MY + 3} 9,${MY - 1} 9,${MY + 4}`} fill={LINE} /></Svg>,
+          desc: "a rejected direction shown beside a link that is drawn anyway" }] },
+    ];
+  };
+  // A value the viewer clicks in the card replaces the one the clicked part shows.
+  const [picked, setPicked] = useState<Record<string, number>>({});
+  const select = (id: { node: K } | { link: string } | null) => { setSel(id); setPicked({}); };
+  const card = (title: string, desc: string, props: Prop[], testid?: string) => (
+    <div className="rounded-md border border-line bg-raised" data-testid="legend-definition">
+      <div className="px-3 py-2">
+        <div className="text-sm font-semibold text-fg">{title}</div>
+        <div className="text-fg-muted leading-snug" data-testid={testid}>{desc}</div>
+      </div>
+      <dl className="grid grid-cols-[4.5rem_1fr]">
+        {props.map((p) => {
+          const shown = picked[p.name] ?? p.current, v = p.values[shown];
+          return (
+            <div key={p.name} className="contents" data-testid={v.testid}>
+              <dt className="border-t border-line px-3 py-2 font-semibold text-fg-muted">{p.name}</dt>
+              <dd className="border-t border-line pr-3 py-2 space-y-1 min-w-0">
+                {p.values.length > 1
+                  ? <div className="flex flex-wrap gap-1">
+                      {p.values.map((o, i) => (
+                        <button key={o.term} type="button" aria-pressed={i === shown} data-here={i === p.current ? "true" : undefined}
+                          onClick={() => setPicked({ ...picked, [p.name]: i })}
+                          className={`inline-flex items-center gap-1 rounded-md pl-0.5 pr-1.5 py-0.5 ring-1 ring-inset transition-colors ${i === shown
+                            ? "ring-accent/60 bg-accent-soft text-accent font-medium" : "ring-line text-fg hover:bg-control"}`}>
+                          {o.sample}{o.term}
+                        </button>
+                      ))}
+                    </div>
+                  : <div className="flex items-center gap-1 text-fg">{v.sample}{v.term}</div>}
+                <div className="text-fg-muted leading-snug">{v.desc}</div>
+              </dd>
+            </div>
+          );
+        })}
+      </dl>
+    </div>
+  );
+  const linkDesc = (t?.recorded
+    ? `co-occurrence: r ≥ ${t.con_tr} and p < ${t.con_alpha} (Pearson on the Fourier coefficients)`
+    : "co-occurrence (Pearson on the Fourier coefficients); thresholds not recorded")
+    + " — positive correlations only; anti-correlated pairs are never linked";
+
   return (
     <div data-testid="legend-panel">
       <PanelHeader title="Legend" onClose={onClose} closeTestid="legend-panel-close" />
@@ -195,8 +207,10 @@ export default function LegendPanel({ thr, c2, keyLabel, labelMax,
         <div className="space-y-2">
           {mini}
           {sel && (
-            <div className="rounded-md border border-line bg-raised px-2 py-2" data-testid="legend-definition">
-              {"node" in sel ? nodeCard(sel.node) : linkCard(sel.link)}
+            <div>
+              {"node" in sel
+                ? card("Point", "one ASV, an exactly resolved sequence type — one circle each", nodeProps(sel.node))
+                : card("Link", linkDesc, linkProps(sel.link), "legend-link-row")}
             </div>
           )}
         </div>
