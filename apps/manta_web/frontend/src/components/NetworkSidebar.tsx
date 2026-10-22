@@ -8,7 +8,7 @@ import { useDatasetSearch } from "../datasetSearch";
 import ErrorNotice from "./ErrorNotice";
 import DatasetFacts from "./DatasetFacts";
 import { Button, SectionHeading, TextButton, ToggleButton } from "./ui";
-import { Segmented } from "./controls";
+import { PercentInput, Segmented } from "./controls";
 import { ABUNDANCE_STEPS } from "../networkFilters";
 
 const NEUTRAL_SWATCH = "var(--control-strong)";
@@ -759,26 +759,14 @@ export default function NetworkSidebar(p: SidebarProps) {
           </div>
         )}
 
-        {abundanceOpen && (() => {
-          const i = filters.abundance != null
-            ? Math.max(0, ABUNDANCE_STEPS.indexOf(filters.abundance)) : ABUNDANCE_STEPS.indexOf(0.1);
-          return (
+        {abundanceOpen && (
           <div className={BOX} data-testid="filter-abundance-section">
             <SectionHeading className="mb-1">Mean relative abundance</SectionHeading>
-            <div className="flex items-center gap-2 text-xs text-fg">
-              <input data-testid="filter-abundance" type="range" min={0}
-                max={ABUNDANCE_STEPS.length - 1} step={1}
-                aria-label="minimum mean relative abundance"
-                aria-valuetext={`${ABUNDANCE_STEPS[i]} %`} value={i}
-                onChange={(e) => p.onFilters({ abundance: ABUNDANCE_STEPS[Number(e.target.value)] })}
-                className="flex-1" />
-              <span className="tabular-nums w-16 text-right" data-testid="filter-abundance-value">
-                {filters.abundance != null ? `≥ ${filters.abundance} %` : "off"}
-              </span>
-            </div>
+            <PercentInput testid="filter-abundance" label="minimum mean relative abundance"
+              value={filters.abundance} steps={ABUNDANCE_STEPS} fallback={0.1}
+              onChange={(v) => p.onFilters({ abundance: v })} />
           </div>
-          );
-        })()}
+        )}
 
         {strengthOpen && (
           <div className={BOX} data-testid="filter-strength-section">

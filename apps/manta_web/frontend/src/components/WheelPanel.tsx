@@ -1,8 +1,8 @@
-import { StateNotice } from "./ui";
+import { SectionHeading, StateNotice } from "./ui";
 import { useEffect, useMemo, useState } from "react";
 import { getLight, getSeasons, getWheel, type LightYear, type SeasonMark, type Seasons,
          type Wheel } from "../api";
-import { Chooser, ChooserGroup, ChooserRow } from "./controls";
+import { Chooser, ChooserGroup, ChooserRow, PercentInput } from "./controls";
 import InfoTip from "./InfoTip";
 import { useModules } from "../modules";
 import ProvenanceFooter from "./ProvenanceFooter";
@@ -15,6 +15,15 @@ import { envColour, envLabelColour, sunColours } from "../design/dataColours";
 function windowLabel(w: string[]): string {
   if (w.length === 0) return "";
   return w.length === 1 ? w[0] : `${w[0]}–${w[w.length - 1]}`;
+}
+
+const ARC_STEPS = [0.1, 0.5, 1, 2, 5, 10, 15, 20, 30, 50];
+const ARC_DEFAULT = 10;
+
+function runsLabel(c: { runs: string[][]; peak: string | null }, arc: number): string {
+  if (!c.runs.length) return `below ${arc} % in every month`;
+  const r = c.runs.map((m) => (m.length >= 12 ? "all year" : windowLabel(m))).join(", ");
+  return r + (c.peak ? ` · peak ${c.peak}` : "");
 }
 
 function hourColour(h: number): string {
@@ -64,6 +73,7 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
   const [envKey, setEnvKey] = useState<string | null>("temp");
   const [year, setYear] = useState<string | null>(null);
   useEffect(() => { setYear(null); }, [datasetId]);
+  const [arc, setArc] = useState(ARC_DEFAULT);
   const [held, setHeld] = useState<number | null>(null);
   const hold = (l: number) => setHeld((h) => (h === l ? null : l));
   useEffect(() => { setHeld(null); }, [datasetId]);
@@ -84,10 +94,16 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
   }, [datasetId]);
   const originDoy = origin === "solstice" ? (lightYear?.shortest_day_doy ?? 1)
     : origin === "sun" ? (lightYear?.sun_return_doy ?? 1) : 1;
+  useEffect(() => { setW(null); }, [datasetId, year]);
   useEffect(() => {
-    setW(null); setErr(null);
-    getWheel(datasetId, year).then(setW).catch((e) => setErr(e));
-  }, [datasetId, year, nochmal]);
+    let live = true;
+    const t = setTimeout(() => {
+      setErr(null);
+      getWheel(datasetId, year, arc).then((r) => { if (live) setW(r); })
+        .catch((e) => { if (live) setErr(e); });
+    }, 250);
+    return () => { live = false; clearTimeout(t); };
+  }, [datasetId, year, arc, nochmal]);
 
   const envVars = w?.environment?.variables ?? [];
   const activeEnv = envVars.find((v) => v.key === envKey) ?? null;
@@ -260,6 +276,12 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
             )}
           </div>
 
+          <div className="rounded-md border border-line bg-raised px-2 py-2" data-testid="wheel-arc-section">
+            <SectionHeading className="mb-1">Arc: monthly mean share of all reads</SectionHeading>
+            <PercentInput testid="wheel-arc-threshold" label="arc threshold, share of all reads"
+              value={arc} steps={ARC_STEPS} fallback={ARC_DEFAULT} onChange={setArc} />
+          </div>
+
           {w.year?.note && (
             <p className="text-xs text-warn" data-testid="wheel-year-note">
               {w.year.year}: {w.year.note} — windows rest on this year&rsquo;s {w.year.n} samples only.
@@ -355,21 +377,18 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
             {clusters.map((c, i) => {
               const r = ringR(i);
               const col = modules.color(c.louvain_label);
-              const title = `${modules.label(c.louvain_label)} · ${c.statement ?? "no window"} · ${c.n_members} ASVs`;
+              const title = `${modules.label(c.louvain_label)} · ${runsLabel(c, w.arc)} · ${c.n_members} ASVs`;
               return (
                 <g key={c.louvain_label} data-testid={`wheel-arc-${c.louvain_label}`}
                    className="cursor-pointer"
                    onClick={() => { hold(c.louvain_label); onOpenCluster(c.louvain_label); }}>
                   <circle cx={CX} cy={CY} r={r} fill="none" stroke={col} strokeWidth={1} opacity={0.14} />
-                  {c.window_months.length > 0 && c.window_months.length < 12 && (
-                    <path d={arcPath(r, c.window_months[0], c.window_months.length)}
-                          fill="none" stroke={col} strokeWidth={Math.min(ringStep * 0.6, 9)}
-                          strokeLinecap="round" opacity={0.9} />
-                  )}
-                  {c.window_months.length >= 12 && (
-                    <circle cx={CX} cy={CY} r={r} fill="none" stroke={col}
-                            strokeWidth={Math.min(ringStep * 0.6, 9)} opacity={0.9} />
-                  )}
+                  {c.runs_months.map((run) => (run.length >= 12
+                    ? <circle key="ring" cx={CX} cy={CY} r={r} fill="none" stroke={col}
+                              strokeWidth={Math.min(ringStep * 0.6, 9)} opacity={0.9} />
+                    : <path key={run[0]} d={arcPath(r, run[0], run.length)}
+                            fill="none" stroke={col} strokeWidth={Math.min(ringStep * 0.6, 9)}
+                            strokeLinecap="round" opacity={0.9} />))}
                   {c.peak_month != null && (() => {
                     const [px, py] = P(r, monthCenter(c.peak_month));
                     return <circle cx={px} cy={py} r={4} fill={col} stroke="var(--raised)" strokeWidth={1.5} />;
@@ -421,7 +440,7 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
               <span>24 h of sun</span>
             </>)}
             {activeEnv && <span><span className="inline-block w-3 h-0.5 align-middle mr-1" style={{ background: ENV }} />{SHORT[activeEnv.key] ?? activeEnv.label}, monthly mean (dashed circles: scale)</span>}
-            <span><span className="inline-block w-3 h-1.5 align-middle mr-1 rounded" style={{ background: "var(--chart-line)" }} />module window; dot = highest month</span>
+            <span><span className="inline-block w-3 h-1.5 align-middle mr-1 rounded" style={{ background: "var(--chart-line)" }} />months ≥ {w.arc} % of all reads; dot = highest month</span>
             {seasonMarks.length > 0 && (
               <span data-testid="wheel-season-legend">
                 <span className="inline-block w-3 h-px align-middle mr-1" style={{ background: "var(--text)" }} />
@@ -458,9 +477,7 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
                       style={{ background: modules.color(c.louvain_label) }} />
                 <span className="text-fg shrink-0">{modules.label(c.louvain_label)}</span>
                 <span className="text-fg-muted text-xs flex-1">
-                  {c.window.length
-                    ? windowLabel(c.window) + (c.peak ? ` · peak ${c.peak}` : "")
-                    : "no window above its own annual mean"}
+                  {runsLabel(c, w.arc)}
                 </span>
                 <span className="text-fg-muted text-xs tabular-nums shrink-0">{c.n_members} ASVs</span>
               </button>
@@ -468,17 +485,14 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
           </div>
 
           <p className="flex items-center text-2xs text-fg-muted" data-testid="wheel-windows-note">
-            <span data-testid="wheel-windows-definition">Shares, not cell counts. Arc: one above-mean
-            run (others not drawn); dot: highest month, can lie outside the arc.</span>
+            <span data-testid="wheel-windows-definition">Shares, not cell counts. Arc: months
+            where the module makes up at least {w.arc} % of all reads; dot: highest month.</span>
             <InfoTip title="The arc">
-              <p>A run is a stretch of consecutive months in which the module lies above its own
-              annual mean. A module can have several runs. The arc shows one of them: the
-              module&rsquo;s window, as named in the list below. Other runs are not drawn.</p>
-              <p>The window is the run with the largest summed excess over the annual mean, so
-              height and length both count. When a second run comes close, the hover text names
-              both; only the window is drawn.</p>
-              <p>The dot marks the single highest month. It can lie outside the arc, for example
-              when one high month stands alone and a longer run adds up to more.</p>
+              <p>For each calendar month MANTA takes the mean share of the module: its reads divided
+              by all reads of the sample. Every month at or above the threshold is part of an arc,
+              so a module can have several arcs, or a full ring when it never drops below.</p>
+              <p>A module below the threshold in every month gets no arc. Its dot still marks the
+              highest month.</p>
             </InfoTip>
           </p>
         </div>

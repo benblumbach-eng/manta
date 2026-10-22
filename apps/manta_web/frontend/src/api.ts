@@ -1179,19 +1179,20 @@ export const getProvenanceChain = (ds: string) =>
 export type WheelCluster = {
   louvain_label: number;
   n_members: number;
-  window: string[];
-  window_months: number[];
+  runs: string[][];
+  runs_months: number[][];
   peak: string | null;
   peak_month: number | null;
+  peak_share: number | null;
   by_month?: { month: number; mean: number; n: number }[];
   n_min: number;
-  statement: string | null;
 };
 export type WheelEnvMonth = { month: number; mean: number | null; n: number };
 export type Wheel = {
   dataset_id: string;
   time_axis: "dates" | "ordinal";
   months: string[];
+  arc: number;
   clusters: WheelCluster[];
   environment: {
     variables: { key: string; label: string; unit: string; unit_note: string | null }[];
@@ -1220,8 +1221,8 @@ export type Seasons = {
 };
 export const getSeasons = (ds: string) => get<Seasons>(`/datasets/${ds}/seasons`);
 
-export const getWheel = (ds: string, year?: string | null) =>
-  get<Wheel>(`/datasets/${ds}/wheel${year ? `?year=${encodeURIComponent(year)}` : ""}`);
+export const getWheel = (ds: string, year: string | null, arc: number) =>
+  get<Wheel>(`/datasets/${ds}/wheel?arc=${arc}${year ? `&year=${encodeURIComponent(year)}` : ""}`);
 
 
 export type Params = {

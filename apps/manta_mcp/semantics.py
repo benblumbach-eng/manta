@@ -1319,6 +1319,20 @@ def cluster_functions(q: Runner, dataset_id: str, louvain_label: int) -> dict:
 ACTIVITY_SECOND_RUN_RATIO = 2 / 3
 
 
+def month_runs(ms: list[int]) -> list[list[int]]:
+    if not ms:
+        return []
+    out = [[ms[0]]]
+    for m in ms[1:]:
+        if m == out[-1][-1] + 1:
+            out[-1].append(m)
+        else:
+            out.append([m])
+    if len(out) > 1 and out[0][0] == 1 and out[-1][-1] == 12:
+        out[-1] = out[-1] + out.pop(0)
+    return out
+
+
 def activity(freq: dict) -> dict:
     axis = freq.get("time_axis")
     pts = freq.get("points") or []
@@ -1332,20 +1346,7 @@ def activity(freq: dict) -> dict:
         peak = max(climo, key=lambda c: c["mean"])
         months = sorted(c["month"] for c in above)
 
-        def _runs(ms):
-            if not ms:
-                return []
-            out = [[ms[0]]]
-            for m in ms[1:]:
-                if m == out[-1][-1] + 1:
-                    out[-1].append(m)
-                else:
-                    out.append([m])
-            if len(out) > 1 and out[0][0] == 1 and out[-1][-1] == 12:
-                out[-1] = out[-1] + out.pop(0)
-            return out
-
-        runs = _runs(months)
+        runs = month_runs(months)
         mittel = {c["month"]: c["mean"] for c in climo}
         ueber = {tuple(r): sum(mittel[m] - overall for m in r) for r in runs}
         reihe = sorted(runs, key=lambda r: (-ueber[tuple(r)], r[0]))

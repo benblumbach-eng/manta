@@ -2809,7 +2809,8 @@ def _cluster_note(dataset_id: str, louvain_label: int) -> dict:
 
 
 @app.get("/datasets/{dataset_id}/wheel", dependencies=[Depends(visible_dataset)])
-def wheel(dataset_id: str, year: str | None = Query(None)):
+def wheel(dataset_id: str, year: str | None = Query(None),
+          arc: float = Query(10.0, ge=0, le=100)):
     labels = [r["l"] for r in _q(
         "MATCH (a:ASV {dataset_id:$d}) WHERE a.louvain_label IS NOT NULL "
         "RETURN DISTINCT a.louvain_label AS l ORDER BY l", d=dataset_id)]
@@ -2818,7 +2819,7 @@ def wheel(dataset_id: str, year: str | None = Query(None)):
     axis = _time_axis(dataset_id)
 
     base = {"dataset_id": dataset_id, "time_axis": axis, "months": semantics.MONTHS,
-            "quantity": semantics.quantity(_q, dataset_id),
+            "quantity": semantics.quantity(_q, dataset_id), "arc": arc,
             "source_publication": {"citation": semantics.SOURCE_PUBLICATION,
                                    "doi": semantics.SOURCE_PUBLICATION_DOI}}
     if axis != semantics.TIME_AXIS_DATES:
@@ -2872,19 +2873,20 @@ def wheel(dataset_id: str, year: str | None = Query(None)):
         act = semantics.activity(freq)
         climo = [c for c in ((freq.get("seasonal") or {}).get("climatology") or [])
                  if c.get("mean") is not None]
+        runs = semantics.month_runs(sorted(c["month"] for c in climo if c["mean"] * 100 >= arc))
+        im_lauf = {m for r in runs for m in r}
         clusters.append({
             "louvain_label": l, "n_members": n_members.get(l, 0),
-            "window": act["window"],
-            "window_months": [month_no[m] for m in act["window"]],
-            "windows": act["windows"],
-            "windows_months": [[month_no[m] for m in r] for r in act["windows"]],
+            "runs": [[semantics.MONTHS[m - 1] for m in r] for r in runs],
+            "runs_months": runs,
             "peak": act["peak"],
             "peak_month": month_no.get(act["peak"]),
+            "peak_share": max((c["mean"] for c in climo), default=None),
             "by_month": [{"month": c["month"], "mean": c["mean"], "n": c["n"]} for c in climo],
-            "n_min": act["n_min"], "statement": act["statement"],
+            "n_min": min((c["n"] for c in climo if c["month"] in im_lauf), default=0),
         })
-    clusters.sort(key=lambda c: (not c["window_months"], c["window_months"][0]
-                                 if c["window_months"] else 99, c["louvain_label"]))
+    clusters.sort(key=lambda c: (not c["runs_months"], c["runs_months"][0][0]
+                                 if c["runs_months"] else 99, c["louvain_label"]))
 
     env_rows = _q(
         "MATCH (s:Sample {dataset_id:$d}) RETURN toString(s.date) AS date, "

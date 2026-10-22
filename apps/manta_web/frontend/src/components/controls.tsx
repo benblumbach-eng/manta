@@ -134,3 +134,33 @@ export function ChooserRow({ checked, onToggle, label, hint, colour, testid, rad
     </button>
   );
 }
+
+export function PercentInput({ value, steps, fallback, onChange, testid, label }: {
+  value: number | null; steps: number[]; fallback: number;
+  onChange: (v: number) => void; testid: string; label: string;
+}) {
+  const [text, setText] = useState(value != null ? String(value) : "");
+  useEffect(() => {
+    if (Number(text.replace(",", ".")) !== value) setText(value != null ? String(value) : "");
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  const v = value ?? fallback;
+  const i = Math.max(0, steps.reduce((best, s, k) => (s <= v ? k : best), -1));
+  return (
+    <div className="flex items-center gap-2 text-xs text-fg">
+      <input data-testid={testid} type="range" min={0} max={steps.length - 1} step={1}
+        aria-label={label} aria-valuetext={`${steps[i]} %`} value={i}
+        onChange={(e) => onChange(steps[Number(e.target.value)])}
+        className="flex-1" />
+      <span>≥</span>
+      <input data-testid={`${testid}-value`} type="text" inputMode="decimal" value={text}
+        placeholder="off" aria-label={label}
+        onChange={(e) => {
+          setText(e.target.value);
+          const n = Number(e.target.value.replace(",", "."));
+          if (e.target.value.trim() !== "" && Number.isFinite(n) && n >= 0 && n <= 100) onChange(n);
+        }}
+        className="w-14 px-1 py-0.5 rounded-md bg-control border border-line-strong text-fg tabular-nums text-right" />
+      <span>%</span>
+    </div>
+  );
+}
