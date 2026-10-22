@@ -511,13 +511,13 @@ export default function NetworkSidebar(p: SidebarProps) {
                         <div className="ml-5 mt-1 grid grid-cols-[1fr_auto_auto] items-center gap-x-2 gap-y-1 text-xs text-fg-muted"
                           data-testid={`keystone-k${k}-params`}>
                           {k === 1 ? <>
-                            <KeystoneField testid="keystone-p1" label="p <" value={p.kp.p1}
+                            <KeystoneField testid="keystone-p1" label="max. CCM p-value" value={p.kp.p1}
                               min={0} max={1} onChange={(v) => p.onKp({ p1: v })} />
                             {reset}
-                            <KeystoneField testid="keystone-links1" label="min. links" value={p.kp.links1}
+                            <KeystoneField testid="keystone-links1" label="min. CCM links" value={p.kp.links1}
                               min={1} max={1000} integer onChange={(v) => p.onKp({ links1: v })} />
                           </> : <>
-                            <KeystoneField testid="keystone-q2" label="q ≤" value={p.kp.q2}
+                            <KeystoneField testid="keystone-q2" label="max. corrected p-value" value={p.kp.q2}
                               min={0} max={1} onChange={(v) => p.onKp({ q2: v })} />
                             {reset}
                             <KeystoneField testid="keystone-module2" label="min. module size"
