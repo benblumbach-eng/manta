@@ -19,29 +19,4 @@ export const moduleIsGrey = (label: number | null | undefined) =>
 
 export const CLUSTER_PALETTE_SIZE = MODULE_PALETTE.dark.length;
 
-const FUNCTION_PALETTE = {
-  dark: [
-    "#E69F00",
-    "#56B4E9",
-    "#009E73",
-    "#F0E442",
-    "#0072B2",
-    "#D55E00",
-    "#CC79A7",
-    "#B07AA1",
-    "#9C755F",
-  ],
-  light: ["#a86f00", "#1f7fb8", "#007a59", "#7f7700", "#0072B2", "#b84e00", "#b0507f", "#8e5b81",
-          "#7d5c48"],
-} as const;
-export const FUNCTION_OTHER_COLOURS = { dark: "#f1f5f9", light: "#1e293b" } as const;
-export const functionOther = (light = themeLight()) =>
-  light ? FUNCTION_OTHER_COLOURS.light : FUNCTION_OTHER_COLOURS.dark;
-export const FUNCTION_NONE = "#94a3b8";
-
-export function functionColor(i: number, light = themeLight()): string {
-  const pal = light ? FUNCTION_PALETTE.light : FUNCTION_PALETTE.dark;
-  return i >= 0 && i < pal.length ? pal[i] : functionOther(light);
-}
-
-export const FUNCTION_PALETTE_SIZE = FUNCTION_PALETTE.dark.length;
+export const NO_MODULE_COLOUR = "#94a3b8";

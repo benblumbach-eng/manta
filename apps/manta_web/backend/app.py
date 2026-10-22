@@ -57,8 +57,19 @@ def driver():
     return _driver
 
 
+def _remove_function_annotation():
+    try:
+        _w("MATCH (t:TraitRun) DETACH DELETE t")
+        _w("MATCH (a:ASV) WHERE a.trait_function IS NOT NULL OR a.trait_run_id IS NOT NULL "
+           "REMOVE a.trait_function, a.trait_source, a.trait_rank, a.trait_run_id")
+        _w("DROP CONSTRAINT trait_run_key IF EXISTS")
+    except Exception:
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _remove_function_annotation()
     yield
     global _driver
     if _driver is not None:
@@ -1496,6 +1507,24 @@ def samples(dataset_id: str):
     return {"dataset_id": dataset_id, "time_axis": _time_axis(dataset_id), "samples": rows}
 
 
+def _asv_rel_abundance(dataset_id: str) -> dict[str, float]:
+    return {r["id"]: r["rel"] for r in _q(
+        """
+        MATCH (s:Sample {dataset_id:$d})
+        OPTIONAL MATCH (s)-[all:HAS_ABUNDANCE]->(:ASV {dataset_id:$d})
+        WITH s, sum(all.count) AS live_total
+        WITH s, coalesce(s.analysed_reads_total, live_total) AS tot
+        WITH collect({s: s, tot: tot}) AS proben, count(s) AS n
+        UNWIND proben AS p
+        WITH p.s AS s, p.tot AS tot, n WHERE tot > 0
+        MATCH (s)-[h:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d})
+        WITH a, n, sum(toFloat(h.count) / tot) AS summe
+        RETURN a.id AS id, summe / n AS rel
+        """,
+        d=dataset_id,
+    )}
+
+
 @app.get("/datasets/{dataset_id}/asvs", dependencies=[Depends(visible_dataset)])
 def asv_list(dataset_id: str):
     rows = _q(
@@ -1506,9 +1535,11 @@ def asv_list(dataset_id: str):
         ORDER BY coalesce(a.read_count_total, 0) DESC, a.id
         """,
         d=dataset_id)
-    return {"dataset_id": dataset_id,
-            "asvs": [{"id": r["id"], "cluster": r["cluster"],
-                      "label": semantics.taxon_label({t: r[t] for t in TAXONOMY})} for r in rows]}
+    rel = _asv_rel_abundance(dataset_id)
+    asvs = [{"id": r["id"], "cluster": r["cluster"], "share": rel.get(r["id"], 0.0),
+             "label": semantics.taxon_label({t: r[t] for t in TAXONOMY})} for r in rows]
+    asvs.sort(key=lambda a: (-a["share"], a["id"]))
+    return {"dataset_id": dataset_id, "asvs": asvs}
 
 
 @app.get("/datasets/{dataset_id}/sample/{sample_id}", dependencies=[Depends(visible_dataset)])
@@ -1730,7 +1761,7 @@ SEARCH_MAX_TAXA = 8
 def _search_row(r: dict) -> dict:
     path = r["path"]
     genus = path.get("genus")
-    return {"id": r["id"], "label": semantics.taxon_label(path),
+    return {"id": r["id"], "label": semantics.taxon_label(path), "share": r["share"],
             "genus": genus if genus not in semantics.TAXONOMY_PLACEHOLDERS else None,
             "cluster": r["cluster"], "n_samples_present": r["n_samples_present"],
             "id_match": r["id_hit"], "matched_ranks": r["hit_ranks"]}
@@ -1759,12 +1790,15 @@ def search(dataset_id: str, q: str = Query(..., min_length=1, max_length=200),
         d=dataset_id, ql=ql, ranks=ranks, taxon_ok=taxon_ok,
         ph=list(semantics.TAXONOMY_PLACEHOLDERS))
     n_samples = _q("MATCH (s:Sample {dataset_id:$d}) RETURN count(s) AS n", d=dataset_id)[0]["n"]
+    rel = _asv_rel_abundance(dataset_id) if rows else {}
+    for r in rows:
+        r["share"] = rel.get(r["id"], 0.0)
 
-    def nach_vorkommen(x: dict):
-        return (-x["n_samples_present"], x["id"])
+    def nach_anteil(x: dict):
+        return (-x["share"], x["id"])
 
-    im_netz = sorted((r for r in rows if r["cluster"] is not None), key=nach_vorkommen)
-    draussen = sorted((r for r in rows if r["cluster"] is None), key=nach_vorkommen)
+    im_netz = sorted((r for r in rows if r["cluster"] is not None), key=nach_anteil)
+    draussen = sorted((r for r in rows if r["cluster"] is None), key=nach_anteil)
 
     gruppen: dict[tuple[str, str], list[dict]] = {}
     for r in draussen:
@@ -2182,33 +2216,16 @@ def _network_nodes(dataset_id):
                a.read_count_total AS size, a.max_abundance_month AS peak_month,
                COUNT {{ (a)<-[h:HAS_ABUNDANCE]-(:Sample {{dataset_id:$d}}) WHERE h.count > 0 }}
                  AS n_samples_present,
-               a.trait_function AS trait_function, a.trait_rank AS trait_rank,
                {", ".join(f"a.{c} AS {c}" for c in CENTRALITIES)}
         ORDER BY a.id
         """,
         d=dataset_id,
     )
-    rel = {r["id"]: r["rel"] for r in _q(
-        """
-        MATCH (s:Sample {dataset_id:$d})
-        OPTIONAL MATCH (s)-[all:HAS_ABUNDANCE]->(:ASV {dataset_id:$d})
-        WITH s, sum(all.count) AS live_total
-        WITH s, coalesce(s.analysed_reads_total, live_total) AS tot
-        WITH collect({s: s, tot: tot}) AS proben, count(s) AS n
-        UNWIND proben AS p
-        WITH p.s AS s, p.tot AS tot, n WHERE tot > 0
-        MATCH (s)-[h:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) WHERE a.louvain_label IS NOT NULL
-        WITH a, n, sum(toFloat(h.count) / tot) AS summe
-        RETURN a.id AS id, summe / n AS rel
-        """,
-        d=dataset_id,
-    )}
+    rel = _asv_rel_abundance(dataset_id)
     stars = _user_star_keys(dataset_id, "asv")
     for r in rows:
         r["rel_abundance"] = rel.get(r["id"], 0.0) if r["size"] is not None else None
         r["starred"] = r["id"] in stars
-        r["trait_group"] = (semantics.trait_group_label(r["trait_function"])
-                            if r.get("trait_function") else None)
     return rows
 
 
@@ -2375,7 +2392,6 @@ def network(dataset_id: str, edge: str = Query("con", pattern="^(con|ccm)$"), ma
             "edge_width_legend": semantics.EDGE_WIDTH_LEGEND,
             "edge_width_scale": semantics.edge_width_scale(thr),
             "thresholds": thr, "layers": _layers(dataset_id),
-            "traits": semantics.trait_run(_q, dataset_id),
             "env_links": _env_links(dataset_id),
             "value_declaration": {
                 **semantics.value_declaration(_q, dataset_id, semantics.frame_summed(_q, dataset_id)),
@@ -2644,9 +2660,6 @@ def asv_detail(dataset_id: str, asv_id: str):
         },
         "neighbors": {"con": con_n, "ccm": ccm_n},
         "criterion2": semantics.criterion2_asv(semantics.criterion2(_q, dataset_id), asv_id),
-        "funktion": "Not derivable from amplicon data.",
-        "trait": semantics.asv_trait(_q, dataset_id, asv_id),
-        "trait_run": semantics.trait_run(_q, dataset_id),
         "drivers": semantics.asv_drivers(_q, dataset_id, asv_id),
         "bild": None,
     }
@@ -2786,8 +2799,6 @@ def cluster(dataset_id: str, louvain_label: int):
         "environment_profile": semantics.cluster_environment_profile(_q, dataset_id, louvain_label),
         "members": members,
         "taxa_breakdown": {"genus": genus_b, "family": family_b},
-        "function_breakdown": semantics.cluster_functions(_q, dataset_id, louvain_label),
-        "trait_run": semantics.trait_run(_q, dataset_id),
         "env_links": semantics.cluster_env_links(_q, dataset_id, louvain_label),
         "collective_series": collective,
         "peak_month_hist": month_h,
@@ -2818,7 +2829,7 @@ def _cluster_note(dataset_id: str, louvain_label: int) -> dict:
 
 
 @app.get("/datasets/{dataset_id}/wheel", dependencies=[Depends(visible_dataset)])
-def wheel(dataset_id: str, year: str | None = Query(None)):
+def wheel(dataset_id: str, year: str | None = Query(None), asvs: str | None = Query(None)):
     labels = [r["l"] for r in _q(
         "MATCH (a:ASV {dataset_id:$d}) WHERE a.louvain_label IS NOT NULL "
         "RETURN DISTINCT a.louvain_label AS l ORDER BY l", d=dataset_id)]
@@ -2868,32 +2879,40 @@ def wheel(dataset_id: str, year: str | None = Query(None)):
         "RETURN a.louvain_label AS l, count(*) AS n", d=dataset_id)}
     per = {(r["l"], r["sample"]): r["sum_count"] for r in sums}
 
-    month_no = {m: i + 1 for i, m in enumerate(semantics.MONTHS)}
-    clusters = []
-    for l in labels:
+    asv_ids = [a for a in (asvs or "").split(",") if a]
+    asv_rows = _q(
+        """
+        MATCH (s:Sample {dataset_id:$d})-[r:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d})
+        WHERE a.id IN $ids
+        RETURN a.id AS id, s.sample_id AS sample, r.count AS count
+        """, d=dataset_id, ids=asv_ids) if asv_ids else []
+    per_asv = {(r["id"], r["sample"]): r["count"] for r in asv_rows}
+    total_all = sum(s["total"] or 0.0 for s in samples)
+
+    def _monthly(counts: dict) -> tuple[list[dict], float | None]:
         series = []
         for s in samples:
-            cnt = per.get((l, s["sample"]), 0.0)
             tot = s["total"] or 0.0
+            cnt = counts.get(s["sample"], 0.0)
             series.append({"sample": s["sample"], "date": s["date"], "sum_count": cnt,
                            "share": (cnt / tot) if tot > 0 else None})
         freq = semantics.frequency(_q, dataset_id, series, with_rank=False)
-        act = semantics.activity(freq)
         climo = [c for c in ((freq.get("seasonal") or {}).get("climatology") or [])
                  if c.get("mean") is not None]
-        clusters.append({
-            "louvain_label": l, "n_members": n_members.get(l, 0),
-            "window": act["window"],
-            "window_months": [month_no[m] for m in act["window"]],
-            "windows": act["windows"],
-            "windows_months": [[month_no[m] for m in r] for r in act["windows"]],
-            "peak": act["peak"],
-            "peak_month": month_no.get(act["peak"]),
-            "by_month": [{"month": c["month"], "mean": c["mean"], "n": c["n"]} for c in climo],
-            "n_min": act["n_min"], "statement": act["statement"],
-        })
-    clusters.sort(key=lambda c: (not c["window_months"], c["window_months"][0]
-                                 if c["window_months"] else 99, c["louvain_label"]))
+        share = (sum(x["sum_count"] for x in series) / total_all) if total_all > 0 else None
+        return [{"month": c["month"], "mean": c["mean"], "n": c["n"]} for c in climo], share
+
+    clusters = []
+    for l in labels:
+        by_month, share = _monthly({s["sample"]: per.get((l, s["sample"]), 0.0) for s in samples})
+        clusters.append({"louvain_label": l, "n_members": n_members.get(l, 0),
+                         "share_total": share, "by_month": by_month})
+    clusters.sort(key=lambda c: (-(c["share_total"] or 0.0), c["louvain_label"]))
+    asv_out = []
+    for a in asv_ids:
+        by_month, share = _monthly({s["sample"]: per_asv.get((a, s["sample"]), 0.0)
+                                    for s in samples})
+        asv_out.append({"id": a, "share_total": share, "by_month": by_month})
 
     env_rows = _q(
         "MATCH (s:Sample {dataset_id:$d}) RETURN toString(s.date) AS date, "
@@ -2903,6 +2922,8 @@ def wheel(dataset_id: str, year: str | None = Query(None)):
         env_rows = [r for r in env_rows if str(r["date"]).startswith(year)]
     env_vars, env_monthly = [], {}
     for v in semantics.environment_vars(_q, dataset_id):
+        if v["role"] != "environment":
+            continue
         vals: dict[int, list[float]] = {}
         for r in env_rows:
             if r[v["key"]] is None or not r["date"]:
@@ -2911,12 +2932,14 @@ def wheel(dataset_id: str, year: str | None = Query(None)):
             vals.setdefault(m, []).append(float(r[v["key"]]))
         if not vals:
             continue
-        env_vars.append({k: v[k] for k in ("key", "label", "unit", "unit_note")})
+        alle = [x for xs in vals.values() for x in xs]
+        env_vars.append({**{k: v[k] for k in ("key", "label", "unit", "unit_note")},
+                         "mean": sum(alle) / len(alle)})
         env_monthly[v["key"]] = [
             {"month": m, "mean": (sum(vals[m]) / len(vals[m])) if m in vals else None,
              "n": len(vals.get(m, []))}
             for m in range(1, 13)]
-    return {**base, "clusters": clusters,
+    return {**base, "clusters": clusters, "asvs": asv_out,
             "environment": {"variables": env_vars, "monthly": env_monthly,
                             "units_note": semantics.environment_units_note(_q, dataset_id)}
             if env_vars else None,

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { Criterion2Asv, Criterion2Module, Criterion2Summary } from "../api";
+import type { Criterion2Asv, Criterion2Summary } from "../api";
 import { fmtP } from "../format";
 import { TextButton } from "./ui";
 
@@ -7,12 +7,6 @@ import { TextButton } from "./ui";
 function HubDefinition({ glow }: { glow: string }) {
   return <>Hub{" — "}{glow}</>;
 }
-
-const NICHT_TESTBAR: Record<string, string> = {
-  no_member_tested: "no member in the CCM network",
-};
-const stichwort = (reason: string | null, text: string | null) =>
-  (reason && NICHT_TESTBAR[reason]) ?? text ?? "not testable";
 
 export function HubInfoButton({ open, onToggle, testid, label }: {
   open: boolean; onToggle: () => void; testid: string; label: string;
@@ -43,33 +37,6 @@ export function HubAsvDetails({ c2, moduleLabel, testid }: {
         {c2.mean_closeness != null && ` · network mean ${c2.mean_closeness.toFixed(3)}`}
         {" "}· q = {fmtP(c2.q)}
       </p>
-    </div>
-  );
-}
-
-export function Criterion2ModuleLine({ c2, testid }: { c2: Criterion2Module; testid: string }) {
-  const [offen, setOffen] = useState(false);
-  if (!c2.testable) {
-    return (
-      <div data-testid={testid} title={c2.reason_text ?? undefined} className="text-xs text-fg-muted">
-        Hubs: not testable ({stichwort(c2.reason, c2.reason_text)})
-      </div>
-    );
-  }
-  return (
-    <div className="space-y-1">
-      <div data-testid={testid} className="flex items-center gap-1 text-xs tabular-nums">
-        <span className={c2.n_pass > 0 ? "text-mark" : "text-fg-muted"}>✦</span>
-        <span className="text-fg">{c2.n_pass} of {c2.module_size} members are hubs</span>
-        <HubInfoButton open={offen} onToggle={() => setOffen((v) => !v)}
-          testid={`${testid}-info`} label="what a hub is" />
-      </div>
-      {offen && (
-        <div data-testid={`${testid}-details`}
-          className="rounded-md border border-line bg-raised px-3 py-2 space-y-1 text-xs leading-snug">
-          <p className="text-fg"><HubDefinition glow={c2.glow} /></p>
-        </div>
-      )}
     </div>
   );
 }

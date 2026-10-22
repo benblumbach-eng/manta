@@ -29,11 +29,6 @@ def _env_links(q, d):
     return bool(run["available"]), None if run["available"] else run["absent_reason"]
 
 
-def _traits(q, d):
-    run = semantics.trait_run(q, d)
-    return bool(run["available"]), None if run["available"] else run["absent_reason"]
-
-
 def _env_variables(q, d):
     rows = q("MATCH (s:Sample {dataset_id:$d}) WHERE any(k IN $keys WHERE s[k] IS NOT NULL) "
              "RETURN count(s) AS n", d=d, keys=semantics.ENVIRONMENT_KEYS)
@@ -68,7 +63,6 @@ BEDINGUNGEN = {
     "value_kind=reads": _reads,
     "env_links": _env_links,
     "env_variables": _env_variables,
-    "traits": _traits,
     "network": _network,
     "spectrum": _spectrum,
     "station": _station,

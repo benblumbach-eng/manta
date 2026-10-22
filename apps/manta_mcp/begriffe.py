@@ -377,11 +377,6 @@ _KENNZAHLEN = [
        "Local maxima per calendar year of the reconstruction from OTTER's Fourier slice.",
        unit="peaks", inputs=("oscillation",), source=semantics.OSCILLATION_REFERENCE,
        tools_=("asv_seasonality",)),
-    _b("coverage", "Annotation coverage", "kennzahl",
-       "How many ASVs of this dataset the literature lookup could annotate, out of those that "
-       "carry a lineage at all. A property of the NAMES, not of the sequences.",
-       unit="fraction", note=semantics.TRAIT_LITERATURE_NOTE,
-       tools_=("asv_function", "cluster_functions")),
     _b("cohesion", "Edges inside vs. outside a module", "kennzahl",
        "How many co-occurrence edges of a module stay inside it and how many leave. Louvain "
        "minimises the leaving ones, so a module with none is a disconnected part of the "

@@ -1,26 +1,23 @@
 import type { Criterion2Summary, Thresholds } from "../api";
 import { useModules } from "../modules";
-import { FUNCTION_NONE } from "../clusterPalette";
 import { SectionHeading } from "./ui";
 import { PanelHeader } from "./PanelFrame";
 import { Criterion2Details } from "./Criterion2";
 
-export default function LegendPanel({ thr, c2, keyLabel, labelMax, functionClasses = [], colorMode = "module",
+export default function LegendPanel({ thr, c2, keyLabel, labelMax,
   sizeAbsent = false, widthText = null, onClose }: {
   datasetId: string;
   thr: Thresholds | undefined;
   c2: Criterion2Summary | null;
   keyLabel: string;
   labelMax: number;
-  functionClasses?: { label: string; n: number; color: string; other?: boolean }[];
-  colorMode?: "module" | "function";
   sizeAbsent?: boolean;
   widthText?: string | null;
   onClose: () => void;
 }) {
   const modules = useModules();
   const c0 = modules.color(0), c1 = modules.color(1);
-  const LINE = "var(--net-link)", AMBER = "var(--cross-link)", CYAN = "var(--accent)", GREY = FUNCTION_NONE,
+  const LINE = "var(--net-link)", AMBER = "var(--cross-link)", CYAN = "var(--accent)",
         BG = "var(--net-node-outline)";
 
   const W = 48, H = 20, MY = H / 2;
@@ -41,7 +38,6 @@ export default function LegendPanel({ thr, c2, keyLabel, labelMax, functionClass
   const open = <Svg><circle cx={W / 2} cy={MY} r={6} fill={c0} stroke={CYAN} strokeWidth={2} /></Svg>;
   const marked = <Svg><circle cx={W / 2} cy={MY} r={6} fill={c0} stroke="var(--text)" strokeWidth={1.5}
                               strokeDasharray="2 2" /></Svg>;
-  const grey = <Svg><circle cx={W / 2} cy={MY} r={6} fill={GREY} /></Svg>;
   const link = <Svg><line x1={6} y1={MY} x2={W - 6} y2={MY} stroke={LINE} strokeWidth={1.5} /></Svg>;
   const width = <Svg><line x1={6} y1={MY - 4} x2={W - 6} y2={MY - 4} stroke={LINE} strokeWidth={1} />
                      <line x1={6} y1={MY + 5} x2={W - 6} y2={MY + 5} stroke={LINE} strokeWidth={4} /></Svg>;
@@ -56,8 +52,8 @@ export default function LegendPanel({ thr, c2, keyLabel, labelMax, functionClass
   const cross = <Svg><line x1={6} y1={MY} x2={W - 6} y2={MY} stroke={AMBER} strokeWidth={1.5} /></Svg>;
 
   const t = thr;
-  const Row = ({ sample, term, desc, testid, label }: { sample: React.ReactNode; term: string; desc: string; testid?: string; label?: string }) => (
-    <div className="flex items-start gap-2 py-1" data-testid={testid} data-label={label}>
+  const Row = ({ sample, term, desc, testid }: { sample: React.ReactNode; term: string; desc: string; testid?: string }) => (
+    <div className="flex items-start gap-2 py-1" data-testid={testid}>
       {sample}
       <div className="min-w-0">
         <span className="text-fg">{term}</span>
@@ -79,11 +75,10 @@ export default function LegendPanel({ thr, c2, keyLabel, labelMax, functionClass
       <div className="p-4 space-y-4 text-xs">
         <Section title="Nodes">
           <Row sample={node} term="ASV" desc="one ASV, an exactly resolved sequence type — one circle each" />
-          <Row sample={<Svg><circle cx={14} cy={MY} r={5} fill={colorMode === "function" ? (functionClasses[0]?.color ?? GREY) : c0} />
-                            <circle cx={30} cy={MY} r={5} fill={colorMode === "function" ? (functionClasses[1]?.color ?? GREY) : c1} /></Svg>}
-               term="Colour" testid="legend-colour-row" desc={colorMode === "function"
-            ? "literature-annotated function, in its own colours (grey = not annotated; in the taxa view also mixed classes); switch back to modules in the sidebar"
-            : `module ${modules.label(0)}, ${modules.label(1)}, …: a group with more links among themselves than chance would give`} />
+          <Row sample={<Svg><circle cx={14} cy={MY} r={5} fill={c0} />
+                            <circle cx={30} cy={MY} r={5} fill={c1} /></Svg>}
+               term="Colour" testid="legend-colour-row"
+               desc={`module ${modules.label(0)}, ${modules.label(1)}, …: a group with more links among themselves than chance would give`} />
           <Row sample={size} term="Size" testid="legend-size-row" desc={sizeAbsent
             ? "not computed for this dataset: its values are a transform of unknown form — all circles are drawn the same size"
             : "circle area relative to the largest circle in view = stored value summed over all samples"} />
@@ -117,20 +112,6 @@ export default function LegendPanel({ thr, c2, keyLabel, labelMax, functionClass
           <Row sample={side} term="Side arrow" desc="a rejected direction shown beside a link that is drawn anyway" />
           <Row sample={cross} term="Amber" testid="legend-cross-row" desc="link between two different modules" />
         </Section>
-
-        {colorMode === "function" && (
-          <Section title="Colour = function">
-            <div data-testid="legend-function-classes">
-              {functionClasses.map((c) => (
-                <Row key={c.label} sample={<Svg><circle cx={W / 2} cy={MY} r={6} fill={c.color} /></Svg>}
-                     testid="legend-function-class" label={c.label}
-                     term={c.label} desc={`${c.n} ASV${c.n === 1 ? "" : "s"}`} />
-              ))}
-              <Row sample={grey} term="not annotated" desc="no entry for this name in the literature tables — in the taxa view also a taxon whose members carry different classes" />
-            </div>
-            <p className="text-fg-muted leading-snug">Looked up by taxon name — a property of the name, not a result of this dataset.</p>
-          </Section>
-        )}
 
         <Section title="Thresholds of this run">
           <p className="text-fg tabular-nums" data-testid="legend-thresholds-line">

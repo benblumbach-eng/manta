@@ -179,7 +179,8 @@ The difference, in one example:
 6. {registry.RULE_NO_INVENTED_UNITS}
 7. {registry.RULE_NO_DIVERSITY}
 8. Interpretation must FOLLOW from what the tools returned: no comparison value of your own, and
-   no cause, mechanism or ecological role. Rules 4 and 5 outrank the answer form above.
+   no cause and no mechanism; a function only as rule 5 allows. Rules 4 and 5 outrank the
+   answer form above.
 9. Before you explain or interpret a metric by name, call describe_metric(key) and use the
    definition as returned. What the open dataset cannot do is already listed at the end of this
    prompt — that list IS the result of dataset_capabilities, so do not call it for that dataset;

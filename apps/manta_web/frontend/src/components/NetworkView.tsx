@@ -4,6 +4,7 @@ import ReactECharts from "echarts-for-react";
 import { getCapabilities, getCriterion2, getNetwork,
          type Capabilities, type Criterion2Summary, type Dataset, type NetEdge, type NetNode, type Network } from "../api";
 import type { EdgeRef } from "../App";
+import type { InspectMark } from "./ComparePanel";
 import ClusterPanel from "./ClusterPanel";
 import PanelFrame from "./PanelFrame";
 import LegendPanel from "./LegendPanel";
@@ -11,15 +12,13 @@ import NetworkSidebar, { type ViewItem } from "./NetworkSidebar";
 import type { ExtraView } from "../extraViews";
 import ThemeSwitch, { type Theme } from "./ThemeSwitch";
 import { useModules } from "../modules";
-import { functionColor as functionPaletteColor, FUNCTION_NONE, functionOther,
-         FUNCTION_PALETTE_SIZE } from "../clusterPalette";
+import { NO_MODULE_COLOUR } from "../clusterPalette";
 import { chartTooltip, FONT, useTokens } from "../design/tokens";
 import { glowRing, markerRings } from "../design/dataColours";
 import { Z } from "../design/layers";
 import { Button, TextButton, StateNotice, SectionHeading } from "./ui";
 import { Segmented } from "./controls";
 
-const SWATCH = "\u0000swatch:";
 import TaxonWheel from "./TaxonWheel";
 import { memberPoint, taxonLinks, taxonPoints, type TaxonLink, type TaxonRank } from "../taxonView";
 import ThresholdDialog from "./ThresholdDialog";
@@ -27,12 +26,12 @@ import ErrorNotice from "./ErrorNotice";
 import { esc, fmtP } from "../format";
 import { chainedCounts, clearKind, computeVisible, decodeFilters, emptyFilters, encodeFilters,
          hiddenBy, isActive, legendRows, thresholdLine, FILTER_KINDS,
-         type Filters, type FilterKind, type KeystoneParams, KEYSTONE_DEFAULTS, KEYSTONE_LABEL, loadKeystone, saveKeystone, layerLabel, functionLabel } from "../networkFilters";
+         type Filters, type FilterKind, type KeystoneParams, KEYSTONE_DEFAULTS, KEYSTONE_LABEL, loadKeystone, saveKeystone, layerLabel } from "../networkFilters";
 
 const COLLIDE_MARGIN = 1.5;
 const COLLIDE_ITERATIONS = 80;
 const DIM_NODE = 0.2;
-const LINK_LENGTH_DEFAULT = 260;
+const LINK_LENGTH_DEFAULT = 52;
 const RING_W = 2;
 const RING_GLOW = 14;
 const DIM_EDGE = 0.15;
@@ -70,7 +69,6 @@ type Sel =
   | { kind: "cluster"; label: number };
 
 export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
-                                      onOpenEnvironment, environmentOpen,
                                       onOpenStarred, starredOpen, clusterVonAussen,
                                       onOpenWheel, wheelOpen,
                                       extraViews,
@@ -92,17 +90,15 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   theme: Theme;
   onTheme: (t: Theme) => void;
   onOpenEdge: (e: EdgeRef) => void;
-  onOpenEnvironment: () => void;
   onOpenStarred: () => void;
   starredOpen: boolean;
   clusterVonAussen: { label: number; tick: number; ds?: string } | null;
-  environmentOpen: boolean;
   onOpenWheel: () => void;
   wheelOpen: boolean;
   extraViews: { view: ExtraView; kind: string; open: boolean; onOpen: () => void }[];
   onOpenCompare: () => void;
   compareOpen: boolean;
-  onInspectAt: (sample: string) => void;
+  onInspectAt: (sample: string, mark?: InspectMark) => void;
   onRefresh?: () => void;
   onOpenDataset?: (datasetId: string) => void;
 }) {
@@ -238,15 +234,15 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   const visibleEdges = useMemo(() => vis?.edges ?? [], [vis]);
   const visibleIds = useMemo(() => new Set(visibleNodes.map((n) => n.id)), [visibleNodes]);
 
-  const [points, setPoints] = useState<"asvs" | TaxonRank>("asvs");
-  const taxaMode = points !== "asvs";
-  const taxonRank: TaxonRank = points === "genus" ? "genus" : "species";
+  const [points, setPoints] = useState<"asvs" | "taxa">("asvs");
+  const [taxonRank, setTaxonRank] = useState<TaxonRank>("genus");
+  const taxaMode = points === "taxa";
   const [legendeOffen, setLegendeOffen] = useState(false);
   const [revolver, setRevolver] =
     useState<{ id: string; x: number; y: number } | null>(null);
   const [linkLen, setLinkLen] = useState(LINK_LENGTH_DEFAULT);
   const [zoomTick, setZoomTick] = useState(0);
-  useEffect(() => { setRevolver(null); }, [points, filters, linkLen]);
+  useEffect(() => { setRevolver(null); }, [points, taxonRank, filters, linkLen]);
 
   const taxa = useMemo(
     () => (taxaMode ? taxonPoints(visibleNodes, taxonRank) : []), [taxaMode, taxonRank, visibleNodes]);
@@ -256,26 +252,8 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   const punktVon = useMemo(() => (taxaMode ? memberPoint(taxa) : new Map<string, string>()),
     [taxaMode, taxa]);
 
-  const [colorMode, setColorMode] = useState<"module" | "function">("module");
-  const functionClasses = useMemo(() => {
-    const m = new Map<string, number>();
-    net?.nodes.forEach((n) => { if (n.trait_group) m.set(n.trait_group, (m.get(n.trait_group) ?? 0) + 1); });
-    return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .map(([label, n], i) => ({ label, n, color: functionPaletteColor(i, tok.light),
-                                 other: i >= FUNCTION_PALETTE_SIZE }));
-  }, [net, tok.light]);
-  const functionColor = useMemo(
-    () => new Map(functionClasses.map((c) => [c.label, c.color])), [functionClasses]);
-  const NO_FUNCTION = FUNCTION_NONE;
-  const colorOfNode = (n: NetNode): string => {
-    if (colorMode !== "function") return n.cluster < 0 ? NO_FUNCTION : modules.color(n.cluster);
-    const tp = taxaById.get(n.id);
-    const groups = new Set(tp ? tp.members.map((m) => m.trait_group ?? null) : [n.trait_group ?? null]);
-    if (groups.size !== 1) return NO_FUNCTION;
-    const g = [...groups][0];
-    return g ? (functionColor.get(g) ?? NO_FUNCTION) : NO_FUNCTION;
-  };
-  const nNotAnnotated = useMemo(() => net?.nodes.filter((n) => !n.trait_group).length ?? 0, [net]);
+  const colorOfNode = (n: NetNode): string =>
+    n.cluster < 0 ? NO_MODULE_COLOUR : modules.color(n.cluster);
   const taxaLayers = useMemo(() => {
     if (!taxaMode || !net) return null;
     const alle = taxonPoints(net.nodes, taxonRank);
@@ -387,7 +365,6 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         case "presence": return `present in ≥ ${filters.presence ?? 1} samples`;
         case "abundance": return `abundance ≥ ${filters.abundance ?? 0} %`;
         case "layer": return layerLabel(filters.layers);
-        case "function": return `function ${functionLabel(filters.fn ?? "")}`;
         case "cross": return "crossing links only";
         case "strength": return `r ≥ ${filters.strength?.toFixed(2) ?? ""}`;
       }
@@ -430,9 +407,9 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
 
   const layoutKey = useMemo(
     () => `${dataset.dataset_id}|${filters.layers.con}|${filters.layers.ccm}|${filters.layers.rejected}`
-         + `|${points}|${linkLen}`
+         + `|${points}|${taxonRank}|${linkLen}`
          + `|${drawNodes.map((n) => n.id).join(",")}`,
-    [dataset.dataset_id, filters.layers, points, linkLen, drawNodes]);
+    [dataset.dataset_id, filters.layers, points, taxonRank, linkLen, drawNodes]);
   const frozenKey = useRef<string | null>(null);
   useEffect(() => {
     if (frozenKey.current !== layoutKey) { frozenKey.current = layoutKey; setFrozen(null); }
@@ -612,10 +589,11 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         type: "graph",
         layout: frozen ? "none" : "force",
         roam: true,
+        nodeScaleRatio: 0,
         draggable: true,
         ...(roam.current ? { zoom: roam.current.zoom, center: roam.current.center }
                     : {}),
-        force: { repulsion: 2600, edgeLength: linkLen, gravity: 0.06, layoutAnimation: false },
+        force: { repulsion: 2600, edgeLength: Math.round(10 * 1.065 ** linkLen), gravity: 0.06, layoutAnimation: false },
         data: drawNodes.map((n) => {
           const xy: [number, number] = frozen?.get(n.id) ?? seedXY(n.id);
           const glows = keyIds.has(n.id);
@@ -705,7 +683,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   }), [drawNodes, drawEdges, taxaMode, maxSize, totalSize, net, nodeCluster, showLabels, frozen,
        c2, keyIds, seedXY, sel, selMarked, markedDrawn, gezeichnet, markColor, edgeWidth, openAsvId, dense,
        scale, edgeStrength, ewMin, ewMax, filters.layers, light, nodeOutline, selRing,
-       labelColor, labelBorder, glowColours, tok, modules, colorMode, functionColor,
+       labelColor, labelBorder, glowColours, tok, modules,
        linkLen, nSamples]);
 
   const optionRef = useRef(option);
@@ -738,7 +716,6 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     : null;
   const legend = useMemo(() => legendRows({
     nModules: net?.partition?.n_clusters ?? clusters.length,
-    colorMode, nFunctionClasses: functionClasses.length, taxaMode,
     nCross: drawnCounts.cross,
     sizePresent,
     conTr: thr?.con_tr ?? null, conAlpha: thr?.con_alpha ?? null,
@@ -749,7 +726,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     c2Glow: keyLabel, c2Visible: !taxaMode && c2Visible > 0,
     highlightActive: sel != null,
   }), [net, clusters.length, sizePresent, thr, ccmCount, rejectedCount, filters.layers,
-       widthText, keyLabel, c2Visible, sel, colorMode, functionClasses.length, taxaMode, drawnCounts.cross]);
+       widthText, keyLabel, c2Visible, sel, taxaMode, drawnCounts.cross]);
 
   const filterLineText = useCallback((): string => {
     if (!net || order.length === 0) return "Filters: none";
@@ -762,7 +739,6 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         case "layer": return layerLabel(filters.layers);
         case "cross": return "crossing only";
         case "c2": return "✦ only";
-        case "function": return `function ${functionLabel(filters.fn ?? "")}`;
         case "taxon": return filters.taxon ? `${filters.taxon.value} (${filters.taxon.rank})` : "taxon";
         case "asvs": return `${(filters.asvs?.ids.length ?? 0) - unknownAsvIds.length} selected ASVs`
           + (filters.asvs?.neighbors ? " + neighbours" : "");
@@ -798,13 +774,6 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
           `  Hubs computed: ${c2.formula}`,
           `  Source: ${c2.source}`,
         ] : []),
-        ...(colorMode === "function" ? [
-          ...functionClasses.filter((c) => !c.other).map((c) => `${SWATCH}${c.color}|${c.label} (${c.n})`),
-          ...(functionClasses.some((c) => c.other)
-            ? [`${SWATCH}${functionOther(tok.light)}|other classes (${functionClasses.filter((c) => c.other)
-                .reduce((a, c) => a + c.n, 0)})`] : []),
-          `${SWATCH}${FUNCTION_NONE}|${taxaMode ? "not annotated or mixed classes" : "not annotated"} (${nNotAnnotated})`,
-        ] : []),
         `${drawnCounts.nodes} ${taxaMode ? "taxa" : "ASVs"} · ${drawnCounts.edges} edges · ${drawnCounts.ccm} with CCM · `
           + (!taxaMode && net.layers?.ccm_tested_recorded ? `${rejectedCount} with a rejected direction · ` : "")
           + `${drawnCounts.cross} crossing modules${!taxaMode ? ` · ${c2Visible} ✦${c2Of}` : ""}`,
@@ -832,17 +801,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
       g.fillStyle = tok.surface; g.fillRect(0, 0, c.width, c.height);
       g.drawImage(img, 0, 0);
       g.fillStyle = tok.text; g.font = "22px sans-serif";
-      zeilen.forEach((l, i) => {
-        const yy = img.height + pad + (i + 0.8) * lineH;
-        if (l.startsWith(SWATCH)) {
-          const [farbe, text] = l.slice(SWATCH.length).split(/\|(.*)/s);
-          g.fillStyle = farbe; g.fillRect(pad + 8, yy - 17, 18, 18);
-          g.fillStyle = tok.text;
-          g.fillText(text, pad + 36, yy);
-          return;
-        }
-        g.fillText(l, pad, yy);
-      });
+      zeilen.forEach((l, i) => g.fillText(l, pad, img.height + pad + (i + 0.8) * lineH));
       const a = document.createElement("a");
       a.href = c.toDataURL("image/png");
       a.download = `${dataset.dataset_id}_network.png`;
@@ -851,7 +810,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     img.src = url;
   }, [net, legend, filterLineText, visibleNodes.length, visibleEdges.length, ccmCount,
       rejectedCount, crossCount, c2, c2Visible, c2Of, dataset.dataset_id, tok, thr, widthText,
-      drawnCounts, taxaMode, colorMode, functionClasses, nNotAnnotated, sel, selMarked, modules]);
+      drawnCounts, taxaMode, sel, selMarked, modules]);
 
   const resetZoom = useCallback(() => {
     setSel(null);
@@ -885,14 +844,10 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   }, [net, onShowNet, resetZoom]);
 
   const capOf = (key: string) => caps?.items.find((i) => i.key === key);
-  const envCap = capOf("environment");
   const timeCap = capOf("time_axis");
   const umschalten = (art: string, offen: boolean, oeffnen: () => void) => () =>
     (offen ? onCloseView(art) : oeffnen());
   const viewItems: ViewItem[] = [
-    { key: "environment", testid: "environment-toggle", label: "Env", icon: "≈",
-      open: environmentOpen, onOpen: umschalten("environment", environmentOpen, onOpenEnvironment),
-      disabledReason: envCap && !envCap.available ? envCap.detail : null },
     { key: "wheel", testid: "wheel-toggle", label: "Wheel", icon: "◔",
       open: wheelOpen, onOpen: umschalten("wheel", wheelOpen, onOpenWheel),
       disabledReason: timeCap && !timeCap.available ? timeCap.detail : null },
@@ -907,7 +862,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     { key: "starred", testid: "starred-toggle", label: "Star", icon: "★",
       open: starredOpen, onOpen: umschalten("starred", starredOpen, onOpenStarred), disabledReason: null },
   ];
-  const anyViewOpen = environmentOpen || wheelOpen || extraViews.some((x) => x.open)
+  const anyViewOpen = wheelOpen || extraViews.some((x) => x.open)
     || compareOpen || starredOpen || legendeOffen;
 
   const selNode = sel?.kind === "asv" ? net?.nodes.find((n) => n.id === sel.id) ?? null : null;
@@ -923,10 +878,10 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         onClearKind={(k) => setFilters((f) => clearKind(f, k))}
         onClearAll={() => setFilters(emptyFilters())}
         order={order} chipCounts={chipCounts} unknownAsvIds={unknownAsvIds}
-        taxaMode={taxaMode} points={points} onPoints={setPoints} taxaLayers={taxaLayers}
+        taxaMode={taxaMode} points={points} onPoints={setPoints}
+        taxonRank={taxonRank} onTaxonRank={setTaxonRank} taxaLayers={taxaLayers}
         linkLength={linkLen} linkLengthDefault={LINK_LENGTH_DEFAULT}
         onLinkLength={(v) => { roam.current = null; setLinkLen(v); }}
-        colorMode={colorMode} onColorMode={setColorMode} functionClasses={functionClasses}
         sizeAbsent={sizePresent === false}
         views={{ anyViewOpen: anyViewOpen || selectedCluster != null || openAsvId != null,
                  onShowNet: () => { onShowNet(); setSelectedCluster(null); setLegendeOffen(false); },
@@ -939,7 +894,6 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
       />
 
       <div className="flex-1 relative" data-testid="network-canvas" data-layout-hash={layoutHash}
-        data-color-mode={colorMode}
         data-link-length={linkLen}
         data-tax-key={taxKey ?? ""}
         data-tax-marked={sel?.kind === "taxon" ? selMarked.size : 0}
@@ -1120,7 +1074,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
       {legendeOffen && (
         <PanelFrame id="legend" title="Legend" onClose={() => setLegendeOffen(false)} defaultWidth={440}>
           <LegendPanel datasetId={dataset.dataset_id} thr={thr} c2={c2} keyLabel={keyLabel}
-            labelMax={LABEL_AUTO_MAX} functionClasses={functionClasses} colorMode={colorMode}
+            labelMax={LABEL_AUTO_MAX}
             sizeAbsent={sizePresent === false} widthText={widthText}
             onClose={() => setLegendeOffen(false)} />
         </PanelFrame>
@@ -1133,7 +1087,8 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
           color={clusterColor.get(selectedCluster)} onClose={() => setSelectedCluster(null)}
           onOpenAsv={onOpenAsv} onOpenEdge={onOpenEdge}
           colorOf={(c) => clusterColor.get(c)}
-          onOpenCluster={(c) => setSelectedCluster(c)} onInspectAt={onInspectAt} />
+          onOpenCluster={(c) => setSelectedCluster(c)} onInspectAt={onInspectAt}
+          crit={crit} c1Ids={c1Ids} />
         </PanelFrame>
       )}
 
