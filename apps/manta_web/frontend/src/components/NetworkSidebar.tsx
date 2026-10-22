@@ -2,8 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getAsvList, getStarred, type Criterion2Summary, type Dataset,
          type Network, type NetNode } from "../api";
 import { useModules } from "../modules";
-import { isActive, type Filters, type FilterKind, type KeystoneCrit, KEYSTONE_LABEL, layerLabel, layersDefault, functionLabel } from "../networkFilters";
-import { FUNCTION_NONE, functionOther } from "../clusterPalette";
+import { isActive, type Filters, type FilterKind, type KeystoneCrit, KEYSTONE_LABEL, layerLabel, layersDefault } from "../networkFilters";
 import { useDatasetSearch } from "../datasetSearch";
 import { fmtShare } from "../format";
 import ErrorNotice from "./ErrorNotice";
@@ -12,7 +11,6 @@ import { Button, SectionHeading, TextButton, ToggleButton } from "./ui";
 import { Segmented } from "./controls";
 import { ABUNDANCE_STEPS } from "../networkFilters";
 
-const NEUTRAL_SWATCH = "var(--control-strong)";
 const BOX = "rounded-md border border-line bg-raised px-2 py-2 mb-2";
 
 const checkCls = (_on: boolean, enabled = true) =>
@@ -55,14 +53,13 @@ export type SidebarProps = {
   chipCounts: Map<FilterKind, number>;
   unknownAsvIds: string[];
   taxaMode: boolean;
-  points: "asvs" | "genus" | "species";
-  onPoints: (v: "asvs" | "genus" | "species") => void;
+  points: "asvs" | "taxa";
+  onPoints: (v: "asvs" | "taxa") => void;
+  taxonRank: "genus" | "species";
+  onTaxonRank: (v: "genus" | "species") => void;
   linkLength: number;
   linkLengthDefault: number;
   onLinkLength: (v: number) => void;
-  colorMode: "module" | "function";
-  onColorMode: (m: "module" | "function") => void;
-  functionClasses: { label: string; n: number; color: string; other?: boolean }[];
   taxaLayers: { n_con: number; n_asv_con: number;
                 n_con_with_ccm: number; n_asv_ccm: number;
                 n_con_with_rejected: number; n_asv_rejected: number } | null;
@@ -156,7 +153,6 @@ export default function NetworkSidebar(p: SidebarProps) {
     };
   }, [addOpen]);
   const [taxonOpen, setTaxonOpen] = useState(isActive(filters, "taxon"));
-  const [functionOpen, setFunctionOpen] = useState(isActive(filters, "function"));
   const [asvOpen, setAsvOpen] = useState(isActive(filters, "asvs"));
   const [abundanceOpen, setAbundanceOpen] = useState(isActive(filters, "abundance"));
   const [presenceOpen, setPresenceOpen] = useState(isActive(filters, "presence"));
@@ -172,7 +168,6 @@ export default function NetworkSidebar(p: SidebarProps) {
   const [starredNote, setStarredNote] = useState<string | null>(null);
   useEffect(() => {
     if (isActive(filters, "taxon")) setTaxonOpen(true);
-    if (isActive(filters, "function")) setFunctionOpen(true);
     if (isActive(filters, "asvs")) setAsvOpen(true);
     if (isActive(filters, "abundance")) setAbundanceOpen(true);
     if (isActive(filters, "presence")) setPresenceOpen(true);
@@ -212,7 +207,6 @@ export default function NetworkSidebar(p: SidebarProps) {
       case "layer": return layerLabel(filters.layers);
       case "cross": return "crossing only";
       case "c2": return "✦ only";
-      case "function": return `Function: ${functionLabel(filters.fn ?? "")}`;
       case "taxon": return filters.taxon ? `${filters.taxon.value} (${filters.taxon.rank})` : "Taxon";
       case "asvs": {
         const valid = (filters.asvs?.ids.length ?? 0) - p.unknownAsvIds.length;
@@ -446,13 +440,19 @@ export default function NetworkSidebar(p: SidebarProps) {
         <div className={BOX} data-testid="display-section">
           <div className="mb-2" data-testid="grain-control">
             <Segmented full label="Points" value={p.points} onChange={p.onPoints}
-              options={[{ value: "asvs", label: "ASVs", testid: "grain-asvs" },
-                        { value: "genus", label: "Genus", testid: "grain-genus" },
-                        { value: "species", label: "Species", testid: "grain-taxa" }]} />
+              options={[{ value: "asvs", label: "ASV", testid: "grain-asvs" },
+                        { value: "taxa", label: "Taxa", testid: "grain-taxa" }]} />
           </div>
           {p.taxaMode && (
+            <div className="mb-2" data-testid="rank-control">
+              <Segmented full label="Rank" value={p.taxonRank} onChange={p.onTaxonRank}
+                options={[{ value: "genus", label: "Genus", testid: "rank-genus" },
+                          { value: "species", label: "Species", testid: "rank-species" }]} />
+            </div>
+          )}
+          {p.taxaMode && (
             <p className="mb-2 text-2xs text-fg-muted leading-snug" data-testid="taxa-note">
-              {p.points === "genus" ? "One point per genus" : "One point per species"}; click a point to pick one of its ASVs.
+              {p.taxonRank === "genus" ? "One point per genus" : "One point per species"}; click a point to pick one of its ASVs.
             </p>
           )}
 
@@ -469,50 +469,6 @@ export default function NetworkSidebar(p: SidebarProps) {
                 aria-label="back to the default length"
                 className="rounded-md px-1 text-xs text-fg-muted hover:text-fg hover:bg-control disabled:text-fg-disabled disabled:hover:bg-transparent">↺</button>
             </div>
-          </div>
-
-          <div className="mb-2" data-testid="color-control">
-            <div>
-              <Segmented full label="Colour" value={p.colorMode} onChange={p.onColorMode}
-                options={[{ value: "module", label: "by module", testid: "color-module" },
-                          { value: "function", label: "by function", testid: "color-function",
-                            disabled: !net?.traits?.available,
-                            reason: net?.traits?.available ? undefined
-                              : (net?.traits?.absent_reason ?? "no literature annotation for this dataset") }]} />
-            </div>
-            {p.colorMode === "function" && (
-              <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-2xs" data-testid="function-key">
-                {p.functionClasses.filter((c) => !c.other).map((c) => (
-                  <span key={c.label} className="inline-flex items-center gap-1 text-fg"
-                    data-testid="function-key-class" data-label={c.label} data-color={c.color}>
-                    <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: c.color }} />
-                    {c.label} <span className="text-fg-muted tabular-nums">{c.n}</span>
-                  </span>
-                ))}
-                {p.functionClasses.some((c) => c.other) && (
-                  <span className="inline-flex items-center gap-1 text-fg" data-testid="function-key-other"
-                    title={p.functionClasses.filter((c) => c.other).map((c) => c.label).join(", ")}>
-                    <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: functionOther() }} />
-                    other classes <span className="text-fg-muted tabular-nums">
-                      {p.functionClasses.filter((c) => c.other).reduce((a, c) => a + c.n, 0)}</span>
-                  </span>
-                )}
-                <span className="inline-flex items-center gap-1 text-fg-muted" data-testid="function-key-none">
-                  <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: FUNCTION_NONE }} />
-                  {p.taxaMode ? "not annotated or mixed classes" : "not annotated"}
-                </span>
-              </div>
-            )}
-            {p.colorMode === "function" && net?.traits?.statement && (
-              <p className="mt-1 text-2xs text-fg-muted" data-testid="legend-function-coverage">
-                {net.traits.statement}
-              </p>
-            )}
-            {p.colorMode === "function" && net?.traits?.note && (
-              <p className="mt-1 text-2xs text-fg-muted leading-snug" data-testid="function-note">
-                {net.traits.note.split(". ")[0].replace(/\.?$/, ".")}
-              </p>
-            )}
           </div>
 
           {!p.taxaMode && (
@@ -578,9 +534,7 @@ export default function NetworkSidebar(p: SidebarProps) {
                     p.onFilters({ hidden: next });
                   }} />
                 <span data-testid="cluster-swatch" className="inline-block w-3 h-3 rounded-sm shrink-0"
-                  data-neutral={p.colorMode === "function" ? "1" : "0"}
-                  style={{ background: p.colorMode === "function" ? NEUTRAL_SWATCH
-                                                                 : (p.clusterColor.get(c) ?? "var(--text-disabled)") }} />
+                  style={{ background: p.clusterColor.get(c) ?? "var(--text-disabled)" }} />
                 <button data-testid={`cluster-open-${c}`} onClick={() => p.onOpenClusterPanel(c)}
                   className="flex-1 text-left hover:underline">{modules.label(c)}</button>
                 <span className="text-xs text-fg-muted tabular-nums">
@@ -670,38 +624,6 @@ export default function NetworkSidebar(p: SidebarProps) {
             </p>
           )}
         </div>
-
-        {functionOpen && (
-          <div className={BOX} data-testid="filter-function-section">
-            <SectionHeading className="mb-1">Function filter</SectionHeading>
-            {net?.traits?.available ? (
-              [...p.functionClasses.map((c) => ({ ...c, key: c.label })),
-                { label: "not annotated", key: "", color: FUNCTION_NONE,
-                  n: net.nodes.filter((n) => !n.trait_group).length }]
-                .filter((c) => c.key !== "" || c.n > 0).map((c) => {
-                const on = filters.fn === c.key;
-                return (
-                  <button key={c.key || "__none"} data-testid="filter-function" data-label={c.key}
-                    aria-pressed={on}
-                    onClick={() => {
-                      p.onFilters({ fn: on ? null : c.key });
-                      if (!on) p.onColorMode("function");
-                    }}
-                    className={`w-full flex items-center gap-2 px-2 py-1 rounded text-xs text-left ${on
-                      ? "bg-accent-soft text-accent font-medium" : "text-fg hover:bg-control"}`}>
-                    <span className="inline-block w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: c.color }} />
-                    <span className="flex-1 truncate">{c.label}</span>
-                    <span className="text-fg-muted tabular-nums">{c.n}</span>
-                  </button>
-                );
-              })
-            ) : (
-              <p className="text-xs text-warn leading-snug" data-testid="filter-function-absent">
-                {net?.traits?.absent_reason ?? "no literature annotation for this dataset"}
-              </p>
-            )}
-          </div>
-        )}
 
         {taxonOpen && (
           <div className={BOX} data-testid="filter-taxon-section">
@@ -848,11 +770,6 @@ export default function NetworkSidebar(p: SidebarProps) {
                 className="w-full text-left px-2 py-1 hover:bg-control text-fg disabled:text-fg-muted">
                 {filters.c2Only ? "✓ " : ""}only ✦
                 <span className="text-fg-muted"> ({p.nKey})</span>
-              </button>
-              <button data-testid="filter-add-function"
-                onClick={() => { setFunctionOpen(true); setAddOpen(false); }}
-                className="w-full text-left px-2 py-1 hover:bg-control text-fg">
-                function …
               </button>
               <button data-testid="filter-add-taxon"
                 onClick={() => { setTaxonOpen(true); setAddOpen(false); }}
