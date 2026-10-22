@@ -72,7 +72,7 @@ You can also:
   the sidebar: 1, a significant CCM link; 2, an unusually high closeness within its module.
   The third criterion (a stable state from ELA) is not available, so a marked ASV is a
   candidate, not a proven keystone;
-- filter by module, taxon name or function, and share the exact view as a link;
+- filter by module or taxon name, and share the exact view as a link;
 - compare ASVs, modules and measurements over the year;
 - ask an optional chat assistant, which answers only from your stored results and marks any
   number it cannot back up with `[no evidence]`. Its tools also work in other AI apps that
@@ -175,10 +175,8 @@ change it in `deploy/.env`. The database's usage reporting is switched off.
    uv venv --clear --python 3.14 tools/dada2_to_otter/.venv &&
    uv pip install -p tools/dada2_to_otter/.venv/bin/python -r tools/dada2_to_otter/requirements.txt &&
    uv venv --clear --python 3.10 submodules/otter/.venv &&
-   uv pip install -p submodules/otter/.venv/bin/python -r tools/otter_runner/requirements-otter.txt &&
-   bash tools/traits/fetch_sources.sh
+   uv pip install -p submodules/otter/.venv/bin/python -r tools/otter_runner/requirements-otter.txt
    ```
-   The last line downloads the tables for the function filter (about 4 MB).
 2. Open `apps/manta_web/backend/.env` with `nano` and enter the same `NEO4J_PASSWORD` as in
    step 1. If you changed the database port in step 1, change `NEO4J_URI` here too.
 3. Start the import and create an account for it. The import has its own accounts, separate
@@ -222,8 +220,7 @@ names. Download the PR2 file in DADA2 format from the
 [PR2 releases](https://github.com/pr2database/pr2database/releases), set
 `MANTA_PR2=<path to the file>` in `apps/manta_web/backend/.env` and run
 `bash apps/manta_web/dev.sh restart`. Without it, the import still works, but ASVs from raw reads
-stay `unassigned`. (The function filter uses its own copy of PR2's tables, which step 2 already
-downloads.)
+stay `unassigned`.
 
 **Chat assistant.** Switch it on with:
 
@@ -289,9 +286,7 @@ A dataset needs at least 8 samples. Before OTTER starts, MANTA checks whether yo
 enough memory. DADA2 can take hours and needs a lot of memory; on a computer with 8 GB, run
 DADA2 elsewhere and import its results.
 
-At the end, MANTA looks up the taxon name of each ASV in published tables of what such organisms
-do. This fills the function filter; it describes the name, it is not a measurement. If there are
-dates, MANTA also links the measurements to the ASVs.
+At the end, if there are dates, MANTA links the measurements to the ASVs.
 
 If you recalculate a network in MANTA, it creates a new dataset and leaves the original as it is.
 
@@ -306,8 +301,7 @@ dates and measurements. `examples/synthetic_96_samples` is the same with 96 samp
    the file names. As position, try 79.0 and 4.17.
 3. Click **Start import** and wait 15 to 40 minutes.
 
-You then see a network with modules, a page per ASV and a year wheel. The function filter stays
-empty, because the organism names are made up.
+You then see a network with modules, a page per ASV and a year wheel.
 
 ## Updating
 
@@ -408,7 +402,7 @@ so pull requests can't be merged; describe changes in an issue instead.
 
 Click **Cite this repository** on the right of the GitHub page (it uses
 [`CITATION.cff`](CITATION.cff)). Because MANTA runs other people's methods, also cite DADA2,
-OTTER, cutadapt, PR2 and the annotation sources below.
+OTTER, cutadapt and PR2.
 
 ## Sources and licenses
 
@@ -443,12 +437,6 @@ downloads them from their original sources.
   [doi:10.5285/a29c5465-b138-234d-e053-6c86abc040b9](https://doi.org/10.5285/a29c5465-b138-234d-e053-6c86abc040b9)),
   public domain. It is simplified and not suitable for navigation.
 - **Taxonomy reference** — PR2, Guillou et al. 2013, *Nucleic Acids Res* 41:D597, [doi:10.1093/nar/gks1160](https://doi.org/10.1093/nar/gks1160); MIT License; downloaded by the user.
-- **Function annotation** — for 18S: the Mixoplankton Database as distributed with PR2 v5.1.0
-  (Mitra et al. 2023, *J Eukaryot Microbiol* 70:e12972, [doi:10.1111/jeu.12972](https://doi.org/10.1111/jeu.12972)),
-  PR2 v5.1.0's own ecological function column, and the Trophic Mode Database v1.1 (Jones et al. 2025,
-  [doi:10.5281/zenodo.15149453](https://doi.org/10.5281/zenodo.15149453), CC BY 4.0); for 16S:
-  FAPROTAX 1.2.12 (Louca et al. 2016, *Science* 353:1272, [doi:10.1126/science.aaf4507](https://doi.org/10.1126/science.aaf4507);
-  own license, included in the download). Downloads are checked against fixed checksums.
 - **Example datasets and screenshots** — synthetic, made for MANTA; MIT License.
 
 **Methods**

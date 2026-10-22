@@ -1117,91 +1117,6 @@ def is_taxon_placeholder(name) -> bool:
 
 
 
-TRAIT_LITERATURE_NOTE = (
-    "Looked up in the literature by the taxon name — a property of the name, not a result of "
-    "this dataset. Ecological function itself cannot be derived from amplicon data.")
-TRAIT_NOT_ANNOTATED = "not annotated"
-TRAIT_NOT_DERIVABLE = "Ecological function — not derivable from amplicon data"
-TRAIT_MDB_CATEGORIES = {
-    "CM": "constitutive mixoplankton",
-    "GNCM": "generalist non-constitutive mixoplankton",
-    "pSNCM": "plastidic specialist non-constitutive mixoplankton",
-    "eSNCM": "endosymbiotic specialist non-constitutive mixoplankton",
-}
-TRAIT_RANK_ORDER = ("species", "genus", "family", "order", "class", "phylum")
-
-
-def mdb_label(category: str) -> str:
-    return f"mixoplankton ({category})"
-
-
-PR2_FUNCTION_LABELS = {
-    "phototrophs": "phototroph",
-    "phagotrophs": "phagotroph",
-    "parasites": "parasite",
-    "metazoans": "metazoan",
-    "dinoflagellates": "dinoflagellate (trophic mode mixed)",
-    "unknown": "unknown",
-}
-
-
-def pr2_function_label(value: str) -> str:
-    return PR2_FUNCTION_LABELS.get((value or "").strip().lower(), (value or "").strip())
-
-
-def trait_group_label(functions) -> str:
-    fs = sorted({str(f) for f in (functions or [])})
-    return " + ".join(fs) if fs else TRAIT_NOT_ANNOTATED
-
-
-def trait_run(q: Runner, dataset_id: str) -> dict:
-    rows = q("MATCH (r:TraitRun {dataset_id:$d}) RETURN r AS t ORDER BY r.run_id LIMIT 1", d=dataset_id)
-    if not rows:
-        return {"available": False, "run_id": None, "sources": [], "coverage": None,
-                "n_annotated": 0, "n_with_lineage": 0, "n_asv": 0,
-                "absent_reason": ("No literature annotation has been run for this dataset "
-                                  "(tools/traits/annotate.py)."),
-                "statement": None, "note": TRAIT_LITERATURE_NOTE}
-    t = dict(rows[0]["t"])
-    n_lin = int(t.get("n_with_lineage") or 0)
-    n_ann = int(t.get("n_annotated") or 0)
-    ranks_used = [r for r in TRAIT_RANK_ORDER if int(t.get(f"n_rank_{r}") or 0) > 0]
-    coarsest = ranks_used[-1] if ranks_used else None
-    sources = list(t.get("sources") or [])
-    if t.get("absent_reason"):
-        statement = t["absent_reason"]
-    elif n_lin == 0:
-        statement = "annotated: no ASV of this dataset carries a lineage to look up"
-    else:
-        pct = 100.0 * n_ann / n_lin
-        statement = (f"annotated: {pct:.0f} % of the {n_lin} ASVs with a lineage ({n_ann}), "
-                     + (f"{coarsest} level or finer" if coarsest else "no hit")
-                     + f"; sources: {', '.join(sources) if sources else 'none'}")
-    return {"available": True, "run_id": t.get("run_id"), "computed_by": t.get("computed_by"),
-            "method": t.get("method"), "marker": t.get("marker"),
-            "sources": sources, "source_citations": list(t.get("source_citations") or []),
-            "coverage": t.get("coverage"), "n_annotated": n_ann, "n_with_lineage": n_lin,
-            "n_asv": int(t.get("n_asv") or 0),
-            "n_by_rank": {r: int(t.get(f"n_rank_{r}") or 0) for r in TRAIT_RANK_ORDER},
-            "absent_reason": t.get("absent_reason"),
-            "statement": statement, "note": TRAIT_LITERATURE_NOTE,
-            "mdb_categories": TRAIT_MDB_CATEGORIES}
-
-
-def asv_trait(q: Runner, dataset_id: str, asv_id: str) -> dict | None:
-    rows = q("MATCH (a:ASV {id:$id, dataset_id:$d}) RETURN a.trait_function AS f, "
-             "a.trait_source AS s, a.trait_rank AS r, a.trait_run_id AS run",
-             d=dataset_id, id=asv_id)
-    if not rows:
-        return None
-    r = rows[0]
-    fs = list(r["f"] or [])
-    return {"annotated": bool(fs), "functions": fs, "sources": list(r["s"] or []),
-            "rank": r["r"], "group": trait_group_label(fs), "run_id": r["run"],
-            "note": TRAIT_LITERATURE_NOTE}
-
-
-
 ENV_LINK_NOTE = (
     "A lagged rank correlation between a measured variable and the ASV's share of the sample — "
     "shifts are counted in samples, not time units (sampling intervals are irregular). A link "
@@ -1292,28 +1207,6 @@ def cluster_env_links(q: Runner, dataset_id: str, louvain_label: int) -> dict:
                           else ("environment links: " + ", ".join(f"{it['label']} → {it['n_asv']} ASVs" for it in items)
                                 if items else "environment links: none in this cluster")),
             "note": ENV_LINK_NOTE, "run": run}
-
-
-def cluster_functions(q: Runner, dataset_id: str, louvain_label: int) -> dict:
-    rows = q("MATCH (a:ASV {dataset_id:$d}) WHERE a.louvain_label = $l "
-             "RETURN a.id AS id, a.trait_function AS f ORDER BY a.id", d=dataset_id, l=louvain_label)
-    counts: dict[str, int] = {}
-    n_ann = 0
-    for r in rows:
-        fs = list(r["f"] or [])
-        if fs:
-            n_ann += 1
-        for f in sorted(set(fs)):
-            counts[f] = counts.get(f, 0) + 1
-    items = [{"label": k, "n_asv": v} for k, v in counts.items()]
-    items.sort(key=lambda it: (-it["n_asv"], it["label"]))
-    items.append({"label": TRAIT_NOT_ANNOTATED, "n_asv": len(rows) - n_ann})
-    n = len(rows)
-    for it in items:
-        it["share"] = (it["n_asv"] / n) if n else None
-    return {"n_members": n, "n_annotated": n_ann, "functions": items,
-            "note": TRAIT_LITERATURE_NOTE}
-
 
 
 ACTIVITY_SECOND_RUN_RATIO = 2 / 3
@@ -1897,8 +1790,6 @@ def provenance_chain(q: Runner, dataset_id: str) -> dict:
     thr = thresholds(q, dataset_id)
 
     LAUF_ABFRAGE = {
-        "TraitRun": ("MATCH (r:TraitRun {dataset_id:$d}) RETURN properties(r) AS p "
-                     "ORDER BY r.run_id LIMIT 1"),
         "EnvLinkRun": ("MATCH (r:EnvLinkRun {dataset_id:$d}) RETURN properties(r) AS p "
                        "ORDER BY r.run_id LIMIT 1"),
     }
@@ -1932,7 +1823,6 @@ def provenance_chain(q: Runner, dataset_id: str) -> dict:
                                               if thr.get("computed_at") else "")
                     if thr.get("run_id") else CHAIN_NOT_RECORDED),
          "params": {k: thr.get(k) for k in THRESHOLD_KEYS if thr.get(k) is not None}},
-        {**lauf("TraitRun", "run_id"), "step": "traits", "label": "Literature annotation"},
         {**lauf("EnvLinkRun", "run_id"), "step": "env_links", "label": "Environment links"},
         {"step": "source", "label": "Source publication",
          "present": bool(d0.get("citation") or d0.get("doi")),

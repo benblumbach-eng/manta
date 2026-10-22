@@ -57,8 +57,19 @@ def driver():
     return _driver
 
 
+def _remove_function_annotation():
+    try:
+        _w("MATCH (t:TraitRun) DETACH DELETE t")
+        _w("MATCH (a:ASV) WHERE a.trait_function IS NOT NULL OR a.trait_run_id IS NOT NULL "
+           "REMOVE a.trait_function, a.trait_source, a.trait_rank, a.trait_run_id")
+        _w("DROP CONSTRAINT trait_run_key IF EXISTS")
+    except Exception:
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _remove_function_annotation()
     yield
     global _driver
     if _driver is not None:
@@ -2182,7 +2193,6 @@ def _network_nodes(dataset_id):
                a.read_count_total AS size, a.max_abundance_month AS peak_month,
                COUNT {{ (a)<-[h:HAS_ABUNDANCE]-(:Sample {{dataset_id:$d}}) WHERE h.count > 0 }}
                  AS n_samples_present,
-               a.trait_function AS trait_function, a.trait_rank AS trait_rank,
                {", ".join(f"a.{c} AS {c}" for c in CENTRALITIES)}
         ORDER BY a.id
         """,
@@ -2207,8 +2217,6 @@ def _network_nodes(dataset_id):
     for r in rows:
         r["rel_abundance"] = rel.get(r["id"], 0.0) if r["size"] is not None else None
         r["starred"] = r["id"] in stars
-        r["trait_group"] = (semantics.trait_group_label(r["trait_function"])
-                            if r.get("trait_function") else None)
     return rows
 
 
@@ -2366,7 +2374,6 @@ def network(dataset_id: str, edge: str = Query("con", pattern="^(con|ccm)$"), ma
             "edge_width_legend": semantics.EDGE_WIDTH_LEGEND,
             "edge_width_scale": semantics.edge_width_scale(thr),
             "thresholds": thr, "layers": _layers(dataset_id),
-            "traits": semantics.trait_run(_q, dataset_id),
             "env_links": _env_links(dataset_id),
             "value_declaration": {
                 **semantics.value_declaration(_q, dataset_id, semantics.frame_summed(_q, dataset_id)),
@@ -2635,9 +2642,6 @@ def asv_detail(dataset_id: str, asv_id: str):
         },
         "neighbors": {"con": con_n, "ccm": ccm_n},
         "criterion2": semantics.criterion2_asv(semantics.criterion2(_q, dataset_id), asv_id),
-        "funktion": "Not derivable from amplicon data.",
-        "trait": semantics.asv_trait(_q, dataset_id, asv_id),
-        "trait_run": semantics.trait_run(_q, dataset_id),
         "drivers": semantics.asv_drivers(_q, dataset_id, asv_id),
         "bild": None,
     }
@@ -2777,8 +2781,6 @@ def cluster(dataset_id: str, louvain_label: int):
         "environment_profile": semantics.cluster_environment_profile(_q, dataset_id, louvain_label),
         "members": members,
         "taxa_breakdown": {"genus": genus_b, "family": family_b},
-        "function_breakdown": semantics.cluster_functions(_q, dataset_id, louvain_label),
-        "trait_run": semantics.trait_run(_q, dataset_id),
         "env_links": semantics.cluster_env_links(_q, dataset_id, louvain_label),
         "collective_series": collective,
         "peak_month_hist": month_h,

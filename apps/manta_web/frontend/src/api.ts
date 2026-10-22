@@ -387,8 +387,6 @@ export type NetNode = {
   n_samples_present: number;
   peak_month: number | null;
   starred?: boolean;
-  trait_group?: string | null;
-  trait_rank?: string | null;
   criterion2?: Criterion2Node | null;
 };
 
@@ -465,7 +463,6 @@ export type Network = {
   n_samples?: number;
   partition: Partition;
   marker: string | null;
-  traits?: TraitRun;
   edge: "con" | "ccm";
   directed: boolean;
   thresholds: Thresholds;
@@ -631,42 +628,6 @@ export type NetworkScope = {
   note: string;
 };
 
-export type TraitAnnotation = {
-  annotated: boolean;
-  functions: string[];
-  sources: string[];
-  rank: string | null;
-  group: string;
-  run_id: string | null;
-  note: string;
-};
-
-export type TraitRun = {
-  available: boolean;
-  run_id: string | null;
-  computed_by?: string;
-  method?: string;
-  marker?: string | null;
-  sources: string[];
-  source_citations?: string[];
-  coverage: number | null;
-  n_annotated: number;
-  n_with_lineage: number;
-  n_asv: number;
-  n_by_rank?: Record<string, number>;
-  absent_reason?: string | null;
-  statement: string | null;
-  note: string;
-  mdb_categories?: Record<string, string>;
-};
-
-export type FunctionBreakdown = {
-  n_members: number;
-  n_annotated: number;
-  functions: { label: string; n_asv: number; share: number | null }[];
-  note: string;
-};
-
 export type Spectrum = {
   available: boolean;
   absent_reason?: string;
@@ -701,9 +662,6 @@ export type AsvDetail = {
   environment_profile: EnvironmentProfile;
   criterion2?: Criterion2Asv;
   neighbors: { con: Neighbor[]; ccm: Neighbor[] };
-  funktion: string;
-  trait?: TraitAnnotation | null;
-  trait_run?: TraitRun;
   bild: string | null;
 };
 
@@ -768,8 +726,6 @@ export type ClusterDetail = {
              read_count_total: number | null; n_samples_present: number;
              peak_month: number | null; criterion2?: Criterion2Node | null }[];
   taxa_breakdown: { genus: Record<string, number>; family: Record<string, number> };
-  function_breakdown?: FunctionBreakdown;
-  trait_run?: TraitRun;
   source_publication: SourcePublication;
   starred: boolean;
 };
