@@ -1,4 +1,4 @@
-import { SectionHeading, StateNotice } from "./ui";
+import { SectionHeading, StateNotice, ToggleButton } from "./ui";
 import { useEffect, useMemo, useState } from "react";
 import { getAsvList, getWheel, type Wheel, type WheelMonth } from "../api";
 import { Chooser, ChooserRow } from "./controls";
@@ -61,6 +61,7 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
   const [nochmal, setNochmal] = useState(0);
   const [year, setYear] = useState<string | null>(null);
   const [rings, setRings] = useState<Ring[] | null>(null);
+  const [adjust, setAdjust] = useState(false);
   const [asvListe, setAsvListe] = useState<{ id: string; label: string }[]>([]);
   useEffect(() => {
     setYear(null); setRings(null); setAsvListe([]);
@@ -173,8 +174,8 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
       {w && !w.absent_reason && (
         <div className="p-4 space-y-3 text-sm">
 
-          {(w.years?.length ?? 0) > 0 && (
-            <div className="flex flex-wrap items-center gap-2" data-testid="wheel-controls">
+          <div className="flex flex-wrap items-center gap-2" data-testid="wheel-controls">
+            {(w.years?.length ?? 0) > 0 && (
               <Chooser label="year" summary={year ?? "average"} closeOnPick
                 testid="wheel-year-select">
                 <ChooserRow radio checked={year == null} testid="wheel-year-avg"
@@ -186,49 +187,12 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
                     label={y.year} hint={y.note ?? `${y.n} samples · all 12 months`} />
                 ))}
               </Chooser>
-            </div>
-          )}
+            )}
+            <ToggleButton data-testid="wheel-adjust" pressed={adjust} className="ml-auto"
+              onClick={() => setAdjust((a) => !a)}>adjust</ToggleButton>
+          </div>
 
-          {w.year?.note && (
-            <p className="text-xs text-warn" data-testid="wheel-year-note">
-              {w.year.year}: {w.year.note} — rings rest on this year&rsquo;s {w.year.n} samples only.
-            </p>
-          )}
-
-          <svg viewBox="0 0 440 440" className="w-full" data-testid="wheel-svg">
-            {w.months.map((name, i) => {
-              const [tx, ty] = P(R_LABEL, angleOfMonth(i + 1) + 15 * (Math.PI / 180));
-              const [gx0, gy0] = P(R_MIN - 8, angleOfMonth(i + 1));
-              const [gx1, gy1] = P(R_MAX + 6, angleOfMonth(i + 1));
-              return (
-                <g key={name}>
-                  <line x1={gx0} y1={gy0} x2={gx1} y2={gy1} stroke="var(--chart-grid)" strokeWidth={1} />
-                  <text x={tx} y={ty} fill="var(--text-muted)" fontSize={11} textAnchor="middle"
-                        dominantBaseline="middle">{name}</text>
-                </g>
-              );
-            })}
-            {shown.map((s, i) => {
-              const r = ringR(i);
-              const offen = s.kind === "cluster" ? () => onOpenCluster(s.clusterLabel!)
-                : s.kind === "env" ? () => onOpenEnvironment?.(s.id) : undefined;
-              return (
-                <g key={s.key} data-testid={`wheel-ring-${s.key}`} onClick={offen}
-                   className={offen ? "cursor-pointer" : undefined}>
-                  <circle cx={CX} cy={CY} r={r} fill="none" stroke={s.colour} strokeWidth={1}
-                          opacity={0.18} />
-                  {s.months.map((run) => (run.length >= 12
-                    ? <circle key="ring" cx={CX} cy={CY} r={r} fill="none" stroke={s.colour}
-                              strokeWidth={stroke} opacity={0.9} />
-                    : <path key={run[0]} d={arcPath(r, run[0], run.length)} fill="none"
-                            stroke={s.colour} strokeWidth={stroke} strokeLinecap="round"
-                            opacity={0.9} />))}
-                  <title>{`${s.label} · ${s.below ? "≤" : "≥"} ${s.threshold ?? "?"} ${s.unit}`}</title>
-                </g>
-              );
-            })}
-          </svg>
-
+          {adjust && (
           <div className="rounded-md border border-line bg-raised px-2 py-2 space-y-1"
                data-testid="wheel-rings">
             <SectionHeading className="mb-1"
@@ -276,6 +240,47 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
               ))}
             </div>
           </div>
+          )}
+
+          {w.year?.note && (
+            <p className="text-xs text-warn" data-testid="wheel-year-note">
+              {w.year.year}: {w.year.note} — rings rest on this year&rsquo;s {w.year.n} samples only.
+            </p>
+          )}
+
+          <svg viewBox="0 0 440 440" className="w-full" data-testid="wheel-svg">
+            {w.months.map((name, i) => {
+              const [tx, ty] = P(R_LABEL, angleOfMonth(i + 1) + 15 * (Math.PI / 180));
+              const [gx0, gy0] = P(R_MIN - 8, angleOfMonth(i + 1));
+              const [gx1, gy1] = P(R_MAX + 6, angleOfMonth(i + 1));
+              return (
+                <g key={name}>
+                  <line x1={gx0} y1={gy0} x2={gx1} y2={gy1} stroke="var(--chart-grid)" strokeWidth={1} />
+                  <text x={tx} y={ty} fill="var(--text-muted)" fontSize={11} textAnchor="middle"
+                        dominantBaseline="middle">{name}</text>
+                </g>
+              );
+            })}
+            {shown.map((s, i) => {
+              const r = ringR(i);
+              const offen = s.kind === "cluster" ? () => onOpenCluster(s.clusterLabel!)
+                : s.kind === "env" ? () => onOpenEnvironment?.(s.id) : undefined;
+              return (
+                <g key={s.key} data-testid={`wheel-ring-${s.key}`} onClick={offen}
+                   className={offen ? "cursor-pointer" : undefined}>
+                  <circle cx={CX} cy={CY} r={r} fill="none" stroke={s.colour} strokeWidth={1}
+                          opacity={0.18} />
+                  {s.months.map((run) => (run.length >= 12
+                    ? <circle key="ring" cx={CX} cy={CY} r={r} fill="none" stroke={s.colour}
+                              strokeWidth={stroke} opacity={0.9} />
+                    : <path key={run[0]} d={arcPath(r, run[0], run.length)} fill="none"
+                            stroke={s.colour} strokeWidth={stroke} strokeLinecap="round"
+                            opacity={0.9} />))}
+                  <title>{`${s.label} · ${s.below ? "≤" : "≥"} ${s.threshold ?? "?"} ${s.unit}`}</title>
+                </g>
+              );
+            })}
+          </svg>
 
           <div className="space-y-1" data-testid="wheel-list">
             {w.clusters.map((c) => (
