@@ -1117,24 +1117,6 @@ export const getCluster = (ds: string, label: number) => get<ClusterDetail>(`/da
 export const getCapabilities = (ds: string) => get<Capabilities>(`/datasets/${ds}/capabilities`);
 export const getEnvironment = (ds: string) => get<Environment>(`/datasets/${ds}/environment`);
 
-export type LightBand = {
-  kind: "polar_night" | "polar_day";
-  start: string; end: string;
-  clipped_start: boolean; clipped_end: boolean;
-};
-export type Light = {
-  available: boolean;
-  absent_reason: string | null;
-  station: { station_id: string; lat: number; lon: number } | null;
-  from: string | null; to: string | null;
-  bands: LightBand[];
-  legend: string; method: string; reference: string; caveat: string;
-  per_sample: { sample: string; date: string; day_length_h: number; polar_night: boolean;
-                polar_day: boolean }[];
-  year: LightYear | null;
-};
-export const getLight = (ds: string) => get<Light>(`/datasets/${ds}/light`);
-
 export type Concept = {
   key: string; label: string; kind: "klasse" | "beziehung" | "kennzahl" | "umweltgroesse";
   definition: string; source: string | null; caveats: string[];
@@ -1176,26 +1158,23 @@ export type ProvenanceChain = {
 export const getProvenanceChain = (ds: string) =>
   get<ProvenanceChain>(`/datasets/${ds}/provenance-chain`);
 
+export type WheelMonth = { month: number; mean: number; n: number };
 export type WheelCluster = {
   louvain_label: number;
   n_members: number;
-  runs: string[][];
-  runs_months: number[][];
-  peak: string | null;
-  peak_month: number | null;
-  peak_share: number | null;
-  by_month?: { month: number; mean: number; n: number }[];
-  n_min: number;
+  share_total: number | null;
+  by_month: WheelMonth[];
 };
+export type WheelAsv = { id: string; share_total: number | null; by_month: WheelMonth[] };
 export type WheelEnvMonth = { month: number; mean: number | null; n: number };
 export type Wheel = {
   dataset_id: string;
   time_axis: "dates" | "ordinal";
   months: string[];
-  arc: number;
   clusters: WheelCluster[];
+  asvs?: WheelAsv[];
   environment: {
-    variables: { key: string; label: string; unit: string; unit_note: string | null }[];
+    variables: { key: string; label: string; unit: string; unit_note: string | null; mean: number }[];
     monthly: Record<string, WheelEnvMonth[]>;
     units_note: string;
   } | null;
@@ -1205,24 +1184,12 @@ export type Wheel = {
   year?: WheelYear | null;
 };
 export type WheelYear = { year: string; n: number; months_covered: number; note: string | null };
-export type LightYear = {
-  available: boolean; absent_reason?: string; lat: number | null; reference_year?: number;
-  bands: { kind: "polar_night" | "polar_day"; start_doy: number; end_doy: number }[];
-  shortest_day_doy: number | null; sun_return_doy?: number | null; legend?: string;
-  day_length_doy?: number[];
-  solar_marks?: SeasonMark[];
-};
 
-export type SeasonMark = { doy: number; label: string };
-export type Seasons = {
-  dataset_id: string; available: boolean; absent_reason: string | null;
-  astronomical: SeasonMark[]; light: SeasonMark[]; water: SeasonMark[];
-  water_note: string; method: string; caveat: string;
+export const getWheel = (ds: string, year: string | null, asvs: string[]) => {
+  const q = [year ? `year=${encodeURIComponent(year)}` : "",
+             asvs.length ? `asvs=${asvs.map(encodeURIComponent).join(",")}` : ""].filter(Boolean);
+  return get<Wheel>(`/datasets/${ds}/wheel${q.length ? `?${q.join("&")}` : ""}`);
 };
-export const getSeasons = (ds: string) => get<Seasons>(`/datasets/${ds}/seasons`);
-
-export const getWheel = (ds: string, year: string | null, arc: number) =>
-  get<Wheel>(`/datasets/${ds}/wheel?arc=${arc}${year ? `&year=${encodeURIComponent(year)}` : ""}`);
 
 
 export type Params = {

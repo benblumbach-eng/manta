@@ -2809,8 +2809,7 @@ def _cluster_note(dataset_id: str, louvain_label: int) -> dict:
 
 
 @app.get("/datasets/{dataset_id}/wheel", dependencies=[Depends(visible_dataset)])
-def wheel(dataset_id: str, year: str | None = Query(None),
-          arc: float = Query(10.0, ge=0, le=100)):
+def wheel(dataset_id: str, year: str | None = Query(None), asvs: str | None = Query(None)):
     labels = [r["l"] for r in _q(
         "MATCH (a:ASV {dataset_id:$d}) WHERE a.louvain_label IS NOT NULL "
         "RETURN DISTINCT a.louvain_label AS l ORDER BY l", d=dataset_id)]
@@ -2819,7 +2818,7 @@ def wheel(dataset_id: str, year: str | None = Query(None),
     axis = _time_axis(dataset_id)
 
     base = {"dataset_id": dataset_id, "time_axis": axis, "months": semantics.MONTHS,
-            "quantity": semantics.quantity(_q, dataset_id), "arc": arc,
+            "quantity": semantics.quantity(_q, dataset_id),
             "source_publication": {"citation": semantics.SOURCE_PUBLICATION,
                                    "doi": semantics.SOURCE_PUBLICATION_DOI}}
     if axis != semantics.TIME_AXIS_DATES:
@@ -2860,33 +2859,40 @@ def wheel(dataset_id: str, year: str | None = Query(None),
         "RETURN a.louvain_label AS l, count(*) AS n", d=dataset_id)}
     per = {(r["l"], r["sample"]): r["sum_count"] for r in sums}
 
-    month_no = {m: i + 1 for i, m in enumerate(semantics.MONTHS)}
-    clusters = []
-    for l in labels:
+    asv_ids = [a for a in (asvs or "").split(",") if a]
+    asv_rows = _q(
+        """
+        MATCH (s:Sample {dataset_id:$d})-[r:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d})
+        WHERE a.id IN $ids
+        RETURN a.id AS id, s.sample_id AS sample, r.count AS count
+        """, d=dataset_id, ids=asv_ids) if asv_ids else []
+    per_asv = {(r["id"], r["sample"]): r["count"] for r in asv_rows}
+    total_all = sum(s["total"] or 0.0 for s in samples)
+
+    def _monthly(counts: dict) -> tuple[list[dict], float | None]:
         series = []
         for s in samples:
-            cnt = per.get((l, s["sample"]), 0.0)
             tot = s["total"] or 0.0
+            cnt = counts.get(s["sample"], 0.0)
             series.append({"sample": s["sample"], "date": s["date"], "sum_count": cnt,
                            "share": (cnt / tot) if tot > 0 else None})
         freq = semantics.frequency(_q, dataset_id, series, with_rank=False)
-        act = semantics.activity(freq)
         climo = [c for c in ((freq.get("seasonal") or {}).get("climatology") or [])
                  if c.get("mean") is not None]
-        runs = semantics.month_runs(sorted(c["month"] for c in climo if c["mean"] * 100 >= arc))
-        im_lauf = {m for r in runs for m in r}
-        clusters.append({
-            "louvain_label": l, "n_members": n_members.get(l, 0),
-            "runs": [[semantics.MONTHS[m - 1] for m in r] for r in runs],
-            "runs_months": runs,
-            "peak": act["peak"],
-            "peak_month": month_no.get(act["peak"]),
-            "peak_share": max((c["mean"] for c in climo), default=None),
-            "by_month": [{"month": c["month"], "mean": c["mean"], "n": c["n"]} for c in climo],
-            "n_min": min((c["n"] for c in climo if c["month"] in im_lauf), default=0),
-        })
-    clusters.sort(key=lambda c: (not c["runs_months"], c["runs_months"][0][0]
-                                 if c["runs_months"] else 99, c["louvain_label"]))
+        share = (sum(x["sum_count"] for x in series) / total_all) if total_all > 0 else None
+        return [{"month": c["month"], "mean": c["mean"], "n": c["n"]} for c in climo], share
+
+    clusters = []
+    for l in labels:
+        by_month, share = _monthly({s["sample"]: per.get((l, s["sample"]), 0.0) for s in samples})
+        clusters.append({"louvain_label": l, "n_members": n_members.get(l, 0),
+                         "share_total": share, "by_month": by_month})
+    clusters.sort(key=lambda c: (-(c["share_total"] or 0.0), c["louvain_label"]))
+    asv_out = []
+    for a in asv_ids:
+        by_month, share = _monthly({s["sample"]: per_asv.get((a, s["sample"]), 0.0)
+                                    for s in samples})
+        asv_out.append({"id": a, "share_total": share, "by_month": by_month})
 
     env_rows = _q(
         "MATCH (s:Sample {dataset_id:$d}) RETURN toString(s.date) AS date, "
@@ -2896,6 +2902,8 @@ def wheel(dataset_id: str, year: str | None = Query(None),
         env_rows = [r for r in env_rows if str(r["date"]).startswith(year)]
     env_vars, env_monthly = [], {}
     for v in semantics.environment_vars(_q, dataset_id):
+        if v["role"] != "environment":
+            continue
         vals: dict[int, list[float]] = {}
         for r in env_rows:
             if r[v["key"]] is None or not r["date"]:
@@ -2904,12 +2912,14 @@ def wheel(dataset_id: str, year: str | None = Query(None),
             vals.setdefault(m, []).append(float(r[v["key"]]))
         if not vals:
             continue
-        env_vars.append({k: v[k] for k in ("key", "label", "unit", "unit_note")})
+        alle = [x for xs in vals.values() for x in xs]
+        env_vars.append({**{k: v[k] for k in ("key", "label", "unit", "unit_note")},
+                         "mean": sum(alle) / len(alle)})
         env_monthly[v["key"]] = [
             {"month": m, "mean": (sum(vals[m]) / len(vals[m])) if m in vals else None,
              "n": len(vals.get(m, []))}
             for m in range(1, 13)]
-    return {**base, "clusters": clusters,
+    return {**base, "clusters": clusters, "asvs": asv_out,
             "environment": {"variables": env_vars, "monthly": env_monthly,
                             "units_note": semantics.environment_units_note(_q, dataset_id)}
             if env_vars else None,

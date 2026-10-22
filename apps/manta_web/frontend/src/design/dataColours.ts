@@ -28,14 +28,6 @@ export function yearColour(i: number, n: number, light: boolean): string {
 }
 
 export const envColour = (light: boolean) => (light ? "#047857" : "#34d399");
-export const envLabelColour = (light: boolean) => (light ? "#065f46" : "#a7f3d0");
-
-export const sunColours = (light: boolean) => ({
-  night: light ? "#4338ca" : "#818cf8",
-  nightBand: light ? "#6366f1" : "#4338ca",
-  day: light ? "#d97706" : "#fbbf24",
-  twilight: light ? "#94a3b8" : "#64748b",
-});
 
 export const mixedLayerColours = (light: boolean) => ({
   within: light ? "#0e7490" : "#22d3ee",
