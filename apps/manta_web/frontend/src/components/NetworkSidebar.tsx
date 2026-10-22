@@ -4,7 +4,7 @@ import { getStarred, type Capabilities, type Criterion2Summary, type Dataset,
 import DataAvailability from "./DataAvailability";
 import { useModules } from "../modules";
 import { fmtRun, fmtUtc } from "../format";
-import { isActive, type Filters, type FilterKind, type KeystoneCrit, layerLabel, layersDefault, functionLabel } from "../networkFilters";
+import { isActive, type Filters, type FilterKind, type KeystoneCrit, KEYSTONE_LABEL, layerLabel, layersDefault, functionLabel } from "../networkFilters";
 import { FUNCTION_NONE, functionOther } from "../clusterPalette";
 import { useDatasetSearch } from "../datasetSearch";
 import ErrorNotice from "./ErrorNotice";
@@ -577,15 +577,19 @@ export default function NetworkSidebar(p: SidebarProps) {
           <div className={BOX} data-testid="keystone-control">
             <SectionHeading aside={<span className="text-xs text-mark tabular-nums"
               data-testid="keystone-n">✦ {p.nKey}</span>}>Keystone</SectionHeading>
-            <div className="mt-1 flex flex-col gap-1">
-              <button data-testid="keystone-k1" aria-pressed={p.crit.k1}
-                onClick={() => p.onCrit({ ...p.crit, k1: !p.crit.k1 })} className={checkCls(p.crit.k1)}>
-                {checkMark(p.crit.k1)}<span>1 · CCM · {p.nCrit1} ASVs</span>
-              </button>
-              <button data-testid="keystone-k2" aria-pressed={p.crit.k2} disabled={!c2}
-                onClick={() => p.onCrit({ ...p.crit, k2: !p.crit.k2 })} className={checkCls(p.crit.k2, !!c2)}>
-                {checkMark(p.crit.k2)}<span>2 · closeness · {c2?.n_pass ?? "…"} ASVs</span>
-              </button>
+            <div className="mt-1 flex flex-col gap-1" role="radiogroup" aria-label="Keystone criterion">
+              {([1, 2] as const).map((k) => {
+                const on = p.crit === k;
+                const enabled = k === 1 || !!c2;
+                return (
+                  <button key={k} data-testid={`keystone-k${k}`} role="radio" aria-checked={on}
+                    disabled={!enabled} onClick={() => p.onCrit(k)} className={checkCls(on, enabled)}>
+                    <span aria-hidden className={`h-3.5 w-3.5 shrink-0 rounded-full border ${on
+                      ? "border-accent bg-accent-fill" : "border-line-strong"}`} />
+                    <span>{KEYSTONE_LABEL[k]} · {k === 1 ? p.nCrit1 : (c2?.n_pass ?? "…")}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}

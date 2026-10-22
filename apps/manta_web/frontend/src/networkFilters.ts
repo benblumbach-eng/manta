@@ -1,7 +1,12 @@
 import type { NetEdge, NetNode, Network } from "./api";
 
 
-export type KeystoneCrit = { k1: boolean; k2: boolean };
+export type KeystoneCrit = 1 | 2;
+
+export const KEYSTONE_LABEL: Record<KeystoneCrit, string> = {
+  1: "1 · significant CCM link",
+  2: "2 · high closeness in its module",
+};
 
 export type FilterKind = "modules" | "layer" | "cross" | "c2" | "function" | "taxon" | "asvs"
   | "presence" | "size" | "strength";

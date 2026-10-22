@@ -93,7 +93,7 @@ export default function LegendPanel({ thr, c2, keyLabel, labelMax, functionClass
               <div className="min-w-0 space-y-1">
                 <div data-testid="legend-c2">
                   <span className="text-fg">✦ Keystone</span>
-                  <span className="text-fg-muted"> — {keyLabel ? `criteria ${keyLabel}` : "none selected"}</span>
+                  <span className="text-fg-muted"> — {keyLabel}</span>
                 </div>
                 <Criterion2Details c2={c2} testid="legend-c2-declaration" />
               </div>
