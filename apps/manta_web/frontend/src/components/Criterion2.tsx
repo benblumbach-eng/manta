@@ -34,7 +34,7 @@ export function HubAsvDetails({ c2, moduleLabel, testid }: {
       <p className="text-fg-muted tabular-nums" data-testid={`${testid}-values`}>
         {moduleLabel ?? `module ${c2.module}`}{c2.module_size != null ? ` (${c2.module_size} members)` : ""}
         {" "}· closeness {c2.closeness?.toFixed(3) ?? "—"}
-        {c2.module_mean_closeness != null && ` · module mean ${c2.module_mean_closeness.toFixed(3)}`}
+        {c2.mean_closeness != null && ` · network mean ${c2.mean_closeness.toFixed(3)}`}
         {" "}· q = {fmtP(c2.q)}
       </p>
     </div>

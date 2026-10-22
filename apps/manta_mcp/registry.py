@@ -155,7 +155,7 @@ TOOL_SPECS: list[dict] = [
         "description": (
             "Everything about ONE ASV: full taxonomy (kingdom to species), Louvain cluster and "
             "module name, size (reads summed over all samples), and criterion2 — whether it "
-            "meets criterion 2 of Oldenburg et al. 2024 (high closeness within its module; "
+            "meets criterion 2 of Oldenburg et al. 2024 (high closeness in the network of significant CCM links; "
             "one criterion, not a keystone; links between modules: "
             "cluster_bridges). Needs an exact asv_id from find_asv. Raw centrality numbers are "
             "deliberately not returned."
@@ -700,7 +700,7 @@ QUESTIONS: dict[str, tuple[str, str]] = {
     "cluster_network": ("dataset", "Which module predicts which, and how strongly?"),
     "cluster_year_overview": ("dataset", "When in the year is each module active, and does that repeat?"),
     "cluster_interannual_variability": ("dataset", "In which months do the years differ most?"),
-    "asv_detail": ("asv", "What is this ASV — taxonomy, module, size, is it central in its module?"),
+    "asv_detail": ("asv", "What is this ASV — taxonomy, module, size, is it central in the CCM network?"),
     "asv_seasonality": ("asv", "When is this ASV present, and does it come back every year?"),
     "asv_spectrum": ("asv", "Which rhythms does this ASV carry — a year, half a year, longer?"),
     "asv_drivers": ("asv", "Which measured variables does this ASV move with, and with what lag?"),

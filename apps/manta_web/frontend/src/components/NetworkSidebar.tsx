@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getAsvList, getStarred, type Criterion2Summary, type Dataset,
          type Network, type NetNode } from "../api";
 import { useModules } from "../modules";
-import { isActive, type Filters, type FilterKind, type KeystoneCrit, KEYSTONE_LABEL, layerLabel, layersDefault } from "../networkFilters";
+import { isActive, type Filters, type FilterKind, type KeystoneParams, KEYSTONE_DEFAULTS, KEYSTONE_LABEL, layerLabel, layersDefault } from "../networkFilters";
 import { useDatasetSearch } from "../datasetSearch";
 import { fmtShare } from "../format";
 import ErrorNotice from "./ErrorNotice";
@@ -37,8 +37,8 @@ export type SidebarProps = {
   dataset: Dataset;
   net: Network | null;
   c2: Criterion2Summary | null;
-  crit: KeystoneCrit;
-  onCrit: (c: KeystoneCrit) => void;
+  kp: KeystoneParams;
+  onKp: (patch: Partial<KeystoneParams>) => void;
   nCrit1: number;
   nKey: number;
   visibleNodes: NetNode[];
@@ -476,15 +476,43 @@ export default function NetworkSidebar(p: SidebarProps) {
                 data-testid="keystone-n">✦ {p.nKey}</span>}>Keystone</SectionHeading>
               <div className="mt-1 flex flex-col gap-1" role="radiogroup" aria-label="Keystone criterion">
                 {([1, 2] as const).map((k) => {
-                  const on = p.crit === k;
+                  const on = p.kp.crit === k;
                   const enabled = k === 1 || !!c2;
+                  const d = KEYSTONE_DEFAULTS;
+                  const isDefault = k === 1 ? p.kp.p1 === d.p1 && p.kp.links1 === d.links1
+                    : p.kp.q2 === d.q2;
+                  const reset = (
+                    <button data-testid={`keystone-k${k}-reset`} disabled={isDefault}
+                      onClick={() => p.onKp(k === 1 ? { p1: d.p1, links1: d.links1 }
+                        : { q2: d.q2 })}
+                      title="back to the defaults" aria-label="back to the defaults"
+                      className="rounded-md px-1 text-xs text-fg-muted hover:text-fg hover:bg-control disabled:text-fg-disabled disabled:hover:bg-transparent">↺</button>
+                  );
                   return (
-                    <button key={k} data-testid={`keystone-k${k}`} role="radio" aria-checked={on}
-                      disabled={!enabled} onClick={() => p.onCrit(k)} className={checkCls(on, enabled)}>
-                      <span aria-hidden className={`h-3.5 w-3.5 shrink-0 rounded-full border ${on
-                        ? "border-accent bg-accent-fill" : "border-line-strong"}`} />
-                      <span>{KEYSTONE_LABEL[k]} · {k === 1 ? p.nCrit1 : (c2?.n_pass ?? "…")}</span>
-                    </button>
+                    <div key={k}>
+                      <button data-testid={`keystone-k${k}`} role="radio" aria-checked={on}
+                        disabled={!enabled} onClick={() => p.onKp({ crit: k })} className={checkCls(on, enabled)}>
+                        <span aria-hidden className={`h-3.5 w-3.5 shrink-0 rounded-full border ${on
+                          ? "border-accent bg-accent-fill" : "border-line-strong"}`} />
+                        <span>{KEYSTONE_LABEL[k]} · {k === 1 ? p.nCrit1 : (c2?.n_pass ?? "…")}</span>
+                      </button>
+                      {on && (
+                        <div className="ml-5 mt-1 grid grid-cols-[1fr_auto_auto] items-center gap-x-2 gap-y-1 text-xs text-fg-muted"
+                          data-testid={`keystone-k${k}-params`}>
+                          {k === 1 ? <>
+                            <KeystoneField testid="keystone-p1" label="max. CCM p-value" value={p.kp.p1}
+                              min={0} max={1} onChange={(v) => p.onKp({ p1: v })} />
+                            {reset}
+                            <KeystoneField testid="keystone-links1" label="min. CCM links" value={p.kp.links1}
+                              min={1} max={1000} integer onChange={(v) => p.onKp({ links1: v })} />
+                          </> : <>
+                            <KeystoneField testid="keystone-q2" label="max. corrected p-value" value={p.kp.q2}
+                              min={0} max={1} onChange={(v) => p.onKp({ q2: v })} />
+                            {reset}
+                          </>}
+                        </div>
+                      )}
+                    </div>
                   );
                 })}
               </div>
@@ -776,5 +804,30 @@ export default function NetworkSidebar(p: SidebarProps) {
         </div>
       </div>
     </aside>
+  );
+}
+
+
+function KeystoneField({ label, value, min, max, integer, onChange, testid }: {
+  label: string; value: number; min: number; max: number; integer?: boolean;
+  onChange: (v: number) => void; testid: string;
+}) {
+  const [text, setText] = useState(String(value));
+  useEffect(() => {
+    if (Number(text.replace(",", ".")) !== value) setText(String(value));
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <>
+      <span>{label}</span>
+      <input data-testid={testid} type="text" inputMode={integer ? "numeric" : "decimal"} value={text}
+        aria-label={label}
+        onChange={(e) => {
+          setText(e.target.value);
+          const n = Number(e.target.value.replace(",", "."));
+          if (e.target.value.trim() !== "" && Number.isFinite(n) && n <= max
+              && (integer ? Number.isInteger(n) && n >= min : n > min)) onChange(n);
+        }}
+        className="w-14 px-1 py-0.5 rounded-md bg-control border border-line-strong text-fg tabular-nums text-right" />
+    </>
   );
 }

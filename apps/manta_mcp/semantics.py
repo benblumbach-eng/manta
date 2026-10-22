@@ -1897,143 +1897,162 @@ def edge_width_scale(t: dict) -> dict:
 
 
 CRITERION2_ALPHA = 0.05
-CRITERION2_MIN_MODULE = 3
+CRITERION2_CCM_ALPHA = 0.05
 
-CRITERION2_LABEL = ("high closeness centrality within its co-occurrence community — criterion 2 "
-                    "of the keystone definition (Oldenburg et al. 2024)")
+CRITERION2_LABEL = ("high closeness centrality in the network of significant CCM links — "
+                    "criterion 2 of the keystone definition (Oldenburg et al. 2024)")
 CRITERION2_PAPER_WORDING = ("a high centrality (closeness) value within its co-occurrence "
                             "community")
 CRITERION2_SOURCE_DOI = SOURCE_PUBLICATION_DOI
 CRITERION2_SOURCE_LOCATION = 'Methods, "Keystone species definition"'
+CRITERION2_CODE = ("the authors' code: otter repository, commit 785069c (2024-09-25), "
+                   "BeyondBlooms2024/Main_Table_2__KeystoneOriginal.R")
 CRITERION2_SOURCE = (f"{SOURCE_PUBLICATION}, doi:{SOURCE_PUBLICATION_DOI} — "
-                     f"{CRITERION2_SOURCE_LOCATION}")
+                     f"{CRITERION2_SOURCE_LOCATION}; computed as in {CRITERION2_CODE}")
 CRITERION2_METHOD = (
-    "Computed by MANTA from the stored links (the centrality values stored with the network run "
-    "are not used), on the undirected co-occurrence (CON) network of this dataset. For each "
-    "module (Louvain label): the subgraph of all its members and all links with both ends in "
-    "the module. Closeness of each member within that subgraph, unweighted: "
-    "c_i = (n − 1) / Σ d(i, j), with n the number of members and d the number of links on the "
-    "shortest path (breadth-first search). For each ASV i: a one-sided one-sample t-test of the "
-    "closeness values of all members of its module against c_i — "
-    "scipy.stats.ttest_1samp(module closeness values, popmean=c_i, alternative='less'). "
-    "Benjamini–Hochberg correction over all testable network ASVs of the dataset; the criterion "
-    f"is met at q ≤ {CRITERION2_ALPHA:g}.")
+    "Computed by MANTA from the stored CCM directions, the same way as the authors' code (the "
+    "centrality values stored with the network run are not used). The graph: every CCM "
+    f"direction with permutation p < {CRITERION2_CCM_ALPHA:g} (OTTER's cut; it runs only along "
+    "co-occurrence links, also between modules), edge length 1 − NMI. Only its largest "
+    "connected part is tested (the authors' script takes the part of the first ASV in its "
+    "table, which is normally the largest). Closeness of each ASV in that part, along paths "
+    "in either direction: c_i = (n − 1) / Σ d(i, j), d = shortest path length "
+    "(igraph closeness, normalized, mode 'total'). For each ASV i: a one-sided one-sample "
+    "t-test of the closeness values of all ASVs in the part against c_i — "
+    "scipy.stats.ttest_1samp(closeness values, popmean=c_i, alternative='less'), as "
+    "t.test(cln, mu = c_i, alternative = 'less') in the authors' code. Benjamini–Hochberg "
+    f"correction over all ASVs in the part; the criterion is met at q < {CRITERION2_ALPHA:g}.")
 CRITERION2_FORMULA = (
-    "c_i = (n − 1) / Σ d(i, j) in the module subgraph; "
-    "p_i = ttest_1samp(module closeness values, popmean=c_i, alternative='less'); "
-    f"Benjamini–Hochberg over all testable network ASVs; met at q ≤ {CRITERION2_ALPHA:g}")
+    f"graph = CCM directions with p < {CRITERION2_CCM_ALPHA:g}, length 1 − NMI, largest part; "
+    "c_i = (n − 1) / Σ d(i, j); "
+    "p_i = ttest_1samp(closeness values of the part, popmean=c_i, alternative='less'); "
+    f"Benjamini–Hochberg over all ASVs of the part; met at q < {CRITERION2_ALPHA:g}")
 CRITERION2_NOT_KEYSTONE = (
-    "Not a keystone on its own: criteria 1 and 3 are not tested — the paper also requires a "
-    "significant NMI (at least one significant CCM link) and presence in at least one stable "
-    "state of the energy landscape; only all three together define a keystone there.")
+    "Not a keystone on its own: criterion 3 is not tested — the paper also requires presence "
+    "in at least one stable state of the energy landscape; only all three together define a "
+    "keystone there.")
 CRITERION2_TITLE = "Criterion 2 of the keystone definition (Oldenburg et al. 2024)"
 CRITERION2_MARK = ("meets criterion 2 of the keystone definition (Oldenburg et al. 2024) — "
                    "not a keystone on its own")
-CRITERION2_GLOW = ("central in its module: closeness significantly above the module mean "
-                   f"(one-sided t-test, Benjamini–Hochberg q ≤ {CRITERION2_ALPHA:g}; "
-                   "Oldenburg et al. 2024)")
+CRITERION2_GLOW = ("central in the network of significant CCM links: closeness significantly "
+                   f"above the network mean (one-sided t-test, Benjamini–Hochberg "
+                   f"q < {CRITERION2_ALPHA:g}; Oldenburg et al. 2024)")
 CRITERION2_SELECTION = (
-    "A selection step: about half of the nodes pass. The t-test compares c_i with the standard "
-    "error of the module mean, not with the spread of the members — it marks the upper part of "
-    "a module, not outliers, and says nothing about an ecological role.")
+    "A selection step: the t-test compares c_i with the standard error of the network mean, "
+    "not with the spread of the ASVs — it marks the upper part of the network, not outliers, "
+    "and says nothing about an ecological role.")
 CRITERION2_REASONS: dict[str, str] = {
-    "module_too_small": (f"its module has fewer than {CRITERION2_MIN_MODULE} members — too few "
-                         f"closeness values for a t-test"),
-    "module_disconnected": ("its module's subgraph is not connected — the closeness "
-                            "(n − 1) / Σ d is undefined where members cannot reach each other, "
-                            "and no substitute formula is used"),
-    "zero_variance": ("all members of its module have the same closeness — without variance "
+    "no_ccm_link": (f"it has no CCM link with p < {CRITERION2_CCM_ALPHA:g} — it is not in the "
+                    "tested graph"),
+    "outside_main_part": ("it lies in a smaller, separate part of the network of significant "
+                          "CCM links — only the largest part is tested"),
+    "graph_too_small": "the network of significant CCM links has fewer than 3 ASVs",
+    "zero_variance": ("all ASVs of the tested graph have the same closeness — without variance "
                       "the t-test is undefined"),
     "not_in_network": ("it is not in the co-occurrence network (no module) — criterion 2 does "
                        "not apply"),
 }
-_CRITERION2_MODULE_REASONS = ("module_too_small", "module_disconnected", "zero_variance")
+_CRITERION2_GRAPH_REASONS = ("no_ccm_link", "outside_main_part", "graph_too_small",
+                             "zero_variance")
 
 
-def criterion2_compute(modules: dict, links, alpha: float = CRITERION2_ALPHA) -> dict:
-    from collections import deque
+def criterion2_compute(modules: dict, directions, alpha: float = CRITERION2_ALPHA) -> dict:
+    import heapq
     from scipy import stats as sp_stats
 
-    adj: dict = {a: set() for a in modules}
-    for a, b in links:
-        if a == b or a not in modules or b not in modules or modules[a] != modules[b]:
+    adj: dict = {}
+    for a, b, nmi, p in directions:
+        if p is None or p >= CRITERION2_CCM_ALPHA or a == b or nmi is None:
             continue
-        adj[a].add(b)
-        adj[b].add(a)
-    by_module: dict = {}
-    for a in sorted(modules):
-        by_module.setdefault(modules[a], []).append(a)
+        w = 1.0 - nmi
+        adj.setdefault(a, {})
+        adj.setdefault(b, {})
+        if w < adj[a].get(b, float("inf")):
+            adj[a][b] = adj[b][a] = w
+    parts, seen = [], set()
+    for s in sorted(adj):
+        if s in seen:
+            continue
+        part, stack = [], [s]
+        seen.add(s)
+        while stack:
+            x = stack.pop()
+            part.append(x)
+            for y in adj[x]:
+                if y not in seen:
+                    seen.add(y)
+                    stack.append(y)
+        parts.append(sorted(part))
+    main = max(parts, key=len) if parts else []
+    n = len(main)
+    closeness: dict[str, float] = {}
+    for s in main:
+        dist = {s: 0.0}
+        heap = [(0.0, s)]
+        while heap:
+            d, x = heapq.heappop(heap)
+            if d > dist[x]:
+                continue
+            for y, w in adj[x].items():
+                if d + w < dist.get(y, float("inf")):
+                    dist[y] = d + w
+                    heapq.heappush(heap, (d + w, y))
+        closeness[s] = (n - 1) / sum(dist.values())
+    vals = [closeness[s] for s in main]
+    if n < 3:
+        graph_reason = "graph_too_small"
+    elif len(set(vals)) == 1:
+        graph_reason = "zero_variance"
+    else:
+        graph_reason = None
+    pvals = {} if graph_reason else {
+        s: float(sp_stats.ttest_1samp(vals, popmean=closeness[s], alternative="less").pvalue)
+        for s in main}
+    qs = {}
+    if pvals:
+        tested = sorted(pvals)
+        qs = dict(zip(tested, (float(q) for q in sp_stats.false_discovery_control(
+            [pvals[s] for s in tested], method="bh"))))
 
+    sizes: dict = {}
+    for a in modules:
+        sizes[modules[a]] = sizes.get(modules[a], 0) + 1
+    in_main = set(main)
     nodes: dict[str, dict] = {}
-    module_rows: list[dict] = []
-    pvals: dict[str, float] = {}
-    for label in sorted(by_module):
-        members = by_module[label]
-        n = len(members)
-        dist_sum: dict[str, int] = {}
-        connected = True
-        for s in members:
-            seen = {s: 0}
-            queue = deque([s])
-            while queue:
-                x = queue.popleft()
-                for y in adj[x]:
-                    if y not in seen:
-                        seen[y] = seen[x] + 1
-                        queue.append(y)
-            if len(seen) < n:
-                connected = False
-            dist_sum[s] = sum(seen.values())
-        closeness = {s: ((n - 1) / dist_sum[s] if connected and n > 1 else None)
-                     for s in members}
-        if n < CRITERION2_MIN_MODULE:
-            reason = "module_too_small"
-        elif not connected:
-            reason = "module_disconnected"
-        elif len(set(dist_sum.values())) == 1:
-            reason = "zero_variance"
+    for a in sorted(modules):
+        if a not in adj:
+            reason = "no_ccm_link"
+        elif a not in in_main:
+            reason = "outside_main_part"
         else:
-            reason = None
-        vals = [closeness[s] for s in members]
-        if reason is None:
-            for s in members:
-                pvals[s] = float(sp_stats.ttest_1samp(vals, popmean=closeness[s],
-                                                      alternative="less").pvalue)
-        defined = all(v is not None for v in vals) and n > 1
-        module_rows.append({
-            "module": label, "module_size": n, "testable": reason is None,
-            "reason": reason, "reason_text": CRITERION2_REASONS.get(reason) if reason else None,
-            "mean_closeness": (sum(vals) / n) if defined else None,
-            "sd_closeness": statistics.stdev(vals) if defined else None,
-            "n_pass": 0,
-        })
-        for s in members:
-            nodes[s] = {"module": label, "module_size": n, "closeness": closeness[s],
-                        "p": None, "q": None, "passes": False, "testable": reason is None,
-                        "reason": reason,
-                        "reason_text": CRITERION2_REASONS.get(reason) if reason else None}
-
-    tested = sorted(pvals)
-    if tested:
-        qs = sp_stats.false_discovery_control([pvals[s] for s in tested], method="bh")
-        for s, qv in zip(tested, qs):
-            nodes[s]["p"] = pvals[s]
-            nodes[s]["q"] = float(qv)
-            nodes[s]["passes"] = bool(float(qv) <= alpha)
+            reason = graph_reason
+        nodes[a] = {"module": modules[a], "module_size": sizes[modules[a]],
+                    "closeness": closeness.get(a), "p": pvals.get(a), "q": qs.get(a),
+                    "passes": a in qs and qs[a] < alpha, "testable": reason is None,
+                    "reason": reason,
+                    "reason_text": CRITERION2_REASONS.get(reason) if reason else None}
     ids = sorted(s for s, v in nodes.items() if v["passes"])
-    for row in module_rows:
-        row["n_pass"] = sum(1 for s in ids if nodes[s]["module"] == row["module"])
+    module_rows = []
+    for label in sorted(sizes):
+        members = [v for v in nodes.values() if v["module"] == label]
+        testable = any(v["testable"] for v in members)
+        module_rows.append({
+            "module": label, "module_size": sizes[label], "testable": testable,
+            "reason": None if testable else "no_member_tested",
+            "reason_text": None if testable else "no member is in the tested graph",
+            "n_pass": sum(1 for v in members if v["passes"]),
+        })
     not_testable = []
-    for code in _CRITERION2_MODULE_REASONS:
-        mods = [m for m in module_rows if m["reason"] == code]
-        if mods:
+    for code in _CRITERION2_GRAPH_REASONS:
+        k = sum(1 for v in nodes.values() if v["reason"] == code)
+        if k:
             not_testable.append({"reason": code, "reason_text": CRITERION2_REASONS[code],
-                                 "n_asv": sum(m["module_size"] for m in mods),
-                                 "n_modules": len(mods),
-                                 "modules": [m["module"] for m in mods]})
+                                 "n_asv": k})
     return {"alpha": alpha, "n_network": len(nodes), "n_modules": len(module_rows),
-            "n_testable": len(tested), "n_pass": len(ids),
-            "n_not_testable": len(nodes) - len(tested), "not_testable": not_testable,
+            "n_graph": n, "n_testable": len(qs), "n_pass": len(ids),
+            "n_not_testable": len(nodes) - len(qs), "not_testable": not_testable,
+            "mean_closeness": statistics.fmean(vals) if vals else None,
+            "sd_closeness": statistics.stdev(vals) if n > 1 else None,
             "modules": module_rows, "ids": ids, "nodes": nodes}
 
 
@@ -2041,12 +2060,11 @@ def criterion2_statement(res: dict) -> str:
     if not res["n_network"]:
         return (f'"{CRITERION2_LABEL}" cannot be computed: this dataset has no co-occurrence '
                 f'network.')
-    s = (f'{res["n_pass"]} of {res["n_testable"]} testable network ASVs meet '
+    s = (f'{res["n_pass"]} of {res["n_testable"]} tested network ASVs meet '
          f'"{CRITERION2_LABEL}"')
     if res["n_not_testable"]:
-        teile = [f'{r["n_asv"]} in {r["n_modules"]} module{"s" if r["n_modules"] != 1 else ""}: '
-                 f'{r["reason_text"]}' for r in res["not_testable"]]
-        s += (f'; {res["n_not_testable"]} further network ASVs cannot be tested '
+        teile = [f'{r["n_asv"]}: {r["reason_text"]}' for r in res["not_testable"]]
+        s += (f'; {res["n_not_testable"]} further network ASVs are not tested '
               f'({"; ".join(teile)})')
     return s + "."
 
@@ -2062,7 +2080,7 @@ def _criterion2_texts(res: dict) -> dict:
         "formula": CRITERION2_FORMULA,
         "not_keystone": CRITERION2_NOT_KEYSTONE,
         "selection_note": (f"{CRITERION2_SELECTION} In this dataset {res['n_pass']} of "
-                           f"{res['n_testable']} testable network ASVs pass."),
+                           f"{res['n_testable']} tested network ASVs pass."),
         "source": CRITERION2_SOURCE,
         "source_doi": CRITERION2_SOURCE_DOI,
         "source_location": CRITERION2_SOURCE_LOCATION,
@@ -2070,16 +2088,16 @@ def _criterion2_texts(res: dict) -> dict:
     }
 
 
-def criterion2(q: Runner, dataset_id: str) -> dict:
+def criterion2(q: Runner, dataset_id: str, alpha: float = CRITERION2_ALPHA) -> dict:
     rows = q("MATCH (a:ASV {dataset_id:$d}) WHERE a.louvain_label IS NOT NULL "
              "RETURN a.id AS id, a.louvain_label AS module ORDER BY a.id", d=dataset_id)
-    links = q("MATCH (a:ASV {dataset_id:$d})-[:CO_OCCURS_WITH {dataset_id:$d}]-"
-              "(b:ASV {dataset_id:$d}) "
-              "WHERE a.id < b.id AND a.louvain_label IS NOT NULL "
-              "AND a.louvain_label = b.louvain_label "
-              "RETURN DISTINCT a.id AS asv, b.id AS partner ORDER BY asv, partner", d=dataset_id)
+    directions = q("MATCH (a:ASV {dataset_id:$d})-[i:INFLUENCES {dataset_id:$d}]->"
+                   "(b:ASV {dataset_id:$d}) "
+                   "RETURN a.id AS source, b.id AS target, i.nmi AS nmi, i.p_value AS p "
+                   "ORDER BY source, target", d=dataset_id)
     res = criterion2_compute({r["id"]: r["module"] for r in rows},
-                             [(r["asv"], r["partner"]) for r in links])
+                             [(r["source"], r["target"], r["nmi"], r["p"]) for r in directions],
+                             alpha)
     return {**_criterion2_texts(res), **res}
 
 
@@ -2100,36 +2118,33 @@ def criterion2_asv(c2: dict, asv_id: str) -> dict:
                 "passes": False, "testable": False, "reason": "not_in_network",
                 "reason_text": CRITERION2_REASONS["not_in_network"]}
     if node["testable"]:
-        mod = next(m for m in c2["modules"] if m["module"] == node["module"])
-        wie = (f'closeness {node["closeness"]:.3f} within module M{node["module"]} '
-               f'({node["module_size"]} members, module mean {mod["mean_closeness"]:.3f}); '
+        wie = (f'closeness {node["closeness"]:.3f} in the network of significant CCM links '
+               f'({c2["n_graph"]} ASVs, mean {c2["mean_closeness"]:.3f}); '
                f'one-sided t-test p = {node["p"]:.3g}, Benjamini–Hochberg q = {node["q"]:.3g} '
-               f'{"≤" if node["passes"] else ">"} {c2["alpha"]:g}')
+               f'{"<" if node["passes"] else "≥"} {c2["alpha"]:g}')
         verdict = (f'{"Meets" if node["passes"] else "Does not meet"} '
                    f'"{CRITERION2_LABEL}": {wie}.')
-        mean = mod["mean_closeness"]
+        mean = c2["mean_closeness"]
     else:
-        verdict = f'Not testable for "{CRITERION2_LABEL}": {node["reason_text"]}.'
+        verdict = f'Not tested for "{CRITERION2_LABEL}": {node["reason_text"]}.'
         mean = None
-    return {**node, "module_mean_closeness": mean, "verdict": verdict, **_criterion2_shared(c2)}
+    return {**node, "mean_closeness": mean, "verdict": verdict, **_criterion2_shared(c2)}
 
 
 def criterion2_module(c2: dict, label: int) -> dict:
     row = next((m for m in c2["modules"] if m["module"] == label), None)
     if row is None:
         row = {"module": label, "module_size": 0, "testable": False, "reason": "not_in_network",
-               "reason_text": CRITERION2_REASONS["not_in_network"], "mean_closeness": None,
-               "sd_closeness": None, "n_pass": 0}
+               "reason_text": CRITERION2_REASONS["not_in_network"], "n_pass": 0}
     meeting = sorted(({"asv_id": s, "closeness": v["closeness"], "p": v["p"], "q": v["q"]}
                       for s, v in c2["nodes"].items() if v["module"] == label and v["passes"]),
                      key=lambda m: (m["q"], -m["closeness"], m["asv_id"]))
     if row["testable"]:
         verdict = (f'{row["n_pass"]} of {row["module_size"]} members of module M{label} meet '
-                   f'"{CRITERION2_LABEL}" (module mean closeness {row["mean_closeness"]:.3f}, '
-                   f'sd {row["sd_closeness"]:.3f}); Benjamini–Hochberg over all '
-                   f'{c2["n_testable"]} testable network ASVs of the dataset, '
-                   f'q ≤ {c2["alpha"]:g}.')
+                   f'"{CRITERION2_LABEL}" (tested in the whole network of significant CCM '
+                   f'links, {c2["n_graph"]} ASVs; Benjamini–Hochberg over all of them, '
+                   f'q < {c2["alpha"]:g}).')
     else:
-        verdict = (f'Module M{label} ({row["module_size"]} members) cannot be tested for '
+        verdict = (f'Module M{label} ({row["module_size"]} members) is not tested for '
                    f'"{CRITERION2_LABEL}": {row["reason_text"]}.')
     return {**row, "members_meeting": meeting, "verdict": verdict, **_criterion2_shared(c2)}

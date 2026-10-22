@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import ReactECharts from "echarts-for-react";
-import { getCapabilities, getNetwork,
+import { getCapabilities, getCriterion2, getNetwork,
          type Capabilities, type Criterion2Summary, type Dataset, type NetEdge, type NetNode, type Network } from "../api";
 import type { EdgeRef } from "../App";
 import type { InspectMark } from "./ComparePanel";
@@ -26,7 +26,7 @@ import ErrorNotice from "./ErrorNotice";
 import { esc, fmtP } from "../format";
 import { chainedCounts, clearKind, computeVisible, decodeFilters, emptyFilters, encodeFilters,
          hiddenBy, isActive, legendRows, thresholdLine, FILTER_KINDS,
-         type Filters, type FilterKind, type KeystoneCrit, KEYSTONE_LABEL, layerLabel } from "../networkFilters";
+         type Filters, type FilterKind, type KeystoneParams, KEYSTONE_DEFAULTS, KEYSTONE_LABEL, loadKeystone, saveKeystone, layerLabel } from "../networkFilters";
 
 const COLLIDE_MARGIN = 1.5;
 const COLLIDE_ITERATIONS = 80;
@@ -194,13 +194,36 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   const hasCcm = (e: NetEdge) => (e.ccm_dirs ?? 0) > 0;
   const hasRejected = (e: NetEdge) => (e.rejected_dirs ?? 0) > 0;
 
-  const c2: Criterion2Summary | null = net?.criterion2 ?? null;
-  const [crit, setCrit] = useState<KeystoneCrit>(2);
+  const [kp, setKp] = useState<KeystoneParams>(() => loadKeystone(dataset.dataset_id));
+  const [kpDs, setKpDs] = useState(dataset.dataset_id);
+  if (kpDs !== dataset.dataset_id) { setKpDs(dataset.dataset_id); setKp(loadKeystone(dataset.dataset_id)); }
+  const patchKp = useCallback((patch: Partial<KeystoneParams>) => setKp((prev) => {
+    const next = { ...prev, ...patch };
+    saveKeystone(dataset.dataset_id, next);
+    return next;
+  }), [dataset.dataset_id]);
+  const crit = kp.crit;
+  const c2Default = kp.q2 === KEYSTONE_DEFAULTS.q2;
+  const [c2Custom, setC2Custom] = useState<Criterion2Summary | null>(null);
+  useEffect(() => {
+    setC2Custom(null);
+    if (c2Default || !net?.criterion2) return;
+    let aktiv = true;
+    getCriterion2(dataset.dataset_id, kp.q2).then((r) => { if (aktiv) setC2Custom(r); })
+      .catch(() => { });
+    return () => { aktiv = false; };
+  }, [dataset.dataset_id, net, kp.q2, c2Default]);
+  const c2: Criterion2Summary | null = (c2Default ? net?.criterion2 : c2Custom) ?? null;
   const c1Ids = useMemo(() => {
-    const s = new Set<string>();
-    net?.edges.forEach((e) => { if ((e.ccm_dirs ?? 0) > 0) { s.add(e.source); s.add(e.target); } });
-    return s;
-  }, [net]);
+    const links = new Map<string, number>();
+    net?.edges.forEach((e) => {
+      if ((e.p_forward ?? 1) < kp.p1 || (e.p_backward ?? 1) < kp.p1) {
+        links.set(e.source, (links.get(e.source) ?? 0) + 1);
+        links.set(e.target, (links.get(e.target) ?? 0) + 1);
+      }
+    });
+    return new Set([...links].filter(([, n]) => n >= kp.links1).map(([id]) => id));
+  }, [net, kp.p1, kp.links1]);
   const keyIds = useMemo(() => (crit === 1 ? c1Ids : new Set(c2?.ids ?? [])), [c1Ids, c2, crit]);
   const keyLabel = KEYSTONE_LABEL[crit];
 
@@ -848,7 +871,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     <div className="h-full flex relative">
       <NetworkSidebar
         dataset={dataset} net={net} c2={c2}
-        crit={crit} onCrit={setCrit} nCrit1={c1Ids.size} nKey={keyIds.size}
+        kp={kp} onKp={patchKp} nCrit1={c1Ids.size} nKey={keyIds.size}
         visibleNodes={visibleNodes} nSamples={nSamples}
         clusters={clusters} clusterColor={clusterColor} countByCluster={countByCluster}
         filters={filters} onFilters={patchFilters}
