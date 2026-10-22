@@ -692,8 +692,7 @@ export type AsvDetail = {
   cluster: number;
   color: string;
   centralities: Record<string, number | null>;
-  note: string | null;
-  note_at: string | null;
+  n_notes: number;
   sequence: string | null;
   seq_length: number | null;
   seq_hash: string | null;
@@ -762,7 +761,7 @@ export type ClusterDetail = {
                   other_genus: string | null; other_cluster: number; corr: number }[];
   activity: { axis: string; window: string[]; peak: string | null; n_min: number;
               statement: string | null };
-  note: { n: string | null; t: string | null };
+  n_notes: number;
   criterion2?: Criterion2Module;
   members: { id: string; genus: string | null; family: string | null;
              read_count_total: number | null; n_samples_present: number;
@@ -1258,17 +1257,20 @@ export const recompute = (ds: string, t: ThresholdInput) =>
     return r.json() as Promise<RecomputeAck>;
   });
 
-export const setAsvNote = (ds: string, id: string, note: string, opts?: { keepalive?: boolean }) =>
-  F(`${BASE}/datasets/${ds}/asv/${id}/note`, {
-    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note }),
-    keepalive: opts?.keepalive,
-  }).then(okJson<{ note: string; note_at: string }>);
-export const setClusterNote = (ds: string, label: number, note: string,
-                               opts?: { keepalive?: boolean }) =>
-  F(`${BASE}/datasets/${ds}/cluster/${label}/note`, {
-    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note }),
-    keepalive: opts?.keepalive,
-  }).then(okJson<{ note: string; note_at: string }>);
+export type NoteKind = "dataset" | "asv" | "cluster" | "sample" | "env";
+export type Note = { id: string; kind: NoteKind; key: string; text: string; at: string };
+export const getNotes = (ds: string) =>
+  F(`${BASE}/datasets/${ds}/notes`).then(okJson<{ notes: Note[]; note: string | null }>);
+const noteBody = (n: { kind: NoteKind; key: string; text: string }) => ({
+  headers: { "Content-Type": "application/json" }, body: JSON.stringify(n) });
+export const addNote = (ds: string, n: { kind: NoteKind; key: string; text: string }) =>
+  F(`${BASE}/datasets/${ds}/notes`, { method: "POST", ...noteBody(n) }).then(okJson<Note>);
+export const editNote = (ds: string, id: string, n: { kind: NoteKind; key: string; text: string },
+                         opts?: { keepalive?: boolean }) =>
+  F(`${BASE}/datasets/${ds}/notes/${id}`, { method: "PUT", ...noteBody(n), keepalive: opts?.keepalive })
+    .then(okJson<Note>);
+export const deleteNote = (ds: string, id: string) =>
+  F(`${BASE}/datasets/${ds}/notes/${id}`, { method: "DELETE" }).then(okJson<{ deleted: string }>);
 
 export type FastqPreflight = {
   ok: boolean; rscript: boolean; cutadapt: boolean; dada2: boolean;

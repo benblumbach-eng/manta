@@ -1,12 +1,12 @@
 import { Button, StateNotice } from "./ui";
 import { useEffect, useRef, useState } from "react";
-import { getAsv, getTaxon, setAsvNote, setAsvStar,
+import { getAsv, getTaxon, setAsvStar,
          type AsvDetail } from "../api";
 import type { EdgeRef } from "../App";
 import { useModules } from "../modules";
 import FrequencyPanel from "./FrequencyPanel";
 import NeighbourNet from "./NeighbourNet";
-import NoteBox from "./NoteBox";
+import { NotesLink } from "./NotesPanel";
 import ErrorNotice from "./ErrorNotice";
 import { findCap } from "./DataAvailability";
 import StarButton from "./StarButton";
@@ -211,10 +211,7 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
                           onOpenAsv={onOpenAsv} onOpenEdge={onOpenEdge} />
           </section>
 
-          <NoteBox key={`${datasetId}/${asvId}`} testid="asv-note" value={d.note} savedAt={d.note_at}
-            readOnly={!signedIn} draftKey={`${datasetId}/asv/${asvId}`}
-            onSave={(t, o) => setAsvNote(datasetId, asvId, t, o)
-              .then((r) => setD((cur) => (cur ? { ...cur, note: r.note, note_at: r.note_at } : cur)))} />
+          {signedIn && <NotesLink datasetId={datasetId} kind="asv" id={asvId} n={d.n_notes} />}
 
         </div>
       )}

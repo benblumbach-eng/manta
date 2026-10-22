@@ -1,13 +1,13 @@
 import { Button, StateNotice, ToggleButton } from "./ui";
 import { useEffect, useMemo, useState } from "react";
-import { getCluster, setClusterNote, setClusterStar, type ClusterDetail } from "../api";
+import { getCluster, setClusterStar, type ClusterDetail } from "../api";
 import type { EdgeRef } from "../App";
 import type { InspectMark } from "./ComparePanel";
 import ClusterNet from "./ClusterNet";
 import { useModules } from "../modules";
 import { setClusterLabel } from "../api";
 import FrequencyPanel from "./FrequencyPanel";
-import NoteBox from "./NoteBox";
+import { NotesLink } from "./NotesPanel";
 import ErrorNotice from "./ErrorNotice";
 import { PanelHeader } from "./PanelFrame";
 import { Criterion2ModuleLine } from "./Criterion2";
@@ -253,10 +253,7 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
             )}
           </section>
 
-          <NoteBox key={`${datasetId}/${label}`} testid="cluster-note" value={c.note?.n ?? null}
-            savedAt={c.note?.t ?? null} readOnly={!signedIn} draftKey={`${datasetId}/cluster/${label}`}
-            onSave={(t, o) => setClusterNote(datasetId, label, t, o)
-              .then((r) => setC((cur) => (cur ? { ...cur, note: { n: r.note, t: r.note_at } } : cur)))} />
+          {signedIn && <NotesLink datasetId={datasetId} kind="cluster" id={String(label)} n={c.n_notes} />}
 
         </div>
       )}

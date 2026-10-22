@@ -1430,10 +1430,6 @@ def rename_dataset(dataset_id: str, patch: DatasetPatch, me: auth.User = Depends
     return {**rows[0], "moved_with_station": verschoben}
 
 
-class NotePatch(BaseModel):
-    note: str = Field(max_length=MAX_NOTE_CHARS)
-
-
 def _check_note(text: str) -> None:
     if len(text) > MAX_NOTE_CHARS:
         raise HTTPException(422, f"note is limited to {MAX_NOTE_CHARS} characters "
@@ -1615,52 +1611,93 @@ def starred(dataset_id: str):
 
 
 
-def _note_for(dataset_id: str, kind: str, key: str, run_id: str | None = None) -> dict:
+NOTE_KINDS = ("dataset", "asv", "cluster", "sample", "env")
+
+
+class NoteBody(BaseModel):
+    kind: str
+    key: str = Field("", max_length=500)
+    text: str = Field(max_length=MAX_NOTE_CHARS)
+
+
+def _check_note_target(dataset_id: str, kind: str, key: str) -> str | None:
+    if kind not in NOTE_KINDS:
+        raise HTTPException(422, f"kind must be one of {', '.join(NOTE_KINDS)} — given: {kind!r}")
+    if kind == "dataset":
+        return None
+    if kind == "asv":
+        ok = _q("MATCH (a:ASV {id:$k, dataset_id:$d}) RETURN a.id", d=dataset_id, k=key)
+    elif kind == "cluster":
+        ok = _q("MATCH (c:Cluster {dataset_id:$d}) WHERE toString(c.louvain_label) = $k "
+                "RETURN c.run_id AS run_id ORDER BY c.run_id DESC LIMIT 1", d=dataset_id, k=key)
+        if ok:
+            return ok[0]["run_id"]
+    elif kind == "sample":
+        ok = _q("MATCH (s:Sample {sample_id:$k, dataset_id:$d}) RETURN s.sample_id",
+                d=dataset_id, k=key)
+    else:
+        ok = [v for v in semantics.environment(_q, dataset_id)["variables"] if v["key"] == key]
+    if not ok:
+        raise HTTPException(404, f"no {kind} {key!r} in dataset_id={dataset_id!r}")
+    return None
+
+
+_NOTE_FIELDS = "n.id AS id, n.kind AS kind, n.key AS key, n.text AS text, n.at AS at"
+
+
+def _note_count(dataset_id: str, kind: str, key: str) -> int:
     u = access.current().username
     if u is None:
-        return {"text": None, "at": None}
-    rows = _q("MATCH (n:Note {dataset_id:$d, username:$u, kind:$kind, key:$k}) "
-              "WHERE $run IS NULL OR n.run_id = $run "
-              "RETURN n.text AS text, n.at AS at LIMIT 1",
-              d=dataset_id, u=u, kind=kind, k=key, run=run_id)
-    return rows[0] if rows else {"text": None, "at": None}
+        return 0
+    return _q("MATCH (n:Note {dataset_id:$d, username:$u, kind:$kind, key:$k}) RETURN count(n) AS n",
+              d=dataset_id, u=u, kind=kind, k=key)[0]["n"]
 
 
-def _set_note(dataset_id: str, username: str, kind: str, key: str, text: str,
-              run_id: str | None = None) -> dict:
-    text = text.strip()
-    if not text:
-        _w("MATCH (n:Note {dataset_id:$d, username:$u, kind:$kind, key:$k}) DELETE n",
-           d=dataset_id, u=username, kind=kind, k=key)
-        return {"note": None, "note_at": None}
+@app.get("/datasets/{dataset_id}/notes", dependencies=[Depends(visible_dataset)])
+def notes(dataset_id: str):
+    u = access.current().username
+    if u is None:
+        return {"dataset_id": dataset_id, "notes": [],
+                "note": "Notes belong to an account — sign in to keep your own."}
+    # Notizen aus der Zeit mit einer Notiz pro ASV/Modul haben noch keine id
+    _w("MATCH (n:Note {dataset_id:$d, username:$u}) WHERE n.id IS NULL SET n.id = randomUUID()",
+       d=dataset_id, u=u)
+    rows = _q(f"MATCH (n:Note {{dataset_id:$d, username:$u}}) RETURN {_NOTE_FIELDS} "
+              "ORDER BY coalesce(n.at,'') DESC", d=dataset_id, u=u)
+    return {"dataset_id": dataset_id, "notes": rows, "note": None}
+
+
+@app.post("/datasets/{dataset_id}/notes", dependencies=[Depends(auth.user), Depends(visible_dataset)])
+def add_note(dataset_id: str, body: NoteBody, u: auth.User = Depends(auth.user)):
+    _check_note(body.text)
+    run_id = _check_note_target(dataset_id, body.kind, body.key)
     t = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    rows = _w("MERGE (n:Note {dataset_id:$d, username:$u, kind:$kind, key:$k}) "
-              "SET n.text = $text, n.at = $t, n.run_id = $run "
-              "RETURN n.text AS note, n.at AS note_at",
-              d=dataset_id, u=username, kind=kind, k=key, text=text, t=t, run=run_id)
+    return _w(f"CREATE (n:Note {{dataset_id:$d, username:$u, id:randomUUID(), kind:$kind, key:$k, "
+              f"text:$text, at:$t, run_id:$run}}) RETURN {_NOTE_FIELDS}",
+              d=dataset_id, u=u.username, kind=body.kind, k=body.key, text=body.text.strip(),
+              t=t, run=run_id)[0]
+
+
+@app.put("/datasets/{dataset_id}/notes/{note_id}", dependencies=[Depends(auth.user), Depends(visible_dataset)])
+def edit_note(dataset_id: str, note_id: str, body: NoteBody, u: auth.User = Depends(auth.user)):
+    _check_note(body.text)
+    run_id = _check_note_target(dataset_id, body.kind, body.key)
+    t = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    rows = _w(f"MATCH (n:Note {{dataset_id:$d, username:$u, id:$id}}) "
+              f"SET n.kind = $kind, n.key = $k, n.text = $text, n.at = $t, n.run_id = $run "
+              f"RETURN {_NOTE_FIELDS}",
+              d=dataset_id, u=u.username, id=note_id, kind=body.kind, k=body.key,
+              text=body.text.strip(), t=t, run=run_id)
+    if not rows:
+        raise HTTPException(404, f"no note {note_id!r}")
     return rows[0]
 
 
-@app.put("/datasets/{dataset_id}/asv/{asv_id}/note", dependencies=[Depends(auth.user), Depends(visible_dataset)])
-def set_asv_note(dataset_id: str, asv_id: str, patch: NotePatch,
-                 u: auth.User = Depends(auth.user)):
-    _check_note(patch.note)
-    if not _q("MATCH (a:ASV {id:$id, dataset_id:$d}) RETURN a.id", d=dataset_id, id=asv_id):
-        raise HTTPException(404, f"ASV {asv_id!r} not in dataset_id={dataset_id!r}")
-    return _set_note(dataset_id, u.username, "asv", asv_id, patch.note)
-
-
-@app.put("/datasets/{dataset_id}/cluster/{louvain_label}/note", dependencies=[Depends(auth.user), Depends(visible_dataset)])
-def set_cluster_note(dataset_id: str, louvain_label: int, patch: NotePatch,
-                     u: auth.User = Depends(auth.user)):
-    _check_note(patch.note)
-    rows = _q("MATCH (c:Cluster {louvain_label:$l, dataset_id:$d}) "
-              "RETURN c.run_id AS run_id ORDER BY c.run_id DESC LIMIT 1",
-              d=dataset_id, l=louvain_label)
-    if not rows:
-        raise HTTPException(404, f"no cluster {louvain_label} in dataset_id={dataset_id!r}")
-    return _set_note(dataset_id, u.username, "cluster", str(louvain_label), patch.note,
-                     run_id=rows[0]["run_id"])
+@app.delete("/datasets/{dataset_id}/notes/{note_id}", dependencies=[Depends(auth.user), Depends(visible_dataset)])
+def delete_note(dataset_id: str, note_id: str, u: auth.User = Depends(auth.user)):
+    _w("MATCH (n:Note {dataset_id:$d, username:$u, id:$id}) DELETE n",
+       d=dataset_id, u=u.username, id=note_id)
+    return {"deleted": note_id}
 
 
 
@@ -2599,7 +2636,6 @@ def asv_detail(dataset_id: str, asv_id: str):
     for n in ccm_n:
         raus, rein = n.pop("raus"), n.pop("rein")
         n["direction"] = ("both" if raus and rein else "out" if raus else "in" if rein else None)
-    meine_notiz = _note_for(dataset_id, "asv", asv_id)
 
     return {
         "id": node["id"], "dataset_id": dataset_id,
@@ -2616,7 +2652,7 @@ def asv_detail(dataset_id: str, asv_id: str):
         "sequence": node["sequence"],
         "seq_length": len(node["sequence"]) if node["sequence"] else None,
         "seq_hash": node["seq_hash"],
-        "note": meine_notiz["text"], "note_at": meine_notiz["at"],
+        "n_notes": _note_count(dataset_id, "asv", asv_id),
         "centralities": {c: node[c] for c in CENTRALITIES},
         "environment_profile": semantics.environment_profile(_q, dataset_id, asv_id),
         "spectrum": semantics.spectrum(_q, dataset_id, asv_id),
@@ -2789,23 +2825,10 @@ def cluster(dataset_id: str, louvain_label: int):
         "source_publication": {"citation": semantics.SOURCE_PUBLICATION,
                                "doi": semantics.SOURCE_PUBLICATION_DOI},
         "seasonal": _seasonal_stats(collective, "share") if axis == TIME_AXIS_DATES else None,
-        "note": _cluster_note(dataset_id, louvain_label),
+        "n_notes": _note_count(dataset_id, "cluster", str(louvain_label)),
         "cohesion": cohesion,
         "bridge_partners": partners,
     }
-
-
-def _cluster_note(dataset_id: str, louvain_label: int) -> dict:
-    lauf = _q("MATCH (c:Cluster {louvain_label:$l, dataset_id:$d}) "
-              "RETURN c.run_id AS run_id ORDER BY c.run_id DESC LIMIT 1",
-              d=dataset_id, l=louvain_label)
-    run_id = lauf[0]["run_id"] if lauf else None
-    if run_id is None:
-        return {"n": None, "t": None, "run_id": None}
-    n = _note_for(dataset_id, "cluster", str(louvain_label), run_id=run_id)
-    return {"n": n["text"], "t": n["at"], "run_id": run_id}
-
-
 
 
 @app.get("/datasets/{dataset_id}/wheel", dependencies=[Depends(visible_dataset)])
