@@ -1,6 +1,8 @@
 import type { NetEdge, NetNode, Network } from "./api";
 
 
+export type KeystoneCrit = { k1: boolean; k2: boolean };
+
 export type FilterKind = "modules" | "layer" | "cross" | "c2" | "function" | "taxon" | "asvs"
   | "presence" | "size" | "strength";
 
@@ -276,7 +278,7 @@ export function legendRows(o: {
     { key: "width", icon: "▬", term: "Width", desc: "strength", dim: o.widthText == null },
   ];
   if (o.c2Glow != null) {
-    rows.push({ key: "c2", icon: "✦", term: "Hub", desc: o.c2Glow, dim: o.c2Visible === false });
+    rows.push({ key: "c2", icon: "✦", term: "Keystone", desc: o.c2Glow, dim: o.c2Visible === false });
   }
   rows.push({ key: "highlight", icon: "◌", term: "Ring", desc: "same taxon",
     dim: !o.highlightActive });

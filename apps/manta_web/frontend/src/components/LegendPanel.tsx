@@ -5,11 +5,12 @@ import { SectionHeading } from "./ui";
 import { PanelHeader } from "./PanelFrame";
 import { Criterion2Details } from "./Criterion2";
 
-export default function LegendPanel({ thr, c2, labelMax, functionClasses = [], colorMode = "module",
+export default function LegendPanel({ thr, c2, keyLabel, labelMax, functionClasses = [], colorMode = "module",
   sizeAbsent = false, widthText = null, onClose }: {
   datasetId: string;
   thr: Thresholds | undefined;
   c2: Criterion2Summary | null;
+  keyLabel: string;
   labelMax: number;
   functionClasses?: { label: string; n: number; color: string; other?: boolean }[];
   colorMode?: "module" | "function";
@@ -91,8 +92,8 @@ export default function LegendPanel({ thr, c2, labelMax, functionClasses = [], c
               {glowS}
               <div className="min-w-0 space-y-1">
                 <div data-testid="legend-c2">
-                  <span className="text-fg">✦ Hub</span>
-                  <span className="text-fg-muted"> — {c2.glow}</span>
+                  <span className="text-fg">✦ Keystone</span>
+                  <span className="text-fg-muted"> — {keyLabel ? `criteria ${keyLabel}` : "none selected"}</span>
                 </div>
                 <Criterion2Details c2={c2} testid="legend-c2-declaration" />
               </div>
