@@ -141,7 +141,7 @@ def tool_status() -> dict:
         entries[entry] = {"ok": not missing, "missing": missing}
     return {"tools": have, "entries": entries}
 
-POST_STAGE = "annotate"
+POST_STAGE = "env_links"
 STAGES = ("convert", "otter", "ingest", POST_STAGE)
 STAGES_FASTQ = ("dada2",) + STAGES
 STAGES_TABLES = ("otter", "ingest", POST_STAGE)

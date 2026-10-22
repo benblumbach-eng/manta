@@ -2642,7 +2642,6 @@ def asv_detail(dataset_id: str, asv_id: str):
         },
         "neighbors": {"con": con_n, "ccm": ccm_n},
         "criterion2": semantics.criterion2_asv(semantics.criterion2(_q, dataset_id), asv_id),
-        "funktion": "Not derivable from amplicon data.",
         "drivers": semantics.asv_drivers(_q, dataset_id, asv_id),
         "bild": None,
     }

@@ -662,7 +662,6 @@ export type AsvDetail = {
   environment_profile: EnvironmentProfile;
   criterion2?: Criterion2Asv;
   neighbors: { con: Neighbor[]; ccm: Neighbor[] };
-  funktion: string;
   bild: string | null;
 };
 
