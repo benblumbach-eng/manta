@@ -1018,9 +1018,10 @@ export const getDatasets = () => get<{ datasets: Dataset[] }>("/datasets");
 export const getImportStatus = (jobId: string) => get<ImportStatus>(`/import/${jobId}`);
 export const uploadImport = (files: File[], dataset_id: string, region?: string,
   opts?: { station?: string; lat?: number; lon?: number; marker?: string;
-           thresholds?: ThresholdInput }) => {
+           thresholds?: ThresholdInput; keep_otter?: boolean }) => {
   const fd = new FormData();
   fd.append("dataset_id", dataset_id);
+  if (opts?.keep_otter) fd.append("keep_otter", "true");
   if (region) fd.append("region", region);
   if (opts?.marker) fd.append("marker", opts.marker);
   if (opts?.station) fd.append("station", opts.station);
@@ -1289,10 +1290,11 @@ export const uploadFastq = (
   fastq: File[], dataset_id: string, region: string,
   opts?: { metadata?: File | null; ncores?: number; taxonomy_ref?: string;
            station?: string; lat?: number; lon?: number; marker?: string;
-           thresholds?: ThresholdInput },
+           thresholds?: ThresholdInput; keep_otter?: boolean },
 ) => {
   const fd = new FormData();
   fd.append("dataset_id", dataset_id);
+  if (opts?.keep_otter) fd.append("keep_otter", "true");
   fd.append("region", region);
   if (opts?.ncores) fd.append("ncores", String(opts.ncores));
   if (opts?.taxonomy_ref) fd.append("taxonomy_ref", opts.taxonomy_ref);
