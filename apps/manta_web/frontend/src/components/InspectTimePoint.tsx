@@ -9,13 +9,17 @@ const PAGE = 50;
 
 const pct = (v: number | null) => (v == null ? "—" : `${(100 * v).toFixed(v < 0.001 ? 3 : 2)} %`);
 
-export default function InspectTimePoint({ datasetId, samples, sample, onSample, env, onOpenAsv }: {
+export default function InspectTimePoint({ datasetId, samples, sample, onSample, env, onOpenAsv,
+                                           chosen, full, onAdd }: {
   datasetId: string;
   samples: SampleList["samples"];
   sample: string | null;
   onSample: (s: string) => void;
   env: Environment | null;
   onOpenAsv: (id: string) => void;
+  chosen: Set<string>;
+  full: boolean;
+  onAdd: (kind: "asv" | "cluster", id: string) => void;
 }) {
   const modules = useModules();
   const [data, setData] = useState<SampleDetail | null>(null);
@@ -52,6 +56,17 @@ export default function InspectTimePoint({ datasetId, samples, sample, onSample,
       && (!q || a.id.toLowerCase().includes(q) || a.taxa.some((t) => t.toLowerCase().includes(q))));
   }, [data, text, modul, minShare]);
   const maxShare = gezeigt.length ? Math.max(...gezeigt.map((a) => a.share ?? 0)) : 0;
+  const plus = (kind: "asv" | "cluster", id: string, name: string) => {
+    const drin = chosen.has(`${kind}:${id}`);
+    return (
+      <button data-testid={`tp-add-${kind}`} disabled={drin || full} onClick={() => onAdd(kind, id)}
+        title={drin ? "already a curve in Over time" : full ? "Over time is full" : "add as a curve to Over time"}
+        aria-label={`add ${name} to Over time`}
+        className="w-5 rounded text-fg-muted hover:text-accent hover:bg-control disabled:text-fg-disabled disabled:hover:bg-transparent">
+        {drin ? "✓" : "+"}
+      </button>
+    );
+  };
   const maxMod = data?.modules.length ? Math.max(...data.modules.map((m) => m.share ?? 0)) : 0;
 
   return (
@@ -93,10 +108,10 @@ export default function InspectTimePoint({ datasetId, samples, sample, onSample,
               {data.modules.map((m) => {
                 const an = modul === m.cluster;
                 return (
-                  <li key={m.cluster}>
+                  <li key={m.cluster} className="flex items-center gap-1">
                     <button data-testid="tp-module" aria-pressed={an}
                       onClick={() => setModul(an ? null : m.cluster)}
-                      className={`w-full grid grid-cols-[6rem_1fr_4.5rem] items-center gap-2 rounded px-1 py-1 text-left ${an
+                      className={`flex-1 min-w-0 grid grid-cols-[6rem_1fr_4.5rem] items-center gap-2 rounded px-1 py-1 text-left ${an
                         ? "bg-accent-soft" : "hover:bg-control"}`}>
                       <span className="flex items-center gap-1 truncate">
                         <span className="inline-block w-2.5 h-2.5 rounded-sm shrink-0"
@@ -110,6 +125,7 @@ export default function InspectTimePoint({ datasetId, samples, sample, onSample,
                       </span>
                       <span className="text-right tabular-nums">{pct(m.share)}</span>
                     </button>
+                    {plus("cluster", String(m.cluster), modules.label(m.cluster))}
                   </li>
                 );
               })}
@@ -144,9 +160,9 @@ export default function InspectTimePoint({ datasetId, samples, sample, onSample,
             </p>
             <ul data-testid="tp-asvs">
               {(alle ? gezeigt : gezeigt.slice(0, PAGE)).map((a) => (
-                <li key={a.id}>
+                <li key={a.id} className="flex items-center gap-1">
                   <button data-testid="tp-asv" onClick={() => onOpenAsv(a.id)}
-                    className="w-full grid grid-cols-[2rem_1fr_5rem_4.5rem] items-center gap-2 rounded px-1 py-1 text-left hover:bg-control">
+                    className="flex-1 min-w-0 grid grid-cols-[2rem_1fr_5rem_4.5rem] items-center gap-2 rounded px-1 py-1 text-left hover:bg-control">
                     <span className="text-fg-muted tabular-nums">{a.rank}</span>
                     <span className="truncate">
                       <span className="inline-block w-2 h-2 rounded-full mr-1 align-middle"
@@ -160,6 +176,7 @@ export default function InspectTimePoint({ datasetId, samples, sample, onSample,
                     </span>
                     <span className="text-right tabular-nums">{pct(a.share)}</span>
                   </button>
+                  {plus("asv", a.id, a.id)}
                 </li>
               ))}
             </ul>

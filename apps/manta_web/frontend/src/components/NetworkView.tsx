@@ -79,7 +79,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                                       onOpenStarred, starredOpen, clusterVonAussen,
                                       onOpenWheel, wheelOpen,
                                       extraViews,
-                                      onOpenCompare, compareOpen,
+                                      onOpenCompare, compareOpen, onInspectAt,
                                       openAsvId, isAdmin, signedIn = true, onOpenTaxon, onCloseView,
                                       onShowNet,
                                       settingsOpen, onCloseSettings, theme, onTheme,
@@ -107,6 +107,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   extraViews: { view: ExtraView; kind: string; open: boolean; onOpen: () => void }[];
   onOpenCompare: () => void;
   compareOpen: boolean;
+  onInspectAt: (sample: string) => void;
   onRefresh?: () => void;
   onOpenDataset?: (datasetId: string) => void;
 }) {
@@ -1215,7 +1216,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
           color={clusterColor.get(selectedCluster)} onClose={() => setSelectedCluster(null)}
           onOpenAsv={onOpenAsv} onOpenEdge={onOpenEdge}
           colorOf={(c) => clusterColor.get(c)}
-          onOpenCluster={(c) => setSelectedCluster(c)} />
+          onOpenCluster={(c) => setSelectedCluster(c)} onInspectAt={onInspectAt} />
         </PanelFrame>
       )}
 

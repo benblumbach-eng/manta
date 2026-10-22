@@ -1496,6 +1496,21 @@ def samples(dataset_id: str):
     return {"dataset_id": dataset_id, "time_axis": _time_axis(dataset_id), "samples": rows}
 
 
+@app.get("/datasets/{dataset_id}/asvs", dependencies=[Depends(visible_dataset)])
+def asv_list(dataset_id: str):
+    rows = _q(
+        f"""
+        MATCH (a:ASV {{dataset_id:$d}})
+        RETURN a.id AS id, a.louvain_label AS cluster, a.read_count_total AS total,
+               {", ".join(f"a.{t} AS {t}" for t in TAXONOMY)}
+        ORDER BY coalesce(a.read_count_total, 0) DESC, a.id
+        """,
+        d=dataset_id)
+    return {"dataset_id": dataset_id,
+            "asvs": [{"id": r["id"], "cluster": r["cluster"],
+                      "label": semantics.taxon_label({t: r[t] for t in TAXONOMY})} for r in rows]}
+
+
 @app.get("/datasets/{dataset_id}/sample/{sample_id}", dependencies=[Depends(visible_dataset)])
 def sample_detail(dataset_id: str, sample_id: str):
     s = _q("MATCH (s:Sample {sample_id:$s, dataset_id:$d}) "

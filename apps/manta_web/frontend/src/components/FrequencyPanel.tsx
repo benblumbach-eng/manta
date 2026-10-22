@@ -1,14 +1,14 @@
 import { useMemo, useState } from "react";
 import ReactECharts from "echarts-for-react";
-import type { EnvVariable, Environment, Frequency, SeasonalYear } from "../api";
+import type { Frequency, SeasonalYear } from "../api";
 import { esc } from "../format";
+import { useNearestPointClick } from "../chartClick";
 import { Chooser, ChooserRow, Segmented } from "./controls";
 import { chartTooltip, FONT, useTokens } from "../design/tokens";
-import { primarySeries, seriesColour, yearColour, SERIES_SIZE } from "../design/dataColours";
+import { primarySeries, yearColour } from "../design/dataColours";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-const overlayColour = (i: number, light: boolean) => seriesColour(1 + (i % (SERIES_SIZE - 1)), light);
 const MEAN = "Average of all years";
 const BAND = "Spread between years";
 
@@ -16,13 +16,11 @@ const pct = (v: number | null | undefined, d = 2) => (v == null ? "—" : `${(10
 
 type View = "measured" | "season";
 
-export default function FrequencyPanel({ freq, env, color: colorProp,
-                                        testid = "frequency", compact = false, onPointClick }: {
+export default function FrequencyPanel({ freq, color: colorProp,
+                                        testid = "frequency", onPointClick }: {
   freq: Frequency;
-  env?: Environment | null;
   color?: string;
   testid?: string;
-  compact?: boolean;
   onPointClick?: (sample: string, date: string | null) => void;
 }) {
   const tok = useTokens();
@@ -31,12 +29,6 @@ export default function FrequencyPanel({ freq, env, color: colorProp,
   const [view, setView] = useState<View>("measured");
   const [shownYears, setShownYears] = useState<string[]>([]);
   const [selectedYear, setSelectedYear] = useState<string | null>(null);
-  const [overlays, setOverlays] = useState<string[]>([]);
-  const umschalten = (k: string) =>
-    setOverlays((cur) => cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k]);
-  const ovKeys = (env?.variables ?? []).filter((v) => overlays.includes(v.key)).map((v) => v.key);
-  const ovFarbe = (k: string) => overlayColour(ovKeys.indexOf(k), tok.light);
-  const ovEinzeln = ovKeys.length === 1 ? (env?.variables ?? []).find((v) => v.key === ovKeys[0]) ?? null : null;
 
   const dated = freq.time_axis === "dates";
 
@@ -62,62 +54,6 @@ export default function FrequencyPanel({ freq, env, color: colorProp,
     const tip = chartTooltip(tok);
     const xLabel = { color: tok.textMuted, fontSize: FONT.xs2 };
 
-    const ovVars = (env?.variables ?? []).filter((v) => overlays.includes(v.key));
-    const jahr = active === "season" && selectedYear ? selectedYear : null;
-    const ovPunkte = (v: EnvVariable): { x: string; y: number | null }[] => {
-      if (active === "measured") {
-        return v.points.map((p, i) => ({ x: dated ? (p.date ?? String(i + 1)) : String(i + 1),
-                                         y: p.value }));
-      }
-      const reihe = jahr ? (v.monthly_by_year?.[jahr] ?? []) : (v.monthly ?? []);
-      const nach = new Map<number, number>(reihe.map((m) => [m.month, m.mean]));
-      return MONTHS.map((label, i) => ({ x: label, y: nach.get(i + 1) ?? null }));
-    };
-    const mehrere = ovVars.length > 1;
-    const einzeln = !mehrere && ovVars.length === 1 ? ovVars[0] : null;
-    const ovAxis = ovVars.length
-      ? [{
-          type: "value" as const, position: "right" as const, alignTicks: true,
-          min: mehrere ? 0 : einzeln?.min, max: mehrere ? 1 : einzeln?.max,
-          name: mehrere ? "own range" : (ovVars[0].unit ?? ""),
-          nameLocation: "start" as const, nameGap: 8,
-          nameTextStyle: { color: tok.textMuted, fontSize: FONT.xs2, align: "left" as const },
-          axisLabel: mehrere ? { show: false } : {
-            color: tok.textMuted, fontSize: FONT.xs2,
-            formatter: (v: number) => {
-              const sp = einzeln ? Math.abs(einzeln.max - einzeln.min) : 1;
-              return v.toFixed(sp >= 100 ? 0 : sp >= 1 ? 1 : sp >= 0.1 ? 2 : 3);
-            },
-          },
-          splitLine: { show: false },
-        }]
-      : [];
-    const ovSeries = ovVars.map((v, i) => {
-      const punkte = ovPunkte(v);
-      const werte = punkte.map((p) => p.y).filter((y): y is number => y != null);
-      const lo = v.min ?? (werte.length ? Math.min(...werte) : 0);
-      const hi = v.max ?? (werte.length ? Math.max(...werte) : 1);
-      const farbe = overlayColour(i, tok.light);
-      return {
-        name: v.label, type: "line" as const, yAxisIndex: 1, showSymbol: false,
-        connectNulls: false, z: 1,
-        data: punkte.map((p) => ({
-          value: [p.x, p.y == null ? null : (mehrere ? (hi > lo ? (p.y - lo) / (hi - lo) : 0.5) : p.y)],
-          gemessen: p.y, einheit: v.unit,
-        })),
-        lineStyle: { color: farbe, width: 1.2, type: "dashed" as const },
-        itemStyle: { color: farbe },
-      };
-    });
-    const ovZeilen = (ps: { seriesName: string; data?: { gemessen?: number | null;
-                                                         einheit?: string | null } }[]) =>
-      ovVars.map((v) => {
-        const treffer = ps.find((x) => x.seriesName === v.label);
-        const w = treffer?.data?.gemessen;
-        return `${esc(v.label)}: ${w == null ? "not measured"
-          : `${w.toFixed(2)}${v.unit ? ` ${esc(v.unit)}` : ""}`}`;
-      }).join("<br/>");
-
     if (active === "measured") {
       const pts = freq.points.map((p, i) => [dated ? p.date : String(i + 1), p.share] as [string, number | null]);
       const absent = freq.points
@@ -125,19 +61,15 @@ export default function FrequencyPanel({ freq, env, color: colorProp,
         .filter((_, i) => (freq.points[i].share ?? 0) === 0);
       return {
         ...base,
-        grid: { left: 56, right: ovVars.length ? 52 : 14, top: 26, bottom: 30 },
-        yAxis: [base.yAxis, ...ovAxis],
         tooltip: {
           ...tip,
           trigger: "axis" as const,
           formatter: (ps: { axisValueLabel: string; seriesName: string; data: [string, number | null];
-                            }[] & { seriesName: string; data?: { gemessen?: number | null;
-                                                                einheit?: string | null } }[]) => {
+                            }[]) => {
             const p = ps[0];
             if (!p) return "";
             return `<b>${esc(dated ? p.data[0] : `Sample ${p.data[0]} of ${freq.points.length}`)}</b><br/>`
-              + `${pct(p.data[1])}${p.data[1] == null ? "<br/>not detected" : ""}`
-              + (ovVars.length ? `<br/>${ovZeilen(ps)}` : "");
+              + `${pct(p.data[1])}${p.data[1] == null ? "<br/>not detected" : ""}`;
           },
         },
         xAxis: dated
@@ -153,7 +85,6 @@ export default function FrequencyPanel({ freq, env, color: colorProp,
           },
           { name: "not detected", type: "scatter" as const, data: absent, symbolSize: 6,
             symbol: "emptyCircle", itemStyle: { color: tok.textDisabled }, tooltip: { show: false } },
-          ...ovSeries,
         ],
       };
     }
@@ -169,22 +100,17 @@ export default function FrequencyPanel({ freq, env, color: colorProp,
         tooltip: {
           ...tip,
           trigger: "axis" as const,
-          formatter: (ps: { axisValue: string; seriesName: string; value: number | null;
-                            data?: { gemessen?: number | null } }[]) => {
+          formatter: (ps: { axisValue: string; seriesName: string; value: number | null }[]) => {
             const p = ps.find((x) => x.seriesName === sel.year) ?? ps[0];
-            return (p ? `<b>${esc(p.axisValue)} ${esc(sel.year)}</b><br/>${pct(p.value as number | null)}` : "")
-              + (ovVars.length ? `<br/>${ovZeilen(ps)}` : "");
+            return p ? `<b>${esc(p.axisValue)} ${esc(sel.year)}</b><br/>${pct(p.value as number | null)}` : "";
           },
         },
-        yAxis: [base.yAxis, ...ovAxis],
-        grid: { ...base.grid, right: ovVars.length ? 52 : 14 },
         xAxis: { type: "category" as const, data: MONTHS, axisLabel: xLabel },
         series: [
           { name: sel.year, type: "line" as const, showSymbol: true, symbolSize: 5,
             connectNulls: false, z: 3,
             data: MONTHS.map((_, mi) => sel.by_month.find((m) => m.month === mi + 1)?.mean ?? null),
             lineStyle: { color, width: 2.5 }, itemStyle: { color } },
-          ...ovSeries,
         ],
       };
     }
@@ -195,20 +121,14 @@ export default function FrequencyPanel({ freq, env, color: colorProp,
       tooltip: {
         ...tip,
         trigger: "axis" as const,
-        formatter: (ps: { axisValue: string; seriesName: string; value: number | null;
-                          data?: { gemessen?: number | null } }[]) => {
+        formatter: (ps: { axisValue: string; seriesName: string; value: number | null }[]) => {
           const m = clim.find((c) => c.label === ps[0]?.axisValue);
-          const namen = new Set(ovVars.map((v) => v.label));
-          const rows = ps.filter((x) => x.seriesName !== BAND && !namen.has(x.seriesName)
-                                        && x.value != null)
+          const rows = ps.filter((x) => x.seriesName !== BAND && x.value != null)
             .map((x) => `${esc(x.seriesName)}: ${pct(x.value)}`).join("<br/>");
           const n = m ? ` · ${m.n} samples from ${m.n_years} year${m.n_years === 1 ? "" : "s"}` : "";
-          return `<b>${esc(ps[0]?.axisValue)}</b>${n}<br/>${rows}`
-            + (ovVars.length ? `<br/>${ovZeilen(ps)}` : "");
+          return `<b>${esc(ps[0]?.axisValue)}</b>${n}<br/>${rows}`;
         },
       },
-      yAxis: [base.yAxis, ...ovAxis],
-      grid: { ...base.grid, right: ovVars.length ? 52 : 14 },
       xAxis: { type: "category" as const, data: clim.map((c) => c.label), axisLabel: xLabel },
       series: [
         { name: "​", type: "line" as const, stack: "band", showSymbol: false, silent: true,
@@ -218,7 +138,6 @@ export default function FrequencyPanel({ freq, env, color: colorProp,
           data: clim.map((c) => (c.lo == null || c.hi == null ? null : c.hi - c.lo)) },
         { name: MEAN, type: "line" as const, showSymbol: true, symbolSize: 5, connectNulls: true, z: 3,
           data: clim.map((c) => c.mean), lineStyle: { color, width: 2.5 }, itemStyle: { color } },
-        ...ovSeries,
         ...shownYears.map((y) => {
           const yr = years.find((x) => x.year === y);
           const i = years.findIndex((x) => x.year === y);
@@ -231,7 +150,13 @@ export default function FrequencyPanel({ freq, env, color: colorProp,
         }),
       ],
     };
-  }, [active, freq, shownYears, selectedYear, dated, color, env, overlays, tok]);
+  }, [active, freq, shownYears, selectedYear, dated, color, tok]);
+
+  const klickBereit = useNearestPointClick(
+    freq.points.map((p, i) => (dated && p.date ? Date.parse(p.date) : i)),
+    onPointClick && active === "measured"
+      ? (i) => { const pt = freq.points[i]; if (pt?.sample) onPointClick(pt.sample, pt.date); }
+      : undefined);
 
   const selYear = active === "season" && freq.seasonal && selectedYear
     ? freq.seasonal.years.find((y) => y.year === selectedYear) ?? null
@@ -288,56 +213,14 @@ export default function FrequencyPanel({ freq, env, color: colorProp,
           </Chooser>
         )}
 
-        {!compact && env && env.variables.length > 0 && (
-          <Chooser label="measured alongside" testid={`${testid}-overlay`}
-            count={overlays.length}
-            summary={overlays.length ? undefined : "none"}>
-            {(env?.variables ?? []).map((v) => (
-              <ChooserRow key={v.key} testid={`ov-${v.key}`}
-                checked={overlays.includes(v.key)}
-                onToggle={() => umschalten(v.key)}
-                colour={overlays.includes(v.key) ? ovFarbe(v.key) : undefined}
-                label={v.label}
-                hint={`${v.n} of ${v.total} samples${v.unit ? ` · ${v.unit}` : ""}`} />
-            ))}
-            {overlays.length > 0 && (
-              <button data-testid="ov-none" onClick={() => setOverlays([])}
-                className="mt-1 w-full rounded px-2 py-1 text-left text-2xs text-accent
-                           hover:bg-control">
-                none
-              </button>
-            )}
-          </Chooser>
-        )}
       </div>
 
 
-      <div data-testid={`${testid}-chart`}
-        data-ov-min={ovEinzeln?.min ?? ""} data-ov-max={ovEinzeln?.max ?? ""}>
-      <ReactECharts option={option} style={{ height: 210 }} notMerge
-        onEvents={onPointClick && active === "measured" ? {
-          click: (p: { dataIndex?: number }) => {
-            const pt = p.dataIndex != null ? freq.points[p.dataIndex] : null;
-            if (pt?.sample) onPointClick(pt.sample, pt.date);
-          },
-        } : undefined} />
+      <div data-testid={`${testid}-chart`}>
+      <ReactECharts option={option} style={{ height: 210 }} notMerge onChartReady={klickBereit}
+        className={onPointClick && active === "measured" ? "cursor-pointer" : undefined} />
       </div>
 
-      {overlays.length > 0 && (
-        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs"
-             data-testid={`${testid}-overlay-legend`}>
-          {(env?.variables ?? []).filter((v) => overlays.includes(v.key)).map((v) => (
-            <span key={v.key} className="inline-flex items-center gap-1 text-fg-muted">
-              <svg width="16" height="6"><line x1="0" y1="3" x2="16" y2="3" stroke={ovFarbe(v.key)}
-                strokeWidth="1.2" strokeDasharray="4 3" /></svg>
-              {v.label}{v.unit ? ` (${v.unit})` : ""}
-            </span>
-          ))}
-          <span className="text-fg-muted" data-testid={`${testid}-overlay-note`}>
-            {overlays.length > 1 ? "· each on its own range · " : "· "}no correlation computed
-          </span>
-        </div>
-      )}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getAsv, getCluster, getEnvironment, getModules, getSamples,
+import { getAsv, getAsvList, getCluster, getEnvironment, getModules, getSamples,
          type Environment, type ModuleLabel, type SampleList } from "../api";
 import { Chooser, ChooserRow, Segmented } from "./controls";
 import InfoTip from "./InfoTip";
@@ -35,9 +35,12 @@ const ausPunkten = (rohe: { date: string | null; value: number | null }[]): Punk
     .filter((p) => Number.isFinite(p.t))
     .sort((a, b) => a.t - b.t);
 
-export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenAsv }: {
+export default function ComparePanel({ datasetId, initialAsvId, initialSample, sampleTick,
+                                       onClose, onOpenAsv }: {
   datasetId: string;
   initialAsvId?: string;
+  initialSample?: string;
+  sampleTick?: number;
   onClose: () => void;
   onOpenAsv: (id: string) => void;
 }) {
@@ -61,7 +64,16 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
       setPunkt((p) => p ?? r.samples[0]?.sample ?? null);
     }).catch(() => setSamples([]));
   }, [datasetId]);
+  const [asvListe, setAsvListe] = useState<{ id: string; label: string }[]>([]);
+  useEffect(() => {
+    setAsvListe([]);
+    getAsvList(datasetId).then((r) => setAsvListe(r.asvs)).catch(() => setAsvListe([]));
+  }, [datasetId]);
   const zeige = (sample: string) => { setPunkt(sample); setTab("point"); };
+  useEffect(() => {
+    if (initialSample) zeige(initialSample);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialSample, sampleTick]);
   const punktDatum = samples.find((s) => s.sample === punkt)?.date ?? null;
 
   const timeAxisIsDates = env ? env.time_axis === "dates" : true;
@@ -289,7 +301,9 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
 
         {tab === "point" ? (
           <InspectTimePoint datasetId={datasetId} samples={samples} sample={punkt}
-            onSample={setPunkt} env={env} onOpenAsv={onOpenAsv} />
+            onSample={setPunkt} env={env} onOpenAsv={onOpenAsv}
+            chosen={chosen} full={curves.length >= MAX_CURVES}
+            onAdd={(kind, id) => add(kind, id)} />
         ) : <>
         {err != null && <ErrorNotice error={err} inline what="Could not add this curve." />}
 
@@ -345,6 +359,27 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
               ) : ganz.result?.sentence ? (
                 <p className="mt-1 text-fg-muted" data-testid="compare-none">{ganz.result.sentence}</p>
               ) : null)}
+            </div>
+
+            <div className="grid grid-cols-3 gap-1" data-testid="compare-pickers">
+              {([
+                ["cluster", "module", modules.map((m) => [String(m.louvain_label),
+                  m.display || `module ${m.louvain_label}`])],
+                ["env", "environment", (env?.variables ?? []).map((v) => [v.key, v.label])],
+                ["asv", "ASV", asvListe.map((a) => [a.id,
+                  a.label !== "unassigned" ? `${a.id} · ${a.label}` : a.id])],
+              ] as [Kind, string, [string, string][]][]).map(([kind, name, eintraege]) => (
+                <select key={kind} data-testid={`compare-pick-${kind}`} value=""
+                  aria-label={`add ${name}`}
+                  disabled={curves.length >= MAX_CURVES || eintraege.length === 0}
+                  onChange={(e) => e.target.value && add(kind, e.target.value)}
+                  className="min-w-0 px-1 py-1 rounded bg-control border border-line-strong text-fg">
+                  <option value="">+ {name} …</option>
+                  {eintraege.filter(([id]) => !chosen.has(`${kind}:${id}`)).map(([id, text]) => (
+                    <option key={id} value={id}>{text}</option>
+                  ))}
+                </select>
+              ))}
             </div>
 
             {curves.length > 0 && (

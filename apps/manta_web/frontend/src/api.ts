@@ -1316,6 +1316,8 @@ export const getClusterAtSample = (ds: string, label: number, sample: string) =>
   F(`${BASE}/datasets/${ds}/cluster/${label}/at/${encodeURIComponent(sample)}`)
     .then(okJson<ClusterAtSample>);
 
+export const getAsvList = (ds: string) =>
+  get<{ asvs: { id: string; cluster: number | null; label: string }[] }>(`/datasets/${ds}/asvs`);
 export const getSamples = (ds: string) => get<SampleList>(`/datasets/${ds}/samples`);
 export const getSample = (ds: string, sample: string) =>
   get<SampleDetail>(`/datasets/${ds}/sample/${encodeURIComponent(sample)}`);

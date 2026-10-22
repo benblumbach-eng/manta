@@ -36,7 +36,7 @@ type RightPanel =
   | { kind: "taxon"; asvId: string }
   | { kind: "wheel" }
   | { kind: `view:${string}` }
-  | { kind: "compare"; seed?: string };
+  | { kind: "compare"; seed?: string; sample?: string; tick?: number };
 
 const PANEL_WIDTH: Record<string, number> = { asv: 560, edge: 560, environment: 480, starred: 480, wheel: 520, compare: 560, taxon: 520, agent: 460 };
 
@@ -49,6 +49,7 @@ export default function App() {
     const ohne = cur.filter((x) => x.kind !== p.kind);
     return [...ohne, p];
   });
+  const inspectAt = (sample: string) => setRight({ kind: "compare", sample, tick: Date.now() });
   const schliesse = (kind: RightPanel["kind"]) =>
     setOffen((cur) => cur.filter((x) => x.kind !== kind));
   const istOffen = (kind: RightPanel["kind"]) => offen.some((x) => x.kind === kind);
@@ -308,6 +309,7 @@ export default function App() {
               open: istOffen(extraKind(view.key)),
               onOpen: () => setRight({ kind: extraKind(view.key) }) }))}
             onOpenCompare={() => setRight({ kind: "compare" })}
+            onInspectAt={inspectAt}
             compareOpen={istOffen("compare")}
             onRefresh={refresh}
             onOpenDataset={(id) => getDatasets().then((r) => {
@@ -338,6 +340,7 @@ export default function App() {
             onOpenTaxon={(id) => setRight({ kind: "taxon", asvId: id })}
             onOpenCluster={wishCluster}
             onCompare={(id) => setRight({ kind: "compare", seed: id })}
+            onInspectAt={inspectAt}
             signedIn={!!me.username} /></ErrorBoundary></PanelFrame>
         )}
         {selected && finde("edge") && (
@@ -346,7 +349,7 @@ export default function App() {
             onOpenAsv={openAsv} /></ErrorBoundary></PanelFrame>
         )}
         {selected && istOffen("environment") && (
-          <PanelFrame id="environment" title="Environment over time" onClose={() => schliesse("environment")} defaultWidth={PANEL_WIDTH.environment}><ErrorBoundary label="the environment panel"><EnvironmentPanel datasetId={selected.dataset_id} focus={finde("environment")?.focus} onClose={() => schliesse("environment")} /></ErrorBoundary></PanelFrame>
+          <PanelFrame id="environment" title="Environment over time" onClose={() => schliesse("environment")} defaultWidth={PANEL_WIDTH.environment}><ErrorBoundary label="the environment panel"><EnvironmentPanel datasetId={selected.dataset_id} focus={finde("environment")?.focus} onClose={() => schliesse("environment")} onInspectAt={inspectAt} /></ErrorBoundary></PanelFrame>
         )}
         {selected && istOffen("wheel") && (
           <PanelFrame id="wheel" title="The year wheel" onClose={() => schliesse("wheel")} defaultWidth={PANEL_WIDTH.wheel}><ErrorBoundary label="the year wheel">
@@ -362,6 +365,7 @@ export default function App() {
         {selected && finde("compare") && (
           <PanelFrame id="compare" title="Inspect" onClose={() => schliesse("compare")} defaultWidth={PANEL_WIDTH.compare}><ErrorBoundary label="the seasonal comparison">
             <ComparePanel datasetId={selected.dataset_id} initialAsvId={finde("compare")!.seed}
+              initialSample={finde("compare")!.sample} sampleTick={finde("compare")!.tick}
               onClose={() => schliesse("compare")} onOpenAsv={openAsv} />
           </ErrorBoundary></PanelFrame>
         )}

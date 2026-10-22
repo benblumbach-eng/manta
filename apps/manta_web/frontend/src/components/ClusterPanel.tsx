@@ -1,7 +1,7 @@
 import { Button, StateNotice, ToggleButton, SectionHeading } from "./ui";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getCluster, getClusterAtSample, getEnvironment, setClusterNote, setClusterStar,
-         type ClusterAtSample, type ClusterDetail, type Environment } from "../api";
+import { getCluster, getClusterAtSample, setClusterNote, setClusterStar,
+         type ClusterAtSample, type ClusterDetail } from "../api";
 import type { EdgeRef } from "../App";
 import ClusterNet from "./ClusterNet";
 import EnvironmentBars from "./EnvironmentBars";
@@ -17,7 +17,7 @@ import { Criterion2ModuleLine } from "./Criterion2";
 import StarButton from "./StarButton";
 
 export default function ClusterPanel({ datasetId, label, color, onClose, onOpenAsv, onOpenEdge,
-                                       onOpenCluster, colorOf, isAdmin = false, signedIn = true }: {
+                                       onOpenCluster, onInspectAt, colorOf, isAdmin = false, signedIn = true }: {
   datasetId: string;
   label: number;
   isAdmin?: boolean;
@@ -26,6 +26,7 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
   onOpenAsv?: (id: string) => void;
   onOpenEdge?: (e: EdgeRef) => void;
   onOpenCluster?: (label: number) => void;
+  onInspectAt?: (sample: string) => void;
   colorOf?: (label: number) => string | undefined;
   signedIn?: boolean;
 }) {
@@ -55,7 +56,6 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
   const [c, setC] = useState<ClusterDetail | null>(null);
   const [err, setErr] = useState<unknown>(null);
   const [nochmal, setNochmal] = useState(0);
-  const [env, setEnv] = useState<Environment | null>(null);
   const [genusFilter, setGenusFilter] = useState<string | null>(null);
   const [atSample, setAtSample] = useState<ClusterAtSample | null>(null);
   const [atBusy, setAtBusy] = useState(false);
@@ -74,8 +74,6 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
   offen.current = `${datasetId}/${label}`;
 
   useEffect(() => {
-    setEnv(null);
-    getEnvironment(datasetId).then(setEnv).catch(() => setEnv(null));
   }, [datasetId]);
 
   const byPartner = useMemo(() => {
@@ -167,7 +165,7 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
             )}
             <div data-testid="cluster-collective" className="mt-2">
               <FrequencyPanel freq={c.frequency} color={color}
-                env={env} testid="cluster-frequency" compact
+                testid="cluster-frequency"
                 onPointClick={(sample) => {
                   setAtBusy(true); setAtSample(null); setAtErr(null);
                   const fuer = `${datasetId}/${label}`;
@@ -196,8 +194,12 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
                         in this sample
                       </span>
                       <span className="text-xs text-fg">{atSample.sample}</span>
+                      {onInspectAt && (
+                        <button data-testid="at-sample-inspect" onClick={() => onInspectAt(atSample.sample)}
+                          className="ml-auto text-xs text-accent hover:underline">inspect this time point →</button>
+                      )}
                       <button data-testid="at-sample-close" onClick={() => setAtSample(null)}
-                        aria-label="Close" className="ml-auto text-xs text-fg-muted hover:text-fg">✕</button>
+                        aria-label="Close" className={`${onInspectAt ? "ml-2" : "ml-auto"} text-xs text-fg-muted hover:text-fg`}>✕</button>
                     </div>
                     {!Array.isArray(atSample.members) || atSample.members.length === 0 ? (
                       <p className="text-xs text-fg-muted">{atSample.note}</p>
