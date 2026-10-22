@@ -57,8 +57,19 @@ def driver():
     return _driver
 
 
+def _remove_function_annotation():
+    try:
+        _w("MATCH (t:TraitRun) DETACH DELETE t")
+        _w("MATCH (a:ASV) WHERE a.trait_function IS NOT NULL OR a.trait_run_id IS NOT NULL "
+           "REMOVE a.trait_function, a.trait_source, a.trait_rank, a.trait_run_id")
+        _w("DROP CONSTRAINT trait_run_key IF EXISTS")
+    except Exception:
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _remove_function_annotation()
     yield
     global _driver
     if _driver is not None:
