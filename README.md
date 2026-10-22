@@ -440,8 +440,10 @@ downloads them from their original sources.
 **Methods**
 
 - Network terms — Oldenburg et al. 2024 (above).
-- Recurrence and modules (peak window, annual oscillation, year-to-year variability of modules) —
-  Priest et al. 2025, *Nat Commun* 16:1326, [doi:10.1038/s41467-025-56203-3](https://doi.org/10.1038/s41467-025-56203-3).
+- Seasonal recurrence and modules — Priest et al. 2025, *Nat Commun* 16:1326,
+  [doi:10.1038/s41467-025-56203-3](https://doi.org/10.1038/s41467-025-56203-3). The paper measures
+  annual oscillation and peak timing per ASV and year-to-year differences per community; MANTA's
+  peak window and year-to-year variability per module build on these ideas but are its own.
 - Criterion 2 of the keystone definition — Oldenburg et al. 2024 (above), Methods "Keystone
   species definition": "a high centrality (closeness) value within its co-occurrence community".
   MANTA computes it on the undirected co-occurrence network: closeness within the module
