@@ -64,9 +64,9 @@ const PRESETS: Record<string, { label: string; base_url: string; model: string }
 const TOOL_GROUPS: { title: string; names: string[] }[] = [
   { title: "Datasets", names: ["list_datasets", "dataset_summary", "taxa_composition",
                                "summarize_by_taxon", "find_asv"] },
-  { title: "One ASV", names: ["asv_detail", "asv_seasonality", "asv_spectrum", "asv_function",
+  { title: "One ASV", names: ["asv_detail", "asv_seasonality", "asv_spectrum",
                               "asv_abundance_series", "neighbors", "asv_drivers"] },
-  { title: "Modules", names: ["cluster_detail", "cluster_functions", "cluster_timeseries",
+  { title: "Modules", names: ["cluster_detail", "cluster_timeseries",
                               "cluster_year_overview", "cluster_interannual_variability"] },
   { title: "Links", names: ["edge", "cluster_bridges", "cluster_network"] },
   { title: "Environment", names: ["environment", "env_variable_links", "cluster_env_links",

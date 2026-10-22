@@ -194,23 +194,6 @@ TOOL_SPECS: list[dict] = [
         },
     },
     {
-        "name": "asv_function",
-        "requires": ['traits'],
-        "description": (
-            "The LITERATURE-ANNOTATED function of one ASV, looked up by its taxon name in pinned "
-            "tables (18S: Mixoplankton Database via PR2, Trophic Mode Database; 16S: FAPROTAX) — "
-            "with source and rank (species/genus/family) per entry, or 'not annotated'. A property "
-            "of the NAME, not a result of this dataset; metabolism itself is still not derivable "
-            "from amplicon data. For 'is this ASV a mixotroph / heterotroph', 'what is known about "
-            "this genus'."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {"dataset_id": {"type": "string"}, "asv_id": {"type": "string"}},
-            "required": ["dataset_id", "asv_id"],
-        },
-    },
-    {
         "name": "asv_drivers",
         "requires": ['env_links'],
         "description": (
@@ -347,21 +330,6 @@ TOOL_SPECS: list[dict] = [
                 "dataset_id": {"type": "string"},
                 "cluster": {"type": "integer", "description": "Louvain cluster number"},
             },
-            "required": ["dataset_id", "cluster"],
-        },
-    },
-    {
-        "name": "cluster_functions",
-        "requires": ['traits'],
-        "description": (
-            "Members of ONE cluster by literature-annotated function: share of the cluster per "
-            "function label, and the share 'not annotated' (never dropped). Same lookup as "
-            "asv_function, aggregated. For 'is cluster 3 mostly heterotrophs', 'how much of this "
-            "module has any annotation at all'. Not for taxa (cluster_detail)."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {"dataset_id": {"type": "string"}, "cluster": {"type": "integer"}},
             "required": ["dataset_id", "cluster"],
         },
     },
@@ -646,11 +614,9 @@ _DISPATCH: dict[str, Callable[..., Any]] = {
     "asv_seasonality": tools.asv_seasonality,
     "asv_abundance_series": tools.asv_abundance_series,
     "asv_spectrum": tools.asv_spectrum,
-    "asv_function": tools.asv_function,
     "neighbors": tools.neighbors,
     "edge": tools.edge,
     "cluster_detail": tools.cluster_detail,
-    "cluster_functions": tools.cluster_functions,
     "cluster_timeseries": tools.cluster_timeseries,
     "cluster_bridges": tools.cluster_bridges,
     "cluster_network": tools.cluster_network,
@@ -731,14 +697,12 @@ QUESTIONS: dict[str, tuple[str, str]] = {
     "asv_detail": ("asv", "What is this ASV — taxonomy, module, size, is it central in its module?"),
     "asv_seasonality": ("asv", "When is this ASV present, and does it come back every year?"),
     "asv_spectrum": ("asv", "Which rhythms does this ASV carry — a year, half a year, longer?"),
-    "asv_function": ("asv", "What does the literature say about this ASV's function?"),
     "asv_drivers": ("asv", "Which measured variables does this ASV move with, and with what lag?"),
     "asv_abundance_series": ("asv", "How does this ASV's value run, sample by sample?"),
     "neighbors": ("asv", "Who is this ASV linked to in the network?"),
     "seasonality_test": ("asv", "Does the calendar month make a difference for this ASV?"),
     "trend_test": ("asv", "Is this ASV rising or falling over the years?"),
     "cluster_detail": ("cluster", "What does this module consist of, and who dominates it?"),
-    "cluster_functions": ("cluster", "What is known about the functions in this module?"),
     "cluster_env_links": ("cluster", "Which measured variables is this module linked to?"),
 }
 
