@@ -83,7 +83,9 @@ The screenshots show the HAUSGARTEN F4 example data from OTTER, which is not inc
 ## Installation
 
 Installation has two steps. Step 1 starts MANTA so you can look at data. Step 2 installs the
-import so you can add data; you need it for every dataset, including the example.
+analysis tools (OTTER and the steps that prepare and save its results, as Git submodules and
+Python environments) and the import page in the browser. You need step 2 for every dataset,
+including the example.
 
 You need [Docker](https://docs.docker.com/get-started/get-docker/) with Compose and
 [Git](https://git-scm.com/downloads). For step 2 you also need
@@ -157,9 +159,9 @@ models.
 MANTA uses the ports 8080, 8443, 7474 and 7687 (and 11434 for the assistant). If one is taken,
 change it in `deploy/.env`. The database's usage reporting is switched off.
 
-### Step 2: Install the import
+### Step 2: Install the analysis tools and the import
 
-1. Install the import tools. This takes a while. If a line fails, the block stops; fix the
+1. Install the analysis tools. This takes a while. If a line fails, the block stops; fix the
    problem and run the whole block again. Don't use `sudo` here.
    ```bash
    cd ~/manta &&
