@@ -189,21 +189,23 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
     const anteile = drin.filter((_, i) => curves[i].unit == null).flat()
       .map((p) => p.value).filter((v): v is number => v != null);
     const max = anteile.length ? Math.max(...anteile) : 0;
-    const einheiten = [...new Set(curves.filter((c) => c.unit != null).map((c) => c.unit!))];
+    const genormt = curves.some((c) => c.kind === "env");
+    const spitze = drin.map((pts) => Math.max(0, ...pts.map((p) => p.value ?? 0)));
     const punktT = punktDatum ? Date.parse(punktDatum) : NaN;
     const datum = (t: number) => new Date(t).toISOString().slice(0, 10);
     const achse = { color: tok.textMuted, fontSize: FONT.xs2 };
     return {
       backgroundColor: "transparent",
-      grid: { left: 56, right: 14 + 52 * einheiten.length, top: 22, bottom: 30 },
+      grid: { left: 56, right: 14, top: 14, bottom: 30 },
       tooltip: {
         ...chartTooltip(tok),
         trigger: "item" as const,
-        formatter: (p: { seriesIndex: number; marker: string; data: [number, number | null] }) => {
+        formatter: (p: { seriesIndex: number; dataIndex: number; marker: string; data: [number, number | null] }) => {
           const c = curves[p.seriesIndex];
-          if (!c || p.data[1] == null) return "";
-          const v = c.unit == null ? prozent(p.data[1], p.data[1])
-            : `${Number(p.data[1].toFixed(3))}${c.unit ? ` ${c.unit}` : ""}`;
+          const echt = drin[p.seriesIndex]?.[p.dataIndex]?.value;
+          if (!c || echt == null) return "";
+          const v = c.unit == null ? prozent(echt, echt)
+            : `${Number(echt.toFixed(3))}${c.unit ? ` ${c.unit}` : ""}`;
           return `<b>${esc(datum(p.data[0]))}</b><br/>${p.marker}${esc(c.label)}: ${esc(v)}`;
         },
       },
@@ -213,25 +215,18 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
                               label: { show: true, formatter: (x: { value: number }) => datum(x.value),
                                        backgroundColor: tok.overlay, color: tok.text,
                                        borderColor: tok.border, borderWidth: 1 } } },
-      yAxis: [
-        { type: "value" as const, min: 0, max: "dataMax", show: anteile.length > 0,
-          axisLabel: { ...achse, formatter: (v: number) => prozent(v, max) },
-          splitLine: { lineStyle: { color: tok.chartGrid } } },
-        ...einheiten.map((u, k) => ({
-          type: "value" as const, position: "right" as const, offset: 52 * k, scale: true,
-          min: "dataMin", max: "dataMax", name: u, nameTextStyle: achse,
-          axisLine: { show: true, lineStyle: { color: tok.chartAxis } },
-          axisLabel: { ...achse, formatter: (v: number) => String(Number(v.toFixed(2))) },
-          splitLine: { show: false },
-        })),
-      ],
+      yAxis: {
+        type: "value" as const, min: 0, max: genormt ? 1 : "dataMax",
+        axisLabel: { ...achse, formatter: (v: number) => (genormt ? `${Math.round(100 * v)} %` : prozent(v, max)) },
+        splitLine: { lineStyle: { color: tok.chartGrid } },
+      },
       series: [
         ...curves.map((c, i) => {
           const farbe = seriesColour(i, tok.light);
           return {
             name: c.label, type: "line" as const, showSymbol: true, symbolSize: 5,
-            yAxisIndex: c.unit == null ? 0 : 1 + einheiten.indexOf(c.unit),
-            data: drin[i].map((p) => [p.t, p.value]),
+            data: drin[i].map((p) => [p.t, p.value == null ? null
+              : genormt ? (spitze[i] > 0 ? p.value / spitze[i] : 0) : p.value]),
             lineStyle: { color: farbe, width: 1.8, type: c.kind === "env" ? "dashed" as const : "solid" as const },
             itemStyle: { color: farbe },
             ...(i === 0 && Number.isFinite(punktT) ? {
@@ -242,7 +237,7 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
           };
         }),
         { name: DOTS, type: "scatter" as const, data: zeitpunkte.map((z) => [z.t, 0]),
-          yAxisIndex: 0, symbolSize: 4, itemStyle: { color: tok.textMuted }, silent: true,
+          symbolSize: 4, itemStyle: { color: tok.textMuted }, silent: true,
           tooltip: { show: false }, clip: false },
       ],
     };
@@ -258,7 +253,8 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
             <p><em>Over time</em> lays the measured series of ASVs and modules over each other,
             as share of all reads of a sample, and measured environmental variables. <em>Time point</em> shows one sample: which modules
             and ASVs made up how much of it, and the environmental values measured with it.
-            Environmental variables get their own axis on the right, in their unit.
+            As soon as an environmental variable is shown, every curve is drawn relative to its
+            own maximum (100 %); hovering a point shows the measured value.
             Click a point on a curve to open its time point.</p>
           </InfoTip>
       </PanelHeader>
