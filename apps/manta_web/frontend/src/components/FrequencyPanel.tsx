@@ -41,13 +41,16 @@ export default function FrequencyPanel({ freq, color: colorProp,
   const active = views.find(([v, , ok]) => v === view && ok) ? view : "measured";
 
   const option = useMemo(() => {
+    const peak = Math.max(0, ...freq.points.map((p) => p.share ?? 0));
     const base = {
       backgroundColor: "transparent",
       grid: { left: 56, right: 14, top: 26, bottom: 30 },
       yAxis: {
         type: "value" as const,
+        max: active === "measured" ? "dataMax" : undefined,
         axisLabel: { color: tok.textMuted, fontSize: FONT.xs2,
-                     formatter: (v: number) => `${(100 * v).toFixed(1)}%` },
+                     formatter: (v: number) =>
+                       `${(100 * v).toFixed(peak < 0.0001 ? 4 : peak < 0.001 ? 3 : peak < 0.01 ? 2 : 1)}%` },
         splitLine: { lineStyle: { color: tok.chartGrid } },
       },
     };

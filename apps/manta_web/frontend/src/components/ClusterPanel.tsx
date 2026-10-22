@@ -1,14 +1,11 @@
-import { Button, StateNotice, ToggleButton, SectionHeading } from "./ui";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { getCluster, getClusterAtSample, setClusterNote, setClusterStar,
-         type ClusterAtSample, type ClusterDetail } from "../api";
+import { Button, StateNotice, ToggleButton } from "./ui";
+import { useEffect, useMemo, useState } from "react";
+import { getCluster, setClusterNote, setClusterStar, type ClusterDetail } from "../api";
 import type { EdgeRef } from "../App";
+import type { InspectMark } from "./ComparePanel";
 import ClusterNet from "./ClusterNet";
-import EnvironmentBars from "./EnvironmentBars";
-import InfoTip from "./InfoTip";
 import { useModules } from "../modules";
 import { setClusterLabel } from "../api";
-import ProvenanceFooter from "./ProvenanceFooter";
 import FrequencyPanel from "./FrequencyPanel";
 import NoteBox from "./NoteBox";
 import ErrorNotice from "./ErrorNotice";
@@ -26,7 +23,7 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
   onOpenAsv?: (id: string) => void;
   onOpenEdge?: (e: EdgeRef) => void;
   onOpenCluster?: (label: number) => void;
-  onInspectAt?: (sample: string) => void;
+  onInspectAt?: (sample: string, mark?: InspectMark) => void;
   colorOf?: (label: number) => string | undefined;
   signedIn?: boolean;
 }) {
@@ -57,22 +54,15 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
   const [err, setErr] = useState<unknown>(null);
   const [nochmal, setNochmal] = useState(0);
   const [genusFilter, setGenusFilter] = useState<string | null>(null);
-  const [atSample, setAtSample] = useState<ClusterAtSample | null>(null);
-  const [atBusy, setAtBusy] = useState(false);
-  const [atErr, setAtErr] = useState<string | null>(null);
 
   useEffect(() => {
     setC(null); setErr(null); setGenusFilter(null);
-    setPartner(null); setAllGenera(false); setAllMembers(false); setAtSample(null);
-    setAtErr(null); setAtBusy(false);
+    setPartner(null); setAllGenera(false); setAllMembers(false);
     let alive = true;
     getCluster(datasetId, label).then((x) => { if (alive) setC(x); })
       .catch((e) => { if (alive) setErr(e); });
     return () => { alive = false; };
   }, [datasetId, label, nochmal]);
-  const offen = useRef(`${datasetId}/${label}`);
-  offen.current = `${datasetId}/${label}`;
-
   useEffect(() => {
   }, [datasetId]);
 
@@ -151,107 +141,12 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
         <div className="p-4 space-y-6 text-sm">
 
           <section data-testid="cluster-activity">
-            <SectionHeading as="div">Seasonality</SectionHeading>
-            <div className="text-base text-fg mt-1">
-              {c.activity.statement
-                ? c.activity.statement.charAt(0).toUpperCase() + c.activity.statement.slice(1)
-                : "—"}
-            </div>
-            {c.activity.axis === "dates" && c.activity.n_min > 0 && (
-              <p className="text-2xs text-fg-muted" data-testid="cluster-window-support">
-                months above the cluster&rsquo;s own annual mean share · thinnest month rests on{" "}
-                {c.activity.n_min} sample{c.activity.n_min === 1 ? "" : "s"}
-              </p>
-            )}
-            <div data-testid="cluster-collective" className="mt-2">
-              <FrequencyPanel freq={c.frequency} color={color}
-                testid="cluster-frequency"
-                onPointClick={(sample) => {
-                  setAtBusy(true); setAtSample(null); setAtErr(null);
-                  const fuer = `${datasetId}/${label}`;
-                  getClusterAtSample(datasetId, label, sample)
-                    .then((x) => { if (offen.current === fuer) setAtSample(x); })
-                    .catch((e) => {
-                      if (offen.current === fuer)
-                        setAtErr(`${sample}: ${e instanceof Error ? e.message : String(e)}`);
-                    })
-                    .finally(() => { if (offen.current === fuer) setAtBusy(false); });
-                }} />
-            </div>
-            {(atBusy || atSample || atErr) && (
-              <div className="mt-2 rounded border border-line bg-surface/50 p-2"
-                data-testid="at-sample">
-                {atBusy ? <span className="text-xs text-fg-muted">loading …</span> : atErr ? (
-                  <div className="flex items-baseline gap-2 text-xs text-danger" data-testid="at-sample-error">
-                    <span>could not load this sample — {atErr}</span>
-                    <button onClick={() => setAtErr(null)} aria-label="Close"
-                      className="ml-auto text-fg-muted hover:text-fg">✕</button>
-                  </div>
-                ) : atSample && (
-                  <>
-                    <div className="flex items-baseline gap-2">
-                      <span className="text-xs font-semibold text-fg-muted">
-                        in this sample
-                      </span>
-                      <span className="text-xs text-fg">{atSample.sample}</span>
-                      {onInspectAt && (
-                        <button data-testid="at-sample-inspect" onClick={() => onInspectAt(atSample.sample)}
-                          className="ml-auto text-xs text-accent hover:underline">inspect this time point →</button>
-                      )}
-                      <button data-testid="at-sample-close" onClick={() => setAtSample(null)}
-                        aria-label="Close" className={`${onInspectAt ? "ml-2" : "ml-auto"} text-xs text-fg-muted hover:text-fg`}>✕</button>
-                    </div>
-                    {!Array.isArray(atSample.members) || atSample.members.length === 0 ? (
-                      <p className="text-xs text-fg-muted">{atSample.note}</p>
-                    ) : (
-                      <ul className="mt-1 text-xs">
-                        {atSample.members.filter((m) => m.count > 0).map((m) => (
-                          <li key={m.id}>
-                            <button data-testid="at-sample-member" onClick={() => onOpenAsv?.(m.id)}
-                              disabled={!onOpenAsv}
-                              className="flex w-full items-baseline gap-2 px-1 py-1 rounded text-left
-                                         hover:bg-control disabled:hover:bg-transparent">
-                              <span className="font-mono text-accent">{m.id}</span>
-                              {m.genus && <span className="text-fg-muted truncate">({m.genus})</span>}
-                              <span className="ml-auto tabular-nums text-fg">
-                                {m.share_of_cluster == null ? "—"
-                                  : `${(100 * m.share_of_cluster).toFixed(1)}%`}
-                              </span>
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                    <p className="mt-1 text-2xs text-fg-muted">
-                      share of this cluster&rsquo;s total in that one sample
-                    </p>
-                    {atSample.caveat && (
-                      <p data-testid="at-sample-caveat" className="mt-1 text-xs text-warn leading-snug">
-                        {atSample.caveat}
-                      </p>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
+            <h3 className="text-fg font-medium mb-2">Relative abundance (%)</h3>
+            <FrequencyPanel freq={c.frequency} color={color} testid="cluster-frequency"
+              onPointClick={onInspectAt
+                ? (sample) => onInspectAt(sample, { kind: "cluster", id: String(label) })
+                : undefined} />
           </section>
-
-          {c.environment_profile.items.length > 0 && (
-            <section data-testid="cluster-env-profile">
-              <div className="text-xs font-semibold text-fg-muted flex items-center">
-                Environment (weighted by the cluster&rsquo;s share)
-                <InfoTip title="Method and caveat">
-                  <p>{c.environment_profile.method} The weight of a sample is this cluster&rsquo;s
-                  own curve value in it.</p>
-                  <p>{c.environment_profile.series_definition} {c.environment_profile.series_note}</p>
-                  <p>{c.environment_profile.caveat}</p>
-                </InfoTip>
-              </div>
-              <div className="text-xs mt-1" data-testid="cluster-env-profile-values">
-                <EnvironmentBars profile={c.environment_profile} weightOf="module" />
-              </div>
-            </section>
-          )}
 
           <section data-testid="cluster-members">
             <div className="text-xs font-semibold text-fg-muted flex items-baseline">
@@ -313,13 +208,10 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
           )}
 
           <section data-testid="cluster-connections">
-            <h3 className="text-fg font-medium mb-1">Connections</h3>
+            <h3 className="text-fg font-medium mb-1">Neighbours</h3>
 
             {c.cohesion.aussen === 0 ? (
-              <p className="mt-1 text-fg" data-testid="cluster-isolated">
-                Nothing. All {c.cohesion.innen} of its links stay inside — this cluster is a
-                separate piece of the network.
-              </p>
+              <p className="mt-1 text-fg-muted" data-testid="cluster-isolated">no connections</p>
             ) : (
               <div className="mt-1 space-y-2">
                 <ClusterNet label={label} partners={byPartner} selected={partner}
@@ -366,10 +258,6 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
             onSave={(t, o) => setClusterNote(datasetId, label, t, o)
               .then((r) => setC((cur) => (cur ? { ...cur, note: { n: r.note, t: r.note_at } } : cur)))} />
 
-          <p className="text-2xs text-fg-muted" data-testid="cluster-source">
-            <span data-testid="cluster-source-citation">&ldquo;Community cluster&rdquo; and Louvain after {c.source_publication.citation}</span>
-          </p>
-          <ProvenanceFooter datasetId={datasetId} />
         </div>
       )}
     </div>

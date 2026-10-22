@@ -4,6 +4,7 @@ import ReactECharts from "echarts-for-react";
 import { getCapabilities, getNetwork,
          type Capabilities, type Criterion2Summary, type Dataset, type NetEdge, type NetNode, type Network } from "../api";
 import type { EdgeRef } from "../App";
+import type { InspectMark } from "./ComparePanel";
 import ClusterPanel from "./ClusterPanel";
 import PanelFrame from "./PanelFrame";
 import LegendPanel from "./LegendPanel";
@@ -32,7 +33,7 @@ import { chainedCounts, clearKind, computeVisible, decodeFilters, emptyFilters, 
 const COLLIDE_MARGIN = 1.5;
 const COLLIDE_ITERATIONS = 80;
 const DIM_NODE = 0.2;
-const LINK_LENGTH_DEFAULT = 260;
+const LINK_LENGTH_DEFAULT = 29;
 const RING_W = 2;
 const RING_GLOW = 14;
 const DIM_EDGE = 0.15;
@@ -70,7 +71,6 @@ type Sel =
   | { kind: "cluster"; label: number };
 
 export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
-                                      onOpenEnvironment, environmentOpen,
                                       onOpenStarred, starredOpen, clusterVonAussen,
                                       onOpenWheel, wheelOpen,
                                       extraViews,
@@ -92,17 +92,15 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   theme: Theme;
   onTheme: (t: Theme) => void;
   onOpenEdge: (e: EdgeRef) => void;
-  onOpenEnvironment: () => void;
   onOpenStarred: () => void;
   starredOpen: boolean;
   clusterVonAussen: { label: number; tick: number; ds?: string } | null;
-  environmentOpen: boolean;
   onOpenWheel: () => void;
   wheelOpen: boolean;
   extraViews: { view: ExtraView; kind: string; open: boolean; onOpen: () => void }[];
   onOpenCompare: () => void;
   compareOpen: boolean;
-  onInspectAt: (sample: string) => void;
+  onInspectAt: (sample: string, mark?: InspectMark) => void;
   onRefresh?: () => void;
   onOpenDataset?: (datasetId: string) => void;
 }) {
@@ -592,7 +590,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         draggable: true,
         ...(roam.current ? { zoom: roam.current.zoom, center: roam.current.center }
                     : {}),
-        force: { repulsion: 2600, edgeLength: linkLen, gravity: 0.06, layoutAnimation: false },
+        force: { repulsion: 2600, edgeLength: linkLen * 9, gravity: 0.06, layoutAnimation: false },
         data: drawNodes.map((n) => {
           const xy: [number, number] = frozen?.get(n.id) ?? seedXY(n.id);
           const glows = keyIds.has(n.id);
@@ -862,14 +860,10 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   }, [net, onShowNet, resetZoom]);
 
   const capOf = (key: string) => caps?.items.find((i) => i.key === key);
-  const envCap = capOf("environment");
   const timeCap = capOf("time_axis");
   const umschalten = (art: string, offen: boolean, oeffnen: () => void) => () =>
     (offen ? onCloseView(art) : oeffnen());
   const viewItems: ViewItem[] = [
-    { key: "environment", testid: "environment-toggle", label: "Env", icon: "≈",
-      open: environmentOpen, onOpen: umschalten("environment", environmentOpen, onOpenEnvironment),
-      disabledReason: envCap && !envCap.available ? envCap.detail : null },
     { key: "wheel", testid: "wheel-toggle", label: "Wheel", icon: "◔",
       open: wheelOpen, onOpen: umschalten("wheel", wheelOpen, onOpenWheel),
       disabledReason: timeCap && !timeCap.available ? timeCap.detail : null },
@@ -884,7 +878,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     { key: "starred", testid: "starred-toggle", label: "Star", icon: "★",
       open: starredOpen, onOpen: umschalten("starred", starredOpen, onOpenStarred), disabledReason: null },
   ];
-  const anyViewOpen = environmentOpen || wheelOpen || extraViews.some((x) => x.open)
+  const anyViewOpen = wheelOpen || extraViews.some((x) => x.open)
     || compareOpen || starredOpen || legendeOffen;
 
   const selNode = sel?.kind === "asv" ? net?.nodes.find((n) => n.id === sel.id) ?? null : null;
