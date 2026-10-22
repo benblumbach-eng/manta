@@ -99,7 +99,10 @@ def main() -> int:
     # python3.11 and pip-installs requirements.txt into it, which would break MANTA's OTTER venv.
     # main() imports save_dict_to_json from a module that needs plotly, which MANTA's OTTER venv
     # does not have; it only writes a log file, so a stand-in replaces that one module.
-    ersatz = ("import json, sys, types; e = types.ModuleType('gui.gui_ai_umap_embedding'); "
+    # OTTER's own path ignores --num_cores for CON and CCM and uses all cores but two, which
+    # returns the pairs in random order; Louvain depends on that order. One core, as in MANTA.
+    ersatz = ("import os; os.cpu_count = lambda: 3; "
+              "import json, sys, types; e = types.ModuleType('gui.gui_ai_umap_embedding'); "
               "e.save_dict_to_json = lambda d, p: open(p, 'w').write(json.dumps(d, default=str)); "
               "sys.modules['gui.gui_ai_umap_embedding'] = e; "
               "import run_on_terminal_main as m; sys.argv[0] = m.__file__; m.main()")
