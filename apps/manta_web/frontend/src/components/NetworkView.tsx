@@ -213,15 +213,15 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   const visibleEdges = useMemo(() => vis?.edges ?? [], [vis]);
   const visibleIds = useMemo(() => new Set(visibleNodes.map((n) => n.id)), [visibleNodes]);
 
-  const [points, setPoints] = useState<"asvs" | TaxonRank>("asvs");
-  const taxaMode = points !== "asvs";
-  const taxonRank: TaxonRank = points === "genus" ? "genus" : "species";
+  const [points, setPoints] = useState<"asvs" | "taxa">("asvs");
+  const [taxonRank, setTaxonRank] = useState<TaxonRank>("genus");
+  const taxaMode = points === "taxa";
   const [legendeOffen, setLegendeOffen] = useState(false);
   const [revolver, setRevolver] =
     useState<{ id: string; x: number; y: number } | null>(null);
   const [linkLen, setLinkLen] = useState(LINK_LENGTH_DEFAULT);
   const [zoomTick, setZoomTick] = useState(0);
-  useEffect(() => { setRevolver(null); }, [points, filters, linkLen]);
+  useEffect(() => { setRevolver(null); }, [points, taxonRank, filters, linkLen]);
 
   const taxa = useMemo(
     () => (taxaMode ? taxonPoints(visibleNodes, taxonRank) : []), [taxaMode, taxonRank, visibleNodes]);
@@ -386,9 +386,9 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
 
   const layoutKey = useMemo(
     () => `${dataset.dataset_id}|${filters.layers.con}|${filters.layers.ccm}|${filters.layers.rejected}`
-         + `|${points}|${linkLen}`
+         + `|${points}|${taxonRank}|${linkLen}`
          + `|${drawNodes.map((n) => n.id).join(",")}`,
-    [dataset.dataset_id, filters.layers, points, linkLen, drawNodes]);
+    [dataset.dataset_id, filters.layers, points, taxonRank, linkLen, drawNodes]);
   const frozenKey = useRef<string | null>(null);
   useEffect(() => {
     if (frozenKey.current !== layoutKey) { frozenKey.current = layoutKey; setFrozen(null); }
@@ -860,7 +860,8 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         onClearKind={(k) => setFilters((f) => clearKind(f, k))}
         onClearAll={() => setFilters(emptyFilters())}
         order={order} chipCounts={chipCounts} unknownAsvIds={unknownAsvIds}
-        taxaMode={taxaMode} points={points} onPoints={setPoints} taxaLayers={taxaLayers}
+        taxaMode={taxaMode} points={points} onPoints={setPoints}
+        taxonRank={taxonRank} onTaxonRank={setTaxonRank} taxaLayers={taxaLayers}
         linkLength={linkLen} linkLengthDefault={LINK_LENGTH_DEFAULT}
         onLinkLength={(v) => { roam.current = null; setLinkLen(v); }}
         sizeAbsent={sizePresent === false}
