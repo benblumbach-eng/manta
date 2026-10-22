@@ -383,6 +383,7 @@ export type NetNode = {
   cluster: number;
   color: string;
   size: number | null;
+  rel_abundance?: number | null;
   n_samples_present: number;
   peak_month: number | null;
   starred?: boolean;
