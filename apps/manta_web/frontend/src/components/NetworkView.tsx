@@ -26,7 +26,7 @@ import ErrorNotice from "./ErrorNotice";
 import { esc, fmtP } from "../format";
 import { chainedCounts, clearKind, computeVisible, decodeFilters, emptyFilters, encodeFilters,
          hiddenBy, isActive, legendRows, thresholdLine, FILTER_KINDS,
-         type Filters, type FilterKind, layerLabel, functionLabel } from "../networkFilters";
+         type Filters, type FilterKind, type KeystoneCrit, layerLabel, functionLabel } from "../networkFilters";
 
 const COLLIDE_MARGIN = 1.5;
 const COLLIDE_ITERATIONS = 80;
@@ -203,11 +203,23 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   const hasRejected = (e: NetEdge) => (e.rejected_dirs ?? 0) > 0;
 
   const c2: Criterion2Summary | null = net?.criterion2 ?? null;
-  const c2Ids = useMemo(() => new Set(c2?.ids ?? []), [c2]);
+  const [crit, setCrit] = useState<KeystoneCrit>({ k1: false, k2: true });
+  const c1Ids = useMemo(() => {
+    const s = new Set<string>();
+    net?.edges.forEach((e) => { if ((e.ccm_dirs ?? 0) > 0) { s.add(e.source); s.add(e.target); } });
+    return s;
+  }, [net]);
+  const keyIds = useMemo(() => {
+    const sets = [crit.k1 ? c1Ids : null, crit.k2 ? new Set(c2?.ids ?? []) : null]
+      .filter((x): x is Set<string> => x != null);
+    if (!sets.length) return new Set<string>();
+    return new Set([...sets[0]].filter((id) => sets.every((s) => s.has(id))));
+  }, [c1Ids, c2, crit]);
+  const keyLabel = [crit.k1 && "1", crit.k2 && "2"].filter(Boolean).join(" + ");
 
   const vis = useMemo(
-    () => (net ? computeVisible(net, filters, c2Ids) : null),
-    [net, filters, c2Ids]);
+    () => (net ? computeVisible(net, filters, keyIds) : null),
+    [net, filters, keyIds]);
   const visibleNodes = useMemo(() => vis?.nodes ?? [], [vis]);
   const visibleEdges = useMemo(() => vis?.edges ?? [], [vis]);
   const visibleIds = useMemo(() => new Set(visibleNodes.map((n) => n.id)), [visibleNodes]);
@@ -295,9 +307,9 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   const crossCount = useMemo(() => visibleEdges.filter(isCross).length, [visibleEdges, nodeCluster]);
   const ccmCount = useMemo(() => visibleEdges.filter(hasCcm).length, [visibleEdges]);
   const rejectedCount = useMemo(() => visibleEdges.filter(hasRejected).length, [visibleEdges]);
-  const c2Visible = useMemo(() => visibleNodes.filter((n) => c2Ids.has(n.id)).length,
-    [visibleNodes, c2Ids]);
-  const c2Of = c2 && c2Visible !== c2.n_pass ? ` (of ${c2.n_pass} in the network)` : "";
+  const c2Visible = useMemo(() => visibleNodes.filter((n) => keyIds.has(n.id)).length,
+    [visibleNodes, keyIds]);
+  const c2Of = c2Visible !== keyIds.size ? ` (of ${keyIds.size} in the network)` : "";
   const isCrossDrawn = (e: NetEdge): boolean => {
     const tl = (e as unknown as { tax?: TaxonLink }).tax;
     return tl ? tl.n_crossing > 0 : isCross(e);
@@ -315,8 +327,8 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     () => (filters.asvs?.ids ?? []).filter((id) => !allIds.has(id)),
     [filters.asvs, allIds]);
   const chipCounts = useMemo(
-    () => (net ? chainedCounts(net, filters, c2Ids, order) : new Map<FilterKind, number>()),
-    [net, filters, c2Ids, order]);
+    () => (net ? chainedCounts(net, filters, keyIds, order) : new Map<FilterKind, number>()),
+    [net, filters, keyIds, order]);
 
   const selMarked = useMemo(() => {
     if (!sel) return new Set<string>();
@@ -347,7 +359,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     if (!net || !sel || sel.kind !== "asv" || visibleIds.has(sel.id)) return null;
     const n = net.nodes.find((x) => x.id === sel.id);
     if (!n) return null;
-    const kinds = hiddenBy(net, filters, c2Ids, n.id);
+    const kinds = hiddenBy(net, filters, keyIds, n.id);
     if (!kinds.length) return null;
     const label = (k: FilterKind): string => {
       switch (k) {
@@ -368,7 +380,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
       }
     };
     return { labels: kinds.map(label), kinds };
-  }, [net, sel, visibleIds, filters, c2Ids, modules]);
+  }, [net, sel, visibleIds, filters, keyIds, modules]);
 
   const EDGE_W_MIN = 1, EDGE_W_MAX = 5;
   const widthKind: "corr" | "ccm" | "rejected" | null =
@@ -638,7 +650,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
           + (p.data.share != null
             ? `<br/><span style="opacity:.75">${(100 * p.data.share).toFixed(2)} % of the summed abundance of the ${p.data.nPool} network ASVs</span>`
             : "")
-          + (p.data.c2 && c2 ? `<br/><span style="color:${tok.mark}">✦ hub</span>` : "");
+          + (p.data.c2 ? `<br/><span style="color:${tok.mark}">✦</span>` : "");
         const e: NetEdge | undefined = p.data?.manta;
         if (!e) return "";
         const dir = e.ccm_forward && e.ccm_backward ? "↔"
@@ -677,7 +689,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
           const xy: [number, number] = istRevolver
             ? [rev.revX as number, rev.revY as number]
             : (frozen?.get(n.id) ?? seedXY(n.id));
-          const glows = c2Ids.has(n.id);
+          const glows = keyIds.has(n.id);
           const isOpen = openAsvId != null && (n.id === openAsvId || n.id === gezeichnet(openAsvId));
           const isSelAsv = sel?.kind === "asv" && (n.id === sel.id || n.id === gezeichnet(sel.id));
           const marked = sel != null && sel.kind !== "asv" && markedDrawn.has(n.id);
@@ -768,7 +780,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
       },
     ],
   }), [drawNodes, drawEdges, taxaMode, offenerTaxon, maxSize, totalSize, net, nodeCluster, showLabels, frozen,
-       c2, c2Ids, seedXY, sel, selMarked, markedDrawn, gezeichnet, markColor, edgeWidth, openAsvId, dense, ring,
+       c2, keyIds, seedXY, sel, selMarked, markedDrawn, gezeichnet, markColor, edgeWidth, openAsvId, dense, ring,
        scale, edgeStrength, ewMin, ewMax, filters.layers, light, nodeOutline, selRing,
        labelColor, labelBorder, glowColours, tok, modules, colorMode, functionColor,
        linkLen, revolver, scheibe, zeichenfolge, nUnterScheibe, imRevolver, nSamples]);
@@ -811,10 +823,10 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     ccmVisible: filters.layers.ccm && ccmCount > 0,
     rejectedVisible: filters.layers.rejected && rejectedCount > 0,
     widthText,
-    c2Glow: c2 ? c2.glow : null, c2Visible: !taxaMode && c2Visible > 0,
+    c2Glow: keyLabel ? `criteria ${keyLabel}` : null, c2Visible: !taxaMode && c2Visible > 0,
     highlightActive: sel != null,
   }), [net, clusters.length, sizePresent, thr, ccmCount, rejectedCount, filters.layers,
-       widthText, c2, c2Visible, sel, colorMode, functionClasses.length, taxaMode, drawnCounts.cross]);
+       widthText, keyLabel, c2Visible, sel, colorMode, functionClasses.length, taxaMode, drawnCounts.cross]);
 
   const filterLineText = useCallback((): string => {
     if (!net || order.length === 0) return "Filters: none";
@@ -826,7 +838,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         }
         case "layer": return layerLabel(filters.layers);
         case "cross": return "crossing only";
-        case "c2": return "hubs only";
+        case "c2": return "✦ only";
         case "function": return `function ${functionLabel(filters.fn ?? "")}`;
         case "taxon": return filters.taxon ? `${filters.taxon.value} (${filters.taxon.rank})` : "taxon";
         case "asvs": return `${(filters.asvs?.ids.length ?? 0) - unknownAsvIds.length} selected ASVs`
@@ -863,7 +875,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
           conTr: thr?.con_tr ?? null, conAlpha: thr?.con_alpha ?? null,
           recorded: thr?.recorded ?? false })}`,
         ...(widthText ? [`  ${widthText}`] : []),
-        ...(c2 && !taxaMode ? [
+        ...(c2 && crit.k2 && !taxaMode ? [
           `  Hubs computed: ${c2.formula}`,
           `  Source: ${c2.source}`,
         ] : []),
@@ -876,7 +888,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         ] : []),
         `${drawnCounts.nodes} ${taxaMode ? "taxa" : "ASVs"} · ${drawnCounts.edges} edges · ${drawnCounts.ccm} with CCM · `
           + (!taxaMode && net.layers?.ccm_tested_recorded ? `${rejectedCount} with a rejected direction · ` : "")
-          + `${drawnCounts.cross} crossing modules${c2 && !taxaMode ? ` · ${c2Visible} hubs${c2Of}` : ""}`,
+          + `${drawnCounts.cross} crossing modules${keyLabel && !taxaMode ? ` · ${c2Visible} ✦${c2Of}` : ""}`,
       ];
       const pad = 24, lineH = 30;
       const c = document.createElement("canvas");
@@ -985,6 +997,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     <div className="h-full flex relative">
       <NetworkSidebar
         dataset={dataset} caps={caps} net={net} c2={c2} thr={thr}
+        crit={crit} onCrit={setCrit} nCrit1={c1Ids.size} nKey={keyIds.size}
         visibleNodes={visibleNodes} nSamples={nSamples}
         clusters={clusters} clusterColor={clusterColor} countByCluster={countByCluster}
         filters={filters} onFilters={patchFilters}
@@ -1201,7 +1214,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
 
       {legendeOffen && (
         <PanelFrame id="legend" title="Legend" onClose={() => setLegendeOffen(false)} defaultWidth={440}>
-          <LegendPanel datasetId={dataset.dataset_id} thr={thr} c2={c2}
+          <LegendPanel datasetId={dataset.dataset_id} thr={thr} c2={c2} keyLabel={keyLabel}
             labelMax={LABEL_AUTO_MAX} functionClasses={functionClasses} colorMode={colorMode}
             sizeAbsent={sizePresent === false} widthText={widthText}
             onClose={() => setLegendeOffen(false)} />
