@@ -4,6 +4,7 @@ import { getDatasets, getMe, logout, watchSession, SESSION_EVENT,
          type Dataset, type Me, type SessionChange } from "./api";
 import LoginScreen from "./components/LoginScreen";
 import AdminPanel from "./components/AdminPanel";
+import OwnModelSettings from "./components/OwnModelSettings";
 import MapView from "./components/MapView";
 import ImportTray from "./components/ImportTray";
 import NetworkView from "./components/NetworkView";
@@ -299,6 +300,7 @@ export default function App() {
             className="fixed right-2 top-12 w-80 rounded-md border border-line bg-overlay p-3 shadow-xl space-y-2">
             <h2 className="text-xs font-semibold text-fg-muted">Display</h2>
             <ThemeSwitch theme={theme} onTheme={setTheme} />
+            {me.username && <OwnModelSettings />}
           </div>, document.body)}
         {!selected ? (
           <ErrorBoundary key="map" label="the dataset map"><MapView datasets={datasets} light={theme === "light"} onSelect={selectDataset} onRefresh={refresh}

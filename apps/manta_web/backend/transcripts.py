@@ -83,12 +83,7 @@ def init_db() -> None:
 
 
 def admins_can_read() -> bool:
-    try:
-        import settings
-        wert = settings.get("admins_read_transcripts")
-    except Exception:
-        wert = os.environ.get("MANTA_ADMINS_READ_TRANSCRIPTS") or ""
-    return (wert or "on").strip().lower() != "off"
+    return (os.environ.get("MANTA_ADMINS_READ_TRANSCRIPTS") or "on").strip().lower() != "off"
 
 
 def _is_owner(user: auth.User, row: sqlite3.Row | dict) -> bool:
@@ -127,6 +122,7 @@ def known_secrets(*extra: str | None) -> list[str]:
     try:
         import settings
         werte += [settings.get(k) for k in settings.SECRET_KEYS]
+        werte.append(os.environ.get("MANTA_OPENAI_API_KEY"))
     except Exception:
         werte += [os.environ.get("MANTA_OPENAI_API_KEY"), os.environ.get("MANTA_SMTP_PASSWORD")]
     werte.append(os.environ.get("NEO4J_PASSWORD"))

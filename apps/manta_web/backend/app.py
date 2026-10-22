@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import (Depends, FastAPI, File, Form, Header, HTTPException, Query, Request,
+from fastapi import (Depends, FastAPI, File, Form, HTTPException, Query, Request,
                      Response, UploadFile)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -32,6 +32,7 @@ import auth
 import import_job
 import mailer
 import otter_estimate
+import own_model
 import settings
 import semantics
 import transcripts
@@ -323,45 +324,6 @@ def admin_reset_mail_settings(body: SettingKeys, me: auth.User = Depends(auth.ad
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     audit.note(me.username, "mail settings reset", ", ".join(sorted(body.keys)))
-    return antwort
-
-
-class AgentSettings(BaseModel):
-    ollama_model: str | None = None
-    grounding: str | None = None
-    openai_base_url: str | None = None
-    openai_api_key: str | None = None
-    openai_models: str | None = None
-    openai_timeout: str | None = None
-    provider_hosts: str | None = None
-    admins_read_transcripts: str | None = None
-
-
-@app.get("/admin/settings/agent", dependencies=[Depends(auth.admin)])
-def admin_agent_settings():
-    return settings.view()
-
-
-@app.put("/admin/settings/agent")
-def admin_set_agent_settings(patch: AgentSettings, me: auth.User = Depends(auth.admin)):
-    werte = {k: v for k, v in patch.model_dump().items() if v is not None}
-    if not werte:
-        raise HTTPException(400, "nothing to save")
-    try:
-        antwort = settings.set_many(werte, by=me.username)
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
-    audit.note(me.username, "assistant settings changed", ", ".join(sorted(werte)))
-    return antwort
-
-
-@app.post("/admin/settings/agent/reset")
-def admin_reset_agent_settings(body: SettingKeys, me: auth.User = Depends(auth.admin)):
-    try:
-        antwort = settings.reset(body.keys, by=me.username)
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
-    audit.note(me.username, "assistant settings reset", ", ".join(sorted(body.keys)))
     return antwort
 
 
@@ -1209,11 +1171,36 @@ class AgentAsk(BaseModel):
     model: str | None = None
     asv_id: str | None = None
     cluster: int | None = None
-    provider_url: str | None = None
+    own_model: bool = False
     history: list[HistoryTurn] | None = Field(None, max_length=MAX_HISTORY_TURNS)
     concept: str | None = None
     conversation_id: str | None = Field(None, max_length=64)
     question_kind: str | None = Field(None, max_length=64)
+
+
+class OwnModel(BaseModel):
+    base_url: str = Field(max_length=500)
+    model: str = Field(max_length=200)
+    key: str | None = Field(None, max_length=1000)
+
+
+@app.get("/me/own-model")
+def my_own_model(me: auth.User = Depends(auth.user)):
+    return own_model.view(me.username)
+
+
+@app.put("/me/own-model")
+def set_my_own_model(req: OwnModel, me: auth.User = Depends(auth.user)):
+    try:
+        return own_model.save(me.username, req.base_url, req.model, req.key)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.delete("/me/own-model")
+def remove_my_own_model(me: auth.User = Depends(auth.user)):
+    own_model.remove(me.username)
+    return {"set": False}
 
 
 @app.get("/agent/status")
@@ -1243,8 +1230,7 @@ def agent_tool_run(name: str, req: ToolRun):
 
 
 @app.post("/agent/ask")
-def agent_ask(req: AgentAsk, me: auth.User = Depends(auth.user),
-              provider_key: str | None = Header(default=None, alias="X-MANTA-Provider-Key")):
+def agent_ask(req: AgentAsk, me: auth.User = Depends(auth.user)):
     if not req.question.strip():
         raise HTTPException(422, "question must not be empty")
     try:
@@ -1255,18 +1241,13 @@ def agent_ask(req: AgentAsk, me: auth.User = Depends(auth.user),
         raise HTTPException(409, "This conversation belongs to another dataset. "
                                  "Start a new conversation here.") from e
     provider = None
-    if req.provider_url or provider_key:
-        if not req.provider_url:
-            raise HTTPException(400, "Own key without a provider address (provider_url).")
-        if not provider_key:
-            raise HTTPException(400, "Provider address without a key "
-                                     "(the X-MANTA-Provider-Key header is missing).")
-        if not req.model:
-            raise HTTPException(400, "Own provider without a model name (model).")
+    if req.own_model:
         try:
-            provider = agent.SessionProvider(req.provider_url, provider_key, req.model)
+            provider = own_model.provider(me.username)
         except agent.AgentError as e:
             raise HTTPException(400, str(e)) from e
+        if provider is None:
+            raise HTTPException(400, "No own model is set up (settings → Own model).")
     elif req.model:
         installed = agent.available().get("models_available") or []
         if req.model not in installed:
@@ -1295,7 +1276,7 @@ def agent_ask(req: AgentAsk, me: auth.User = Depends(auth.user),
                      "asv_id": req.asv_id, "cluster": req.cluster, "concept": req.concept,
                      "question_kind": req.question_kind,
                      "history_turns": len(verlauf or []), "own_key": provider is not None},
-            extra_secrets=(provider_key,))
+            extra_secrets=(provider.api_key if provider is not None else None,))
 
     try:
         antwort = agent.run(req.question.strip(), req.dataset_id, model=req.model,

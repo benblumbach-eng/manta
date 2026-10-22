@@ -4,13 +4,14 @@ import { MANTA_FIGURE } from "../design/dataColours";
 import { askAgent, describeError, errorText, getAgentStatus, getAgentTools, getAsv, getConcepts,
          getEnvironment, getNetwork, runTool, type Concept, type Concepts,
          type AgentAnswer, type AgentStatus, type Dataset, type EnvVariable, type Neighbor,
-         type ChatTurn, type NetNode, type OwnProvider, type ToolHelp,
+         type ChatTurn, type NetNode, type OwnModel, type ToolHelp, getOwnModel,
          type ToolRun , getApplicability, type Applicability,
          AgentAskError, getConversation, getConversations, type ConversationSummary,
          type StoredTurn } from "../api";
 import type { AskAssistant } from "./InfoTip";
 import { PanelHeader } from "./PanelFrame";
 import { useModules } from "../modules";
+import { OWN_MODEL_EVENT, hostOf } from "./OwnModelSettings";
 import { AnswerText, ConversationView, RawJson, TurnProtocol, checkText } from "./Transcript";
 
 type Turn =
@@ -44,7 +45,6 @@ function fromStored(ts: StoredTurn[]): Turn[] {
 
 const MODEL_KEY = "manta.agent.model";
 
-const OWN_KEY = "manta.agent.own";
 const USE_OWN_KEY = "manta.agent.useown";
 const OWN_OPTION = "__own__";
 const HELP_WORDS = new Set(["help", "?", "hilfe", "/help"]);
@@ -53,13 +53,6 @@ const MATCH_LABELS: Record<string, string> = {
   exakt: "exact", enger: "narrower", weiter: "broader", vorschlag: "proposed",
 };
 const matchLabel = (m: string) => MATCH_LABELS[m] ?? m;
-
-const PRESETS: Record<string, { label: string; base_url: string; model: string }> = {
-  anthropic: { label: "Anthropic (Claude)", base_url: "https://api.anthropic.com/v1",
-               model: "claude-sonnet-5" },
-  openai: { label: "OpenAI", base_url: "https://api.openai.com/v1", model: "" },
-  other: { label: "other (OpenAI-compatible)", base_url: "", model: "" },
-};
 
 const TOOL_GROUPS: { title: string; names: string[] }[] = [
   { title: "Datasets", names: ["list_datasets", "dataset_summary", "taxa_composition",
@@ -84,20 +77,6 @@ const EXTERNAL_SOURCES: { name: string; purpose: string; href: string; link: str
            + "Species. Shown as general knowledge, never as a module's function.",
     href: "https://www.marinespecies.org/rest/", link: "marinespecies.org/rest" },
 ];
-
-function loadOwn(): OwnProvider | null {
-  try {
-    const raw = sessionStorage.getItem(OWN_KEY);
-    if (!raw) return null;
-    const o = JSON.parse(raw);
-    return o && o.key && o.base_url && o.model ? o : null;
-  } catch { return null; }
-}
-
-function hostOf(url: string): string {
-  try { return new URL(url).host; } catch { return url; }
-}
-
 
 type Param = ToolHelp["params"][number];
 type Sugg = { value: string; label?: string };
@@ -287,13 +266,10 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
   const [conceptFilter, setConceptFilter] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const [own, setOwn] = useState<OwnProvider | null>(loadOwn);
+  const [own, setOwn] = useState<OwnModel | null>(null);
   const [useOwnNow, setUseOwnNow] = useState<boolean>(() => {
-    try { return sessionStorage.getItem(USE_OWN_KEY) === "1"; } catch { return false; }
+    try { return localStorage.getItem(USE_OWN_KEY) === "1"; } catch { return false; }
   });
-  const [ownForm, setOwnForm] = useState(false);
-  const [preset, setPreset] = useState<string>("anthropic");
-  const [draft, setDraft] = useState<OwnProvider>({ ...PRESETS.anthropic, key: "" });
   const [tools, setTools] = useState<ToolHelp[] | null>(null);
   const [toolsError, setToolsError] = useState<string | null>(null);
   const [toolFilter, setToolFilter] = useState("");
@@ -304,30 +280,17 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
   const [env, setEnv] = useState<{ ds: string; vars: EnvVariable[] } | null>(null);
   const [neigh, setNeigh] = useState<{ key: string; list: Neighbor[] } | null>(null);
 
-  function pickPreset(name: string) {
-    setPreset(name);
-    const p = PRESETS[name] ?? PRESETS.other;
-    setDraft((d) => ({ base_url: p.base_url, model: p.model, key: d.key }));
-  }
   function chooseOwn(on: boolean) {
     setUseOwnNow(on);
-    try { sessionStorage.setItem(USE_OWN_KEY, on ? "1" : "0"); } catch { }
+    try { localStorage.setItem(USE_OWN_KEY, on ? "1" : "0"); } catch { }
   }
-  function useOwn() {
-    const o = { base_url: draft.base_url.trim(), model: draft.model.trim(), key: draft.key.trim() };
-    if (!o.base_url || !o.model || !o.key) return;
-    try { sessionStorage.setItem(OWN_KEY, JSON.stringify(o)); } catch { }
-    setOwn(o);
-    chooseOwn(true);
-    setOwnForm(false);
-    setDraft((d) => ({ ...d, key: "" }));
-  }
-  function forgetOwn() {
-    try { sessionStorage.removeItem(OWN_KEY); } catch { }
-    setOwn(null);
-    chooseOwn(false);
-    setMenuOpen(false);
-  }
+  useEffect(() => {
+    if (!signedIn) return;
+    const load = () => getOwnModel().then((o) => setOwn(o.set ? o : null)).catch(() => setOwn(null));
+    load();
+    window.addEventListener(OWN_MODEL_EVENT, load);
+    return () => window.removeEventListener(OWN_MODEL_EVENT, load);
+  }, [signedIn]);
   function pickModel(name: string) {
     setModel(name);
     try { localStorage.setItem(MODEL_KEY, name); } catch { }
@@ -436,7 +399,7 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
     addTurn(k, { role: "user", text: q, tool });
     setBusy(true);
     try {
-      const viaOwn = own && ownActive ? own : undefined;
+      const viaOwn = ownActive;
       const alle: ChatTurn[] = [];
       for (const t of turns) {
         if (t.role === "user" && t.text.trim()) alle.push({ role: "user", content: t.text });
@@ -553,7 +516,7 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
     pickModel(localModel.name);
   }
   const modelLabel = ownActive && own
-    ? `own key · ${own.model}`
+    ? `own · ${own.model}`
     : status?.ok
       ? `${model}${current?.parameter_size ? ` · ${current.parameter_size}` : ""}${current?.remote ? " · remote" : ""}`
       : status ? "no model reachable" : "…";
@@ -796,29 +759,20 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
               ))}
               <div className="my-1 border-t border-line" />
               <div className="px-3 pt-1 pb-1 text-xs font-semibold text-fg-muted">
-                Your own key · this tab only
+                Own model
               </div>
               {own ? (
-                <>
-                  <button role="menuitemradio" data-testid="own-key-option" data-value={OWN_OPTION}
-                    aria-checked={ownActive}
-                    onClick={() => { chooseOwn(true); setMenuOpen(false); }}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-control">
-                    <span className="w-3 text-accent">{ownActive ? "✓" : ""}</span>
-                    <span className="text-fg truncate">own key · {own.model} · {hostOf(own.base_url)}</span>
-                  </button>
-                  <button data-testid="own-key-forget" onClick={forgetOwn}
-                    title="forget the key (this tab only ever had it)"
-                    className="w-full px-3 py-2 pl-[1.9rem] text-left text-fg-muted hover:bg-control hover:text-danger">
-                    forget key
-                  </button>
-                </>
-              ) : (
-                <button data-testid="own-key-toggle"
-                  onClick={() => { setOwnForm(true); setMenuOpen(false); }}
-                  className="w-full px-3 py-2 pl-[1.9rem] text-left text-accent hover:bg-control">
-                  Use your own key …
+                <button role="menuitemradio" data-testid="own-key-option" data-value={OWN_OPTION}
+                  aria-checked={ownActive}
+                  onClick={() => { chooseOwn(true); setMenuOpen(false); }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-control">
+                  <span className="w-3 text-accent">{ownActive ? "✓" : ""}</span>
+                  <span className="text-fg truncate">{own.model} · {hostOf(own.base_url ?? "")}</span>
                 </button>
+              ) : (
+                <div data-testid="own-key-hint" className="px-3 py-2 pl-[1.9rem] text-fg-muted">
+                  connect one under ⚙ settings
+                </div>
               )}
             </div>
           )}
@@ -840,56 +794,6 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
           )}
         </div>
       </div>
-
-      {ownForm && !own && (
-        <div data-testid="own-key-form" className="mx-4 mt-3 p-3 rounded border border-line bg-control/40 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-fg text-sm font-medium">Use your own key</span>
-            <button onClick={() => setOwnForm(false)} aria-label="Cancel"
-              className="text-fg-muted hover:text-fg text-xs">✕</button>
-          </div>
-          <p className="text-xs text-fg-muted leading-snug">
-            Kept in this tab only and sent with each question. The server stores nothing.
-          </p>
-          {([
-            ["Provider", (
-              <select data-testid="own-key-preset" value={preset} onChange={(e) => pickPreset(e.target.value)}
-                className={`${FIELD} border-line`}>
-                {Object.entries(PRESETS).map(([k, p]) => <option key={k} value={k}>{p.label}</option>)}
-              </select>
-            )],
-            ["Address", (
-              <input data-testid="own-key-url" value={draft.base_url} spellCheck={false}
-                onChange={(e) => setDraft((d) => ({ ...d, base_url: e.target.value }))}
-                placeholder="https://…/v1" className={`${FIELD} border-line font-mono`} />
-            )],
-            ["Model", (
-              <input data-testid="own-key-model" value={draft.model} spellCheck={false}
-                onChange={(e) => setDraft((d) => ({ ...d, model: e.target.value }))}
-                placeholder="model name" className={`${FIELD} border-line font-mono`} />
-            )],
-            ["Key", (
-              <input data-testid="own-key-secret" type="password" value={draft.key} autoComplete="off"
-                onChange={(e) => setDraft((d) => ({ ...d, key: e.target.value }))}
-                onKeyDown={(e) => { if (e.key === "Enter") useOwn(); }}
-                placeholder="sk-…" className={`${FIELD} border-line font-mono`} />
-            )],
-          ] as const).map(([label, control]) => (
-            <label key={label} className="flex items-center gap-2 text-xs text-fg-muted">
-              <span className="w-16 shrink-0">{label}</span>
-              <span className="flex-1 min-w-0">{control}</span>
-            </label>
-          ))}
-          <div className="flex justify-end gap-2 pt-1">
-            <button onClick={() => setOwnForm(false)}
-              className="px-2 py-1 rounded text-xs text-fg-muted hover:text-fg">cancel</button>
-            <Button variant="primary" data-testid="own-key-save" onClick={useOwn}
-              disabled={!draft.base_url.trim() || !draft.model.trim() || !draft.key.trim()}>
-              use in this tab
-            </Button>
-          </div>
-        </div>
-      )}
 
       <div className="px-4 pt-3 flex items-center gap-1 text-xs">
         <ToggleButton data-testid="agent-tab-chat" pressed={view === "chat"} onClick={() => setView("chat")}>
@@ -1134,7 +1038,7 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
             <div data-testid="agent-unavailable" className="rounded border border-warn bg-warn-soft p-3">
               <div className="text-warn text-xs font-medium">No model reachable</div>
               <p className="mt-1 text-xs text-fg leading-snug">
-                Start a local model with tool support, or pick “Use your own key” in the model menu.
+                Start a local model with tool support, or connect your own model under ⚙ settings.
               </p>
               {status.error && <p className="mt-1 text-2xs text-fg-muted">{status.error}</p>}
               {status.setup_hint && (
@@ -1304,7 +1208,7 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
                   </div>
                   {t.own_key && (
                     <div data-testid="own-key-mark" className="text-2xs text-ok">
-                      via your own key · {t.model}
+                      via your own model · {t.model}
                     </div>
                   )}
                   {t.ungrounded && t.ungrounded.length > 0 && (
