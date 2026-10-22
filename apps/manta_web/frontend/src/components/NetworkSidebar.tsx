@@ -11,6 +11,7 @@ import ErrorNotice from "./ErrorNotice";
 import DatasetFacts from "./DatasetFacts";
 import { Button, SectionHeading, TextButton, ToggleButton } from "./ui";
 import { Segmented } from "./controls";
+import { ABUNDANCE_STEPS } from "../networkFilters";
 
 const NEUTRAL_SWATCH = "var(--control-strong)";
 const BOX = "rounded-md border border-line bg-raised px-2 py-2 mb-2";
@@ -153,9 +154,14 @@ export default function NetworkSidebar(p: SidebarProps) {
   const [taxonOpen, setTaxonOpen] = useState(isActive(filters, "taxon"));
   const [functionOpen, setFunctionOpen] = useState(isActive(filters, "function"));
   const [asvOpen, setAsvOpen] = useState(isActive(filters, "asvs"));
-  const [sizeOpen, setSizeOpen] = useState(isActive(filters, "size"));
+  const [abundanceOpen, setAbundanceOpen] = useState(isActive(filters, "abundance"));
   const [presenceOpen, setPresenceOpen] = useState(isActive(filters, "presence"));
   const [strengthOpen, setStrengthOpen] = useState(isActive(filters, "strength"));
+  const rRange = useMemo((): [number, number] => {
+    const rs = (net?.edges ?? []).flatMap((e) => (e.corr != null ? [Math.abs(e.corr)] : []));
+    if (!rs.length) return [0, 1];
+    return [Math.floor(Math.min(...rs) * 100) / 100, Math.ceil(Math.max(...rs) * 100) / 100];
+  }, [net]);
   const [taxRank, setTaxRank] = useState("genus");
   const [taxValue, setTaxValue] = useState("");
   const [asvText, setAsvText] = useState(filters.asvs?.ids.join("\n") ?? "");
@@ -164,7 +170,7 @@ export default function NetworkSidebar(p: SidebarProps) {
     if (isActive(filters, "taxon")) setTaxonOpen(true);
     if (isActive(filters, "function")) setFunctionOpen(true);
     if (isActive(filters, "asvs")) setAsvOpen(true);
-    if (isActive(filters, "size")) setSizeOpen(true);
+    if (isActive(filters, "abundance")) setAbundanceOpen(true);
     if (isActive(filters, "presence")) setPresenceOpen(true);
     if (isActive(filters, "strength")) setStrengthOpen(true);
   }, [filters]);
@@ -209,12 +215,8 @@ export default function NetworkSidebar(p: SidebarProps) {
         return `ASVs: ${valid}${filters.asvs?.neighbors ? " +neighbours" : ""}`;
       }
       case "presence": return `present in ≥ ${filters.presence ?? 1} samples`;
-      case "size": return filters.size
-        ? `size: ${filters.size.dir === "top" ? "largest" : "smallest"} ${filters.size.pct} %`
-        : "size";
-      case "strength": return filters.strength
-        ? `links: ${filters.strength.dir === "top" ? "strongest" : "weakest"} ${filters.strength.pct} % (r)`
-        : "strength";
+      case "abundance": return `abundance ≥ ${filters.abundance ?? 0} %`;
+      case "strength": return `r ≥ ${filters.strength?.toFixed(2) ?? ""}`;
     }
   };
 
@@ -780,51 +782,39 @@ export default function NetworkSidebar(p: SidebarProps) {
           </div>
         )}
 
-        {sizeOpen && (
-          <div className={BOX} data-testid="filter-size-section">
-            <SectionHeading className="mb-1">Node size (total read count)</SectionHeading>
+        {abundanceOpen && (() => {
+          const i = filters.abundance != null
+            ? Math.max(0, ABUNDANCE_STEPS.indexOf(filters.abundance)) : ABUNDANCE_STEPS.indexOf(0.1);
+          return (
+          <div className={BOX} data-testid="filter-abundance-section">
+            <SectionHeading className="mb-1">Mean relative abundance</SectionHeading>
             <div className="flex items-center gap-2 text-xs text-fg">
-              <select data-testid="filter-size-dir" aria-label="node size direction"
-                value={filters.size?.dir ?? "top"}
-                onChange={(e) => p.onFilters({ size: { dir: e.target.value as "top" | "bottom",
-                                                       pct: filters.size?.pct ?? 20 } })}
-                className="px-1 py-1 rounded bg-control border border-line-strong text-xs text-fg">
-                <option value="top">largest</option>
-                <option value="bottom">smallest</option>
-              </select>
-              <input data-testid="filter-size-pct" type="range" min={5} max={100} step={5}
-                aria-label="node size percent" aria-valuetext={`${filters.size?.pct ?? 20} %`}
-                value={filters.size?.pct ?? 20}
-                onChange={(e) => p.onFilters({ size: { dir: filters.size?.dir ?? "top",
-                                                       pct: Number(e.target.value) } })}
+              <input data-testid="filter-abundance" type="range" min={0}
+                max={ABUNDANCE_STEPS.length - 1} step={1}
+                aria-label="minimum mean relative abundance"
+                aria-valuetext={`${ABUNDANCE_STEPS[i]} %`} value={i}
+                onChange={(e) => p.onFilters({ abundance: ABUNDANCE_STEPS[Number(e.target.value)] })}
                 className="flex-1" />
-              <span className="tabular-nums w-10 text-right" data-testid="filter-size-pct-value">
-                {filters.size ? `${filters.size.pct} %` : "—"}
+              <span className="tabular-nums w-16 text-right" data-testid="filter-abundance-value">
+                {filters.abundance != null ? `≥ ${filters.abundance} %` : "off"}
               </span>
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {strengthOpen && (
           <div className={BOX} data-testid="filter-strength-section">
-            <SectionHeading className="mb-1">Link strength (r of the co-occurrence)</SectionHeading>
+            <SectionHeading className="mb-1">Link strength (r)</SectionHeading>
             <div className="flex items-center gap-2 text-xs text-fg">
-              <select data-testid="filter-strength-dir" aria-label="link strength direction"
-                value={filters.strength?.dir ?? "top"}
-                onChange={(e) => p.onFilters({ strength: { dir: e.target.value as "top" | "bottom",
-                                                           pct: filters.strength?.pct ?? 20 } })}
-                className="px-1 py-1 rounded bg-control border border-line-strong text-xs text-fg">
-                <option value="top">strongest</option>
-                <option value="bottom">weakest</option>
-              </select>
-              <input data-testid="filter-strength-pct" type="range" min={5} max={100} step={5}
-                aria-label="link strength percent" aria-valuetext={`${filters.strength?.pct ?? 20} %`}
-                value={filters.strength?.pct ?? 20}
-                onChange={(e) => p.onFilters({ strength: { dir: filters.strength?.dir ?? "top",
-                                                           pct: Number(e.target.value) } })}
+              <input data-testid="filter-strength" type="range" min={rRange[0]} max={rRange[1]}
+                step={0.01} aria-label="minimum r"
+                aria-valuetext={`r ≥ ${(filters.strength ?? rRange[0]).toFixed(2)}`}
+                value={filters.strength ?? rRange[0]}
+                onChange={(e) => p.onFilters({ strength: Number(e.target.value) })}
                 className="flex-1" />
-              <span className="tabular-nums w-10 text-right" data-testid="filter-strength-pct-value">
-                {filters.strength ? `${filters.strength.pct} %` : "—"}
+              <span className="tabular-nums w-16 text-right" data-testid="filter-strength-value">
+                {filters.strength != null ? `≥ ${filters.strength.toFixed(2)}` : "off"}
               </span>
             </div>
           </div>
@@ -868,13 +858,13 @@ export default function NetworkSidebar(p: SidebarProps) {
                 className="w-full text-left px-2 py-1 hover:bg-control text-fg">
                 present in ≥ N samples …
               </button>
-              <button data-testid="filter-add-size" disabled={p.sizeAbsent}
+              <button data-testid="filter-add-abundance" disabled={p.sizeAbsent}
                 title={p.sizeAbsent
                   ? "not applicable: this dataset carries no read counts (transformed values)"
                   : undefined}
-                onClick={() => { setSizeOpen(true); setAddOpen(false); }}
+                onClick={() => { setAbundanceOpen(true); setAddOpen(false); }}
                 className="w-full text-left px-2 py-1 hover:bg-control text-fg disabled:text-fg-disabled disabled:hover:bg-transparent">
-                node size …
+                abundance …
               </button>
               <button data-testid="filter-add-strength"
                 onClick={() => { setStrengthOpen(true); setAddOpen(false); }}

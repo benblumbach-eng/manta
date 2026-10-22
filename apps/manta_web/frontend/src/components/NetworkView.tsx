@@ -368,15 +368,11 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         case "taxon": return filters.taxon ? `${filters.taxon.value} (${filters.taxon.rank})` : "taxon";
         case "asvs": return "ASV selection";
         case "presence": return `present in ≥ ${filters.presence ?? 1} samples`;
-        case "size": return filters.size
-          ? `node size (${filters.size.dir === "top" ? "largest" : "smallest"} ${filters.size.pct} %)`
-          : "node size";
+        case "abundance": return `abundance ≥ ${filters.abundance ?? 0} %`;
         case "layer": return layerLabel(filters.layers);
         case "function": return `function ${functionLabel(filters.fn ?? "")}`;
         case "cross": return "crossing links only";
-        case "strength": return filters.strength
-          ? `link strength (${filters.strength.dir === "top" ? "strongest" : "weakest"} ${filters.strength.pct} %)`
-          : "link strength";
+        case "strength": return `r ≥ ${filters.strength?.toFixed(2) ?? ""}`;
       }
     };
     return { labels: kinds.map(label), kinds };
@@ -844,12 +840,8 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         case "asvs": return `${(filters.asvs?.ids.length ?? 0) - unknownAsvIds.length} selected ASVs`
           + (filters.asvs?.neighbors ? " + neighbours" : "");
         case "presence": return `present in ≥ ${filters.presence ?? 1} of ${nSamples} samples`;
-        case "size": return filters.size
-          ? `${filters.size.dir === "top" ? "largest" : "smallest"} ${filters.size.pct} % by read count`
-          : "size";
-        case "strength": return filters.strength
-          ? `${filters.strength.dir === "top" ? "strongest" : "weakest"} ${filters.strength.pct} % of links (r)`
-          : "strength";
+        case "abundance": return `mean relative abundance ≥ ${filters.abundance ?? 0} %`;
+        case "strength": return `r ≥ ${filters.strength?.toFixed(2) ?? ""}`;
       }
     }).join(" · ");
     return `Filters: ${txt} — ${visibleNodes.length} of ${net.nodes.length} ASVs shown`;

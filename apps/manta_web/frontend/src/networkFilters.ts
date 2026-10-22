@@ -4,11 +4,10 @@ import type { NetEdge, NetNode, Network } from "./api";
 export type KeystoneCrit = { k1: boolean; k2: boolean };
 
 export type FilterKind = "modules" | "layer" | "cross" | "c2" | "function" | "taxon" | "asvs"
-  | "presence" | "size" | "strength";
+  | "presence" | "abundance" | "strength";
 
 export type TaxonFilter = { rank: string; value: string };
 export type AsvFilter = { ids: string[]; neighbors: boolean };
-export type QuantileFilter = { dir: "top" | "bottom"; pct: number };
 
 export type Filters = {
   hidden: Set<number>;
@@ -19,15 +18,15 @@ export type Filters = {
   taxon: TaxonFilter | null;
   asvs: AsvFilter | null;
   presence: number | null;
-  size: QuantileFilter | null;
-  strength: QuantileFilter | null;
+  abundance: number | null;
+  strength: number | null;
 };
 
 export const DEFAULT_LAYERS = { con: true, ccm: true, rejected: false } as const;
 
 export const emptyFilters = (): Filters => ({
   hidden: new Set(), layers: { ...DEFAULT_LAYERS }, crossOnly: false, c2Only: false,
-  fn: null, taxon: null, asvs: null, presence: null, size: null, strength: null,
+  fn: null, taxon: null, asvs: null, presence: null, abundance: null, strength: null,
 });
 
 export const layersDefault = (l: Filters["layers"]): boolean =>
@@ -47,7 +46,7 @@ export function layerLabel(l: Filters["layers"]): string {
 }
 
 export const FILTER_KINDS: FilterKind[] = ["modules", "layer", "cross", "c2", "function", "taxon",
-                                           "asvs", "presence", "size", "strength"];
+                                           "asvs", "presence", "abundance", "strength"];
 
 export const functionLabel = (fn: string): string => (fn === "" ? "not annotated" : fn);
 
@@ -61,7 +60,7 @@ export const isActive = (f: Filters, k: FilterKind): boolean => {
     case "taxon": return f.taxon != null;
     case "asvs": return (f.asvs?.ids.length ?? 0) > 0;
     case "presence": return f.presence != null;
-    case "size": return f.size != null;
+    case "abundance": return f.abundance != null;
     case "strength": return f.strength != null;
   }
 };
@@ -76,7 +75,7 @@ export const takeKind = (dst: Filters, src: Filters, k: FilterKind): Filters => 
     case "taxon": return { ...dst, taxon: src.taxon };
     case "asvs": return { ...dst, asvs: src.asvs };
     case "presence": return { ...dst, presence: src.presence };
-    case "size": return { ...dst, size: src.size };
+    case "abundance": return { ...dst, abundance: src.abundance };
     case "strength": return { ...dst, strength: src.strength };
   }
 };
@@ -92,12 +91,7 @@ export type Visible = {
 const hasCcm = (e: NetEdge) => (e.ccm_dirs ?? 0) > 0;
 const hasRejected = (e: NetEdge) => (e.rejected_dirs ?? 0) > 0;
 
-function quantileCut(values: number[], q: QuantileFilter): number | null {
-  if (!values.length) return null;
-  const sorted = [...values].sort((a, b) => (q.dir === "top" ? b - a : a - b));
-  const n = Math.max(1, Math.min(sorted.length, Math.round((sorted.length * q.pct) / 100)));
-  return sorted[n - 1];
-}
+export const ABUNDANCE_STEPS = [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5];
 
 export function computeVisible(net: Network, f: Filters, c2Ids: Set<string>): Visible {
   const asvSet = new Set(f.asvs?.ids ?? []);
@@ -109,9 +103,6 @@ export function computeVisible(net: Network, f: Filters, c2Ids: Set<string>): Vi
     }
   }
   const asvActive = asvSet.size > 0;
-  const sizeCut = f.size
-    ? quantileCut(net.nodes.map((n) => n.size).filter((v): v is number => v != null), f.size)
-    : null;
   const pass = (n: NetNode): boolean => {
     if (f.hidden.has(n.cluster)) return false;
     if (f.c2Only && !c2Ids.has(n.id)) return false;
@@ -121,26 +112,15 @@ export function computeVisible(net: Network, f: Filters, c2Ids: Set<string>): Vi
     if (asvActive && !asvSet.has(n.id)
         && !(f.asvs!.neighbors && neighborSet.has(n.id))) return false;
     if (f.presence != null && (n.n_samples_present ?? 0) < f.presence) return false;
-    if (f.size && sizeCut != null) {
-      if (n.size == null) return false;
-      if (f.size.dir === "top" ? n.size < sizeCut : n.size > sizeCut) return false;
-    }
+    if (f.abundance != null && (n.rel_abundance ?? 0) * 100 < f.abundance) return false;
     return true;
   };
   const nodes = net.nodes.filter(pass);
   const ids = new Set(nodes.map((n) => n.id));
   const clusterOf = new Map(net.nodes.map((n) => [n.id, n.cluster]));
   const isCross = (e: NetEdge) => clusterOf.get(e.source) !== clusterOf.get(e.target);
-  const strengthCut = f.strength
-    ? quantileCut(net.edges.map((e) => (e.corr != null ? Math.abs(e.corr) : null))
-        .filter((v): v is number => v != null), f.strength)
-    : null;
-  const strengthPass = (e: NetEdge): boolean => {
-    if (!f.strength || strengthCut == null) return true;
-    const v = e.corr != null ? Math.abs(e.corr) : null;
-    if (v == null) return false;
-    return f.strength.dir === "top" ? v >= strengthCut : v <= strengthCut;
-  };
+  const strengthPass = (e: NetEdge): boolean =>
+    f.strength == null || (e.corr != null && Math.abs(e.corr) >= f.strength);
   const edgesInView = net.edges.filter((e) => ids.has(e.source) && ids.has(e.target));
   const L = f.layers;
   const layerPass = (e: NetEdge): boolean =>
@@ -149,7 +129,7 @@ export function computeVisible(net: Network, f: Filters, c2Ids: Set<string>): Vi
     (e) => (!f.crossOnly || isCross(e)) && layerPass(e) && strengthPass(e));
   const layerRestricts = !L.con && (L.ccm || L.rejected);
   const edgeFilterActive = f.crossOnly || layerRestricts
-    || (f.strength != null && strengthCut != null);
+    || f.strength != null;
   if (!edgeFilterActive) return { nodes, edges, edgesInView };
   const linked = new Set<string>();
   edges.forEach((e) => { linked.add(e.source); linked.add(e.target); });
@@ -197,8 +177,8 @@ export function encodeFilters(f: Filters): string {
   if (f.asvs?.ids.length)
     seg.push("a" + (f.asvs.neighbors ? "n" : "") + "-" + f.asvs.ids.join("."));
   if (f.presence != null) seg.push(`pr-${f.presence}`);
-  if (f.size) seg.push(`sz-${f.size.dir === "top" ? "t" : "b"}${f.size.pct}`);
-  if (f.strength) seg.push(`st-${f.strength.dir === "top" ? "t" : "b"}${f.strength.pct}`);
+  if (f.abundance != null) seg.push(`ab-${f.abundance}`);
+  if (f.strength != null) seg.push(`r-${f.strength}`);
   return seg.join(";");
 }
 
@@ -225,10 +205,12 @@ export function decodeFilters(s: string | null): Filters {
     } else if (/^pr-\d+$/.test(seg)) {
       const n = Number(seg.slice(3));
       if (n >= 1) f.presence = n;
-    } else if (/^s[zt]-[tb]\d+$/.test(seg)) {
-      const q: QuantileFilter = { dir: seg[3] === "t" ? "top" : "bottom",
-                                  pct: Math.min(100, Math.max(1, Number(seg.slice(4)))) };
-      if (seg.startsWith("sz-")) f.size = q; else f.strength = q;
+    } else if (/^ab-[\d.]+$/.test(seg)) {
+      const v = Number(seg.slice(3));
+      if (v > 0) f.abundance = v;
+    } else if (/^r-[\d.]+$/.test(seg)) {
+      const v = Number(seg.slice(2));
+      if (v > 0 && v <= 1) f.strength = v;
     }
   }
   return f;
