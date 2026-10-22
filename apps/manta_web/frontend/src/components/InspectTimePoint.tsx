@@ -10,7 +10,7 @@ const PAGE = 50;
 const pct = (v: number | null) => (v == null ? "—" : `${(100 * v).toFixed(v < 0.001 ? 3 : 2)} %`);
 
 export default function InspectTimePoint({ datasetId, samples, sample, onSample, env, onOpenAsv,
-                                           chosen, full, onAdd }: {
+                                           chosen, marked, full, onAdd }: {
   datasetId: string;
   samples: SampleList["samples"];
   sample: string | null;
@@ -18,6 +18,7 @@ export default function InspectTimePoint({ datasetId, samples, sample, onSample,
   env: Environment | null;
   onOpenAsv: (id: string) => void;
   chosen: Set<string>;
+  marked: string | null;
   full: boolean;
   onAdd: (kind: "asv" | "cluster", id: string) => void;
 }) {
@@ -56,6 +57,12 @@ export default function InspectTimePoint({ datasetId, samples, sample, onSample,
       && (!q || a.id.toLowerCase().includes(q) || a.taxa.some((t) => t.toLowerCase().includes(q))));
   }, [data, text, modul, minShare]);
   const maxShare = gezeigt.length ? Math.max(...gezeigt.map((a) => a.share ?? 0)) : 0;
+  const markIndex = marked?.startsWith("asv:")
+    ? gezeigt.findIndex((a) => `asv:${a.id}` === marked) : -1;
+  useEffect(() => {
+    if (markIndex >= PAGE) setAlle(true);
+  }, [markIndex]);
+
   const plus = (kind: "asv" | "cluster", id: string, name: string) => {
     const drin = chosen.has(`${kind}:${id}`);
     return (
@@ -67,6 +74,16 @@ export default function InspectTimePoint({ datasetId, samples, sample, onSample,
       </button>
     );
   };
+  const markiert = (() => {
+    if (!data || !marked) return null;
+    const [art, id] = [marked.slice(0, marked.indexOf(":")), marked.slice(marked.indexOf(":") + 1)];
+    if (art === "asv") {
+      const a = data.asvs.find((x) => x.id === id);
+      return { asv: true, name: id, share: a?.share ?? 0 };
+    }
+    const m = data.modules.find((x) => String(x.cluster) === id);
+    return { asv: false, name: modules.label(Number(id)), share: m?.share ?? 0 };
+  })();
   const maxMod = data?.modules.length ? Math.max(...data.modules.map((m) => m.share ?? 0)) : 0;
 
   return (
@@ -92,6 +109,12 @@ export default function InspectTimePoint({ datasetId, samples, sample, onSample,
             data-testid="tp-facts">
             <dt className="text-fg-muted">ASVs detected</dt>
             <dd className="text-right font-semibold tabular-nums">{data.asvs.length}</dd>
+            {markiert && (
+              <div className="contents" data-testid="tp-marked">
+                <dt className={markiert.asv ? "font-mono text-accent" : "text-fg"}>{markiert.name}</dt>
+                <dd className="text-right font-semibold tabular-nums">{pct(markiert.share)}</dd>
+              </div>
+            )}
             {envHier.map((v) => (
               <div key={v.key} className="contents">
                 <dt className="text-fg-muted">{v.label}</dt>
@@ -107,8 +130,10 @@ export default function InspectTimePoint({ datasetId, samples, sample, onSample,
             <ul className="space-y-1" data-testid="tp-modules">
               {data.modules.map((m) => {
                 const an = modul === m.cluster;
+                const mark = marked === `cluster:${m.cluster}`;
                 return (
-                  <li key={m.cluster} className="flex items-center gap-1">
+                  <li key={m.cluster} data-marked={mark || undefined}
+                    className={`flex items-center gap-1 rounded ${mark ? "ring-1 ring-accent" : ""}`}>
                     <button data-testid="tp-module" aria-pressed={an}
                       onClick={() => setModul(an ? null : m.cluster)}
                       className={`flex-1 min-w-0 grid grid-cols-[6rem_1fr_4.5rem] items-center gap-2 rounded px-1 py-1 text-left ${an
@@ -160,9 +185,11 @@ export default function InspectTimePoint({ datasetId, samples, sample, onSample,
             </p>
             <ul data-testid="tp-asvs">
               {(alle ? gezeigt : gezeigt.slice(0, PAGE)).map((a) => (
-                <li key={a.id} className="flex items-center gap-1">
+                <li key={a.id} data-marked={marked === `asv:${a.id}` || undefined}
+                  className={`flex items-center gap-1 rounded ${marked === `asv:${a.id}` ? "ring-1 ring-accent" : ""}`}>
                   <button data-testid="tp-asv" onClick={() => onOpenAsv(a.id)}
-                    className="flex-1 min-w-0 grid grid-cols-[2rem_1fr_5rem_4.5rem] items-center gap-2 rounded px-1 py-1 text-left hover:bg-control">
+                    className={`flex-1 min-w-0 grid grid-cols-[2rem_1fr_5rem_4.5rem] items-center gap-2 rounded px-1 py-1 text-left ${
+                      marked === `asv:${a.id}` ? "bg-accent-soft" : "hover:bg-control"}`}>
                     <span className="text-fg-muted tabular-nums">{a.rank}</span>
                     <span className="truncate">
                       <span className="inline-block w-2 h-2 rounded-full mr-1 align-middle"

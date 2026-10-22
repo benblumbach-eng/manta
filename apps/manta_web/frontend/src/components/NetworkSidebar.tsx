@@ -8,7 +8,7 @@ import { fmtShare } from "../format";
 import ErrorNotice from "./ErrorNotice";
 import DatasetFacts from "./DatasetFacts";
 import { Button, SectionHeading, TextButton, ToggleButton } from "./ui";
-import { Segmented } from "./controls";
+import { Segmented, SliderNumber } from "./controls";
 import { ABUNDANCE_STEPS } from "../networkFilters";
 
 const BOX = "rounded-md border border-line bg-raised px-2 py-2 mb-2";
@@ -458,12 +458,11 @@ export default function NetworkSidebar(p: SidebarProps) {
 
           <div className="mb-2" data-testid="link-length-control">
             <div className="flex gap-2 items-center">
-              <span className="text-xs text-fg-muted">Link length</span>
-              <input type="range" data-testid="link-length" aria-label="link length"
-                min={60} max={900} step={20} value={lenDraft}
-                onChange={(e) => setLenDraft(Number(e.target.value))}
-                className="flex-1 accent-accent-fill" />
-              <span className="w-8 text-right text-xs tabular-nums text-fg-muted">{lenDraft}</span>
+              <span className="text-xs text-fg-muted whitespace-nowrap">Link length</span>
+              <div className="flex-1">
+                <SliderNumber testid="link-length" label="link length" min={0} max={100}
+                  value={lenDraft} fallback={p.linkLengthDefault} onChange={setLenDraft} />
+              </div>
               <button data-testid="link-length-reset" onClick={() => setLenDraft(p.linkLengthDefault)}
                 disabled={lenDraft === p.linkLengthDefault} title="back to the default length"
                 aria-label="back to the default length"
@@ -700,56 +699,29 @@ export default function NetworkSidebar(p: SidebarProps) {
         {presenceOpen && (
           <div className={BOX} data-testid="filter-presence-section">
             <SectionHeading className="mb-1">Present in at least … samples</SectionHeading>
-            <div className="flex items-center gap-2 text-xs text-fg">
-              <input data-testid="filter-presence-n" type="range" min={1}
-                max={Math.max(1, p.nSamples)} step={1}
-                aria-label="minimum number of samples"
-                aria-valuetext={`${filters.presence ?? PRESENCE_START} samples`}
-                value={filters.presence ?? Math.min(PRESENCE_START, Math.max(1, p.nSamples))}
-                onChange={(e) => p.onFilters({ presence: Number(e.target.value) })}
-                className="flex-1" />
-              <span className="tabular-nums w-16 text-right" data-testid="filter-presence-value">
-                {filters.presence != null ? `≥ ${filters.presence} of ${p.nSamples}` : "off"}
-              </span>
-            </div>
+            <SliderNumber testid="filter-presence-n" label="minimum number of samples"
+              min={1} max={Math.max(1, p.nSamples)} value={filters.presence}
+              fallback={Math.min(PRESENCE_START, Math.max(1, p.nSamples))}
+              onChange={(v) => p.onFilters({ presence: Math.round(v) })}
+              prefix="≥" suffix={`of ${p.nSamples}`} />
           </div>
         )}
 
-        {abundanceOpen && (() => {
-          const i = filters.abundance != null
-            ? Math.max(0, ABUNDANCE_STEPS.indexOf(filters.abundance)) : ABUNDANCE_STEPS.indexOf(0.1);
-          return (
+        {abundanceOpen && (
           <div className={BOX} data-testid="filter-abundance-section">
             <SectionHeading className="mb-1">Mean relative abundance</SectionHeading>
-            <div className="flex items-center gap-2 text-xs text-fg">
-              <input data-testid="filter-abundance" type="range" min={0}
-                max={ABUNDANCE_STEPS.length - 1} step={1}
-                aria-label="minimum mean relative abundance"
-                aria-valuetext={`${ABUNDANCE_STEPS[i]} %`} value={i}
-                onChange={(e) => p.onFilters({ abundance: ABUNDANCE_STEPS[Number(e.target.value)] })}
-                className="flex-1" />
-              <span className="tabular-nums w-16 text-right" data-testid="filter-abundance-value">
-                {filters.abundance != null ? `≥ ${filters.abundance} %` : "off"}
-              </span>
-            </div>
+            <SliderNumber testid="filter-abundance" label="minimum mean relative abundance"
+              min={0} max={100} steps={ABUNDANCE_STEPS} value={filters.abundance} fallback={0.1}
+              onChange={(v) => p.onFilters({ abundance: v })} prefix="≥" suffix="%" />
           </div>
-          );
-        })()}
+        )}
 
         {strengthOpen && (
           <div className={BOX} data-testid="filter-strength-section">
             <SectionHeading className="mb-1">Link strength (r)</SectionHeading>
-            <div className="flex items-center gap-2 text-xs text-fg">
-              <input data-testid="filter-strength" type="range" min={rRange[0]} max={rRange[1]}
-                step={0.01} aria-label="minimum r"
-                aria-valuetext={`r ≥ ${(filters.strength ?? rRange[0]).toFixed(2)}`}
-                value={filters.strength ?? rRange[0]}
-                onChange={(e) => p.onFilters({ strength: Number(e.target.value) })}
-                className="flex-1" />
-              <span className="tabular-nums w-16 text-right" data-testid="filter-strength-value">
-                {filters.strength != null ? `≥ ${filters.strength.toFixed(2)}` : "off"}
-              </span>
-            </div>
+            <SliderNumber testid="filter-strength" label="minimum r"
+              min={rRange[0]} max={rRange[1]} step={0.01} value={filters.strength}
+              fallback={rRange[0]} onChange={(v) => p.onFilters({ strength: v })} prefix="≥" />
           </div>
         )}
 

@@ -5,7 +5,6 @@ import { getAsv, getTaxon, setAsvNote, setAsvStar,
 import type { EdgeRef } from "../App";
 import { useModules } from "../modules";
 import FrequencyPanel from "./FrequencyPanel";
-import EnvironmentBars from "./EnvironmentBars";
 import NeighbourNet from "./NeighbourNet";
 import NoteBox from "./NoteBox";
 import ErrorNotice from "./ErrorNotice";
@@ -205,19 +204,6 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
             </h3>
             <FrequencyPanel freq={d.frequency} testid="asv-frequency" onPointClick={onInspectAt} />
           </section>
-
-          {findCap(caps, "environment")?.available && (
-          <section data-testid="asv-env-section">
-            <h3 className="text-fg font-medium mb-1">Environment where it was found</h3>
-            {d.environment_profile.items.length === 0 ? (
-              <p className="text-xs text-fg-muted" data-testid="asv-env-missing">
-                No measured conditions for the samples where this ASV was found.
-              </p>
-            ) : (
-              <EnvironmentBars profile={d.environment_profile} />
-            )}
-          </section>
-          )}
 
           <section>
             <h3 className="text-fg font-medium mb-1 flex items-center">Neighbours</h3>

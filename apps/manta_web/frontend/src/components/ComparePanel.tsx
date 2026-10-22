@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import ReactECharts from "echarts-for-react";
 import { getAsv, getAsvList, getCluster, getEnvironment, getModules, getSamples,
          type Environment, type ModuleLabel, type SampleList } from "../api";
 import { Chooser, ChooserRow, Segmented } from "./controls";
@@ -9,25 +10,28 @@ import ErrorNotice from "./ErrorNotice";
 import { fmtShare } from "../format";
 import InspectTimePoint from "./InspectTimePoint";
 import { useDatasetSearch } from "../datasetSearch";
-import { useTokens } from "../design/tokens";
+import { chartTooltip, FONT, useTokens } from "../design/tokens";
 import { seriesColour } from "../design/dataColours";
+import { esc } from "../format";
+import { useNearestPointClick } from "../chartClick";
 
 
 const MAX_CURVES = 6;
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-const SHARE_UNIT = "share of the analysed values of one sample";
+const DOTS = "time points";
+const MONATE = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 type Kind = "asv" | "cluster" | "env";
+export type InspectMark = { kind: "asv" | "cluster"; id: string };
 type Punkt = { t: number; date: string; value: number | null };
 type Curve = {
   key: string; kind: Kind; id: string; label: string; sub: string | null;
-  unit: string; scale: "ratio" | "interval";
-  share: boolean;
+  unit: string | null;
   points: Punkt[];
 };
-type Mode = "absolute" | "peak" | "range";
 type Tab = "time" | "point";
+
+const prozent = (v: number, max: number) =>
+  `${(100 * v).toFixed(max < 0.001 ? 3 : max < 0.1 ? 2 : 1)} %`;
 
 const ausPunkten = (rohe: { date: string | null; value: number | null }[]): Punkt[] =>
   rohe
@@ -36,11 +40,12 @@ const ausPunkten = (rohe: { date: string | null; value: number | null }[]): Punk
     .filter((p) => Number.isFinite(p.t))
     .sort((a, b) => a.t - b.t);
 
-export default function ComparePanel({ datasetId, initialAsvId, initialSample, sampleTick,
+export default function ComparePanel({ datasetId, initialAsvId, initialSample, mark, sampleTick,
                                        onClose, onOpenAsv }: {
   datasetId: string;
   initialAsvId?: string;
   initialSample?: string;
+  mark?: InspectMark;
   sampleTick?: number;
   onClose: () => void;
   onOpenAsv: (id: string) => void;
@@ -50,14 +55,17 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, s
   const [curves, setCurves] = useState<Curve[]>([]);
   const [search, setSearch] = useState("");
   const [err, setErr] = useState<unknown>(null);
-  const [mode, setMode] = useState<Mode>("absolute");
   const [zeitraum, setZeitraum] = useState<string>("total");
+  const [von, setVon] = useState<string | null>(null);
+  const [bis, setBis] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("time");
   const [samples, setSamples] = useState<SampleList["samples"]>([]);
   const [punkt, setPunkt] = useState<string | null>(null);
+  const [markiert, setMarkiert] = useState<string | null>(null);
 
   useEffect(() => {
     setCurves([]); setErr(null); setEnv(null); setModules([]); setSamples([]); setPunkt(null);
+    setMarkiert(null); setVon(null); setBis(null); setZeitraum("total");
     getEnvironment(datasetId).then(setEnv).catch(() => setEnv(null));
     getModules(datasetId).then((m) => setModules(m.modules)).catch(() => setModules([]));
     getSamples(datasetId).then((r) => {
@@ -128,26 +136,20 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, s
 
     if (kind === "asv") {
       getAsv(datasetId, id).then((d) => anfuegen({
-        key, kind, id, label: id, sub: d.lineage?.genus ?? null,
-        unit: d.frequency.quantity?.unit ?? SHARE_UNIT, scale: "ratio", share: true,
+        key, kind, id, label: id, sub: d.lineage?.genus ?? null, unit: null,
         points: ausPunkten(d.frequency.points.map((p) => ({ date: p.date, value: p.share }))),
       })).catch((e) => setErr(e));
     } else if (kind === "cluster") {
       getCluster(datasetId, Number(id)).then((d) => anfuegen({
         key, kind, id, label: modules.find((m) => String(m.louvain_label) === id)?.display
                               ?? `module ${id}`,
-        sub: "collective curve", unit: d.frequency.quantity?.unit ?? SHARE_UNIT,
-        scale: "ratio", share: true,
+        sub: "collective curve", unit: null,
         points: ausPunkten(d.frequency.points.map((p) => ({ date: p.date, value: p.share }))),
       })).catch((e) => setErr(e));
     } else {
       const v = env?.variables.find((x) => x.key === id);
       if (!v) return;
-      anfuegen({
-        key, kind, id, label: v.label, sub: v.unit, unit: v.unit ?? "(no unit stated)", share: false,
-        scale: v.scale ?? "interval",
-        points: ausPunkten(v.points),
-      });
+      anfuegen({ key, kind, id, label: v.label, sub: v.unit, unit: v.unit ?? "", points: ausPunkten(v.points) });
     }
   };
 
@@ -161,144 +163,145 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, s
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [datasetId, initialAsvId]);
 
+  useEffect(() => {
+    if (!mark) return;
+    add(mark.kind, mark.id);
+    setMarkiert(`${mark.kind}:${mark.id}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mark?.kind, mark?.id, sampleTick]);
+
   const jahre = useMemo(() => {
     const j = new Set<string>();
     for (const c of curves) for (const p of c.points) j.add(p.date.slice(0, 4));
     return [...j].sort();
   }, [curves]);
   useEffect(() => {
-    if (zeitraum !== "total" && !jahre.includes(zeitraum)) setZeitraum("total");
+    if (zeitraum !== "total" && zeitraum !== "custom" && !jahre.includes(zeitraum)) setZeitraum("total");
   }, [jahre, zeitraum]);
 
-  const einheiten = useMemo(() => new Set(curves.map((c) => c.unit)), [curves]);
-  const sameUnit = einheiten.size <= 1;
-  const alleMitNull = curves.every((c) => c.scale === "ratio");
-  const erlaubt: Record<Mode, string | null> = {
-    absolute: sameUnit ? null : "mixed units — one axis would compare unlike things",
-    peak: alleMitNull ? null : "°C has no real zero, so a share of its maximum means nothing",
-    range: null,
-  };
-  useEffect(() => {
-    if (erlaubt[mode] !== null) setMode("range");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [erlaubt.absolute, erlaubt.peak, mode]);
+  const tok = useTokens();
 
-  const tokLight = useTokens().light;
-  const [breite, setBreite] = useState(460);
-  const chartRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const el = chartRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setBreite(Math.max(320, Math.round(el.clientWidth))));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [tab, curves.length > 0]);
-  const W = breite, H = 222, PAD_L = 52, PAD_R = 8, PAD_T = 10, PAD_B = 26;
-  const plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
+  const datiert = useMemo(() => samples
+    .map((s) => ({ sample: s.sample, date: s.date ?? "", t: s.date ? Date.parse(s.date) : NaN }))
+    .filter((s) => Number.isFinite(s.t)).sort((a, b) => a.t - b.t), [samples]);
 
   const fenster = useMemo(() => {
+    if (zeitraum === "custom" && datiert.length) {
+      const a = datiert.find((s) => s.sample === von) ?? datiert[0];
+      const b = datiert.find((s) => s.sample === bis) ?? datiert[datiert.length - 1];
+      return [Math.min(a.t, b.t), Math.max(a.t, b.t)] as const;
+    }
     if (zeitraum !== "total") {
       return [Date.parse(`${zeitraum}-01-01T00:00:00Z`),
               Date.parse(`${zeitraum}-12-31T23:59:59Z`)] as const;
     }
     const ts = curves.flatMap((c) => c.points.map((p) => p.t));
     return ts.length ? [Math.min(...ts), Math.max(...ts)] as const : [0, 1] as const;
-  }, [curves, zeitraum]);
+  }, [curves, zeitraum, datiert, von, bis]);
 
-  const series = useMemo(() => curves.map((c, i) => {
-    const drin = c.points.filter((p) => p.t >= fenster[0] && p.t <= fenster[1]);
-    const vals = drin.map((p) => p.value).filter((v): v is number => v != null);
-    const max = vals.length ? Math.max(...vals) : 0;
-    const min = vals.length ? Math.min(...vals) : 0;
-    const gezeigt = (v: number) =>
-      mode === "absolute" ? v
-      : mode === "peak" ? (max > 0 ? v / max : null)
-      : (max > min ? (v - min) / (max - min) : null);
+  const zeitpunkte = useMemo(() => datiert.filter((s) => s.t >= fenster[0] && s.t <= fenster[1]),
+    [datiert, fenster]);
+
+  // Long spans get one bracket per year, dense ones one per month, drawn under the x axis.
+  const klammern = useMemo(() => {
+    const proMonat = new Map<string, number>();
+    for (const z of zeitpunkte) proMonat.set(z.date.slice(0, 7), (proMonat.get(z.date.slice(0, 7)) ?? 0) + 1);
+    const art = fenster[1] - fenster[0] > 400 * 86400000 ? 4
+      : Math.max(0, ...proMonat.values()) >= 4 ? 7 : 0;
+    if (!art) return [];
+    const gruppen = new Map<string, { von: number; bis: number }>();
+    for (const z of zeitpunkte) {
+      const k = z.date.slice(0, art);
+      const g = gruppen.get(k);
+      gruppen.set(k, g ? { von: g.von, bis: z.t } : { von: z.t, bis: z.t });
+    }
+    return [...gruppen].map(([k, g]) => ({ ...g,
+      label: art === 4 ? k : `${MONATE[Number(k.slice(5, 7)) - 1]} ${k.slice(0, 4)}` }));
+  }, [zeitpunkte, fenster]);
+
+  const option = useMemo(() => {
+    const drin = curves.map((c) => c.points.filter((p) => p.t >= fenster[0] && p.t <= fenster[1]));
+    const anteile = drin.filter((_, i) => curves[i].unit == null).flat()
+      .map((p) => p.value).filter((v): v is number => v != null);
+    const max = anteile.length ? Math.max(...anteile) : 0;
+    const genormt = curves.some((c) => c.kind === "env");
+    const spitze = drin.map((pts) => Math.max(0, ...pts.map((p) => p.value ?? 0)));
+    const punktT = punktDatum ? Date.parse(punktDatum) : NaN;
+    const datum = (t: number) => new Date(t).toISOString().slice(0, 10);
+    const achse = { color: tok.textMuted, fontSize: FONT.xs2 };
     return {
-      ...c,
-      color: seriesColour(i, tokLight),
-      min, max, n: vals.length,
-      points: drin.map((p) => ({ ...p, shown: p.value == null ? null : gezeigt(p.value) })),
+      backgroundColor: "transparent",
+      grid: [{ left: 56, right: 14, top: 14, bottom: klammern.length ? 52 : 30 },
+             { left: 56, right: 14, bottom: 4, height: 20 }],
+      tooltip: {
+        ...chartTooltip(tok),
+        trigger: "item" as const,
+        formatter: (p: { seriesIndex: number; dataIndex: number; marker: string; data: [number, number | null] }) => {
+          const c = curves[p.seriesIndex];
+          const echt = drin[p.seriesIndex]?.[p.dataIndex]?.value;
+          if (!c || echt == null) return "";
+          const v = c.unit == null ? prozent(echt, echt)
+            : `${Number(echt.toFixed(3))}${c.unit ? ` ${c.unit}` : ""}`;
+          return `<b>${esc(datum(p.data[0]))}</b><br/>${p.marker}${esc(c.label)}: ${esc(v)}`;
+        },
+      },
+      xAxis: [{ type: "time" as const, min: fenster[0], max: fenster[1], axisLabel: achse,
+               axisPointer: { show: true, snap: true, type: "line" as const,
+                              lineStyle: { color: tok.textMuted, type: "dashed" as const },
+                              label: { show: true, formatter: (x: { value: number }) => datum(x.value),
+                                       backgroundColor: tok.overlay, color: tok.text,
+                                       borderColor: tok.border, borderWidth: 1 } } },
+              { type: "time" as const, gridIndex: 1, min: fenster[0], max: fenster[1], show: false }],
+      yAxis: [{
+        type: "value" as const, min: 0, max: genormt ? 1 : "dataMax",
+        axisLabel: { ...achse, formatter: (v: number) => (genormt ? `${Math.round(100 * v)} %` : prozent(v, max)) },
+        splitLine: { lineStyle: { color: tok.chartGrid } },
+      }, { type: "value" as const, gridIndex: 1, min: 0, max: 1, show: false }],
+      series: [
+        ...curves.map((c, i) => {
+          const farbe = seriesColour(i, tok.light);
+          return {
+            name: c.label, type: "line" as const, showSymbol: true, symbolSize: 5,
+            data: drin[i].map((p) => [p.t, p.value == null ? null
+              : genormt ? (spitze[i] > 0 ? p.value / spitze[i] : 0) : p.value]),
+            lineStyle: { color: farbe, width: 1.8, type: c.kind === "env" ? "dashed" as const : "solid" as const },
+            itemStyle: { color: farbe },
+            ...(i === 0 && Number.isFinite(punktT) ? {
+              markLine: { symbol: "none", silent: true, label: { show: false },
+                          lineStyle: { color: tok.textMuted, type: "dotted" as const },
+                          data: [{ xAxis: punktT }] },
+            } : {}),
+          };
+        }),
+        { name: DOTS, type: "scatter" as const, data: zeitpunkte.map((z) => [z.t, 0]),
+          symbolSize: 4, itemStyle: { color: tok.textMuted }, silent: true,
+          tooltip: { show: false }, clip: false },
+        { name: "brackets", type: "line" as const, xAxisIndex: 1, yAxisIndex: 1, silent: true,
+          symbol: "none", connectNulls: false, tooltip: { show: false },
+          lineStyle: { color: tok.textMuted, width: 1 },
+          data: klammern.flatMap((k) => [[k.von, 1], [k.von, 0.75], [k.bis, 0.75], [k.bis, 1], [k.bis, null]]) },
+        { name: "bracket labels", type: "scatter" as const, xAxisIndex: 1, yAxisIndex: 1, silent: true,
+          symbolSize: 0, tooltip: { show: false },
+          label: { show: true, position: "bottom" as const, distance: 0, color: tok.textMuted, fontSize: FONT.xs2,
+                   formatter: (x: { dataIndex: number }) => klammern[x.dataIndex]?.label ?? "" },
+          data: klammern.map((k) => [(k.von + k.bis) / 2, 0.75]) },
+      ],
     };
-  }), [curves, mode, fenster, tokLight]);
+  }, [curves, fenster, zeitpunkte, klammern, punktDatum, tok]);
 
-  const yMax = useMemo(() => {
-    const vals = series.flatMap((s) => s.points.map((p) => p.shown).filter((v): v is number => v != null));
-    return vals.length ? Math.max(...vals) : 1;
-  }, [series]);
-  const yMin = useMemo(() => {
-    if (mode !== "absolute") return 0;
-    const vals = series.flatMap((s) => s.points.map((p) => p.shown).filter((v): v is number => v != null));
-    return vals.length ? Math.min(0, ...vals) : 0;
-  }, [series, mode]);
-
-  const X = (t: number) => PAD_L + (fenster[1] > fenster[0]
-    ? ((t - fenster[0]) / (fenster[1] - fenster[0])) * plotW : plotW / 2);
-  const Y = (v: number) => PAD_T + plotH - (yMax > yMin ? ((v - yMin) / (yMax - yMin)) * plotH : 0);
-
-  const marken = useMemo(() => {
-    const raus: { t: number; label: string }[] = [];
-    if (zeitraum !== "total") {
-      for (let m = 0; m < 12; m++) {
-        raus.push({ t: Date.parse(`${zeitraum}-${String(m + 1).padStart(2, "0")}-01T00:00:00Z`),
-                    label: MONTHS[m][0] });
-      }
-      return raus;
-    }
-    const von = new Date(fenster[0]).getUTCFullYear(), bis = new Date(fenster[1]).getUTCFullYear();
-    for (let y = von; y <= bis; y++) {
-      const t = Date.parse(`${y}-01-01T00:00:00Z`);
-      if (t >= fenster[0] && t <= fenster[1]) raus.push({ t, label: String(y) });
-    }
-    return raus;
-  }, [fenster, zeitraum]);
-
-  const achsenText = (v: number) => {
-    if (mode !== "absolute") return `${(100 * v).toFixed(0)} %`;
-    return curves.every((c) => c.share) ? `${(100 * v).toFixed(2)} %` : v.toFixed(2);
-  };
-  const wert = (c: Curve, v: number) =>
-    c.share ? `${(100 * v).toFixed(3)} %` : `${v.toFixed(3)}${c.unit ? ` ${c.unit}` : ""}`;
-
-  const path = (pts: { t: number; shown: number | null }[]) => {
-    let d = "", pen = false;
-    for (const p of pts) {
-      if (p.shown == null) { pen = false; continue; }
-      d += `${pen ? "L" : "M"} ${X(p.t).toFixed(1)} ${Y(p.shown).toFixed(1)} `;
-      pen = true;
-    }
-    return d.trim();
-  };
-
-  const MODE_LABEL: Record<Mode, string> = {
-    absolute: "absolute",
-    peak: "own peak",
-    range: "own range",
-  };
-
-  const sampleAm = (date: string) => samples.find((s) => s.date === date)?.sample;
+  const klickBereit = useNearestPointClick(zeitpunkte.map((z) => z.t),
+    (i) => { const z = zeitpunkte[i]; if (z) zeige(z.sample); });
 
   return (
     <div data-testid="compare-panel">
       <PanelHeader title="Inspect" onClose={onClose} closeTestid="compare-close">
           <InfoTip title="What Inspect shows">
-            <p><em>Over time</em> lays measured series over each other. <em>Time point</em> shows
-            one sample: which modules and ASVs made up how much of it, and the environmental
-            values measured with it. Click a point on a curve to open its time point.</p>
-            <p>Each line is the <strong>measured series</strong> of one thing — an ASV, a whole
-            module, or a measured environmental variable. The same points its own page shows,
-            each on its real sampling date. Nothing is averaged and nothing new is computed
-            here; <em>period</em> only restricts which samples are drawn.</p>
-            <p>ASV and module curves are shares, not cell counts — a share can rise because
-            others declined. Environmental curves are measured next to the samples.</p>
-            <p>No average year is drawn here. Folding several years onto twelve points is a
-            computation over the years, not what was measured. A single year shows exactly its
-            own samples, with its empty stretches left empty.</p>
-            <p>Different units cannot share one axis. The absolute reading is therefore only
-            available while every curve carries the same unit; the other two readings rescale
-            each curve by itself and say so. Dividing by the peak needs a real zero, which
-            degrees Celsius do not have — the scale of each variable is declared in the meaning
-            layer, never guessed here. Months without coverage stay gaps.</p>
+            <p><em>Over time</em> lays the measured series of ASVs and modules over each other,
+            as share of all reads of a sample, and measured environmental variables. <em>Time point</em> shows one sample: which modules
+            and ASVs made up how much of it, and the environmental values measured with it.
+            As soon as an environmental variable is shown, every curve is drawn relative to its
+            own maximum (100 %); hovering a point shows the measured value.
+            Click a point on a curve to open its time point.</p>
           </InfoTip>
       </PanelHeader>
 
@@ -310,7 +313,7 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, s
         {tab === "point" ? (
           <InspectTimePoint datasetId={datasetId} samples={samples} sample={punkt}
             onSample={setPunkt} env={env} onOpenAsv={onOpenAsv}
-            chosen={chosen} full={curves.length >= MAX_CURVES}
+            chosen={chosen} marked={markiert} full={curves.length >= MAX_CURVES}
             onAdd={(kind, id) => add(kind, id)} />
         ) : <>
         {err != null && <ErrorNotice error={err} inline what="Could not add this curve." />}
@@ -397,12 +400,12 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, s
 
             {curves.length > 0 && (
               <div className="flex flex-wrap gap-2" data-testid="compare-legend">
-                {series.map((s) => (
+                {curves.map((s, i) => (
                   <span key={s.key} data-testid="compare-curve" data-kind={s.kind}
                     className="inline-flex items-center gap-1 px-2 py-1 rounded border border-line">
                     <svg width="14" height="6" className="shrink-0">
-                      <line x1="0" y1="3" x2="14" y2="3" stroke={s.color} strokeWidth="1.5"
-                        strokeDasharray={s.kind === "env" ? "3 2" : undefined} />
+                      <line x1="0" y1="3" x2="14" y2="3" stroke={seriesColour(i, tok.light)}
+                        strokeWidth="1.5" strokeDasharray={s.kind === "env" ? "3 2" : undefined} />
                     </svg>
                     {s.kind === "asv" ? (
                       <button onClick={() => onOpenAsv(s.id)}
@@ -428,7 +431,8 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, s
             {curves.length > 0 && (
               <>
                 <div className="flex flex-wrap items-center gap-2" data-testid="compare-controls">
-                  <Chooser label="period" summary={zeitraum === "total" ? "total" : zeitraum}
+                  <Chooser label="period"
+                    summary={zeitraum === "total" ? "total" : zeitraum === "custom" ? "from … to" : zeitraum}
                     closeOnPick testid="compare-period">
                     <ChooserRow radio checked={zeitraum === "total"} testid="compare-period-total"
                       onToggle={() => setZeitraum("total")} label="total"
@@ -438,73 +442,25 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, s
                         testid={`compare-period-${j}`} onToggle={() => setZeitraum(j)}
                         label={j} hint="the samples of this calendar year" />
                     ))}
+                    <ChooserRow radio checked={zeitraum === "custom"} testid="compare-period-custom"
+                      onToggle={() => setZeitraum("custom")} label="from … to"
+                      hint="from one time point to another" />
                   </Chooser>
-                  <Segmented value={mode} onChange={setMode} testid="compare-modes" label="axis"
-                    options={(["absolute", "peak", "range"] as Mode[]).map((m) => ({
-                      value: m, label: MODE_LABEL[m], disabled: erlaubt[m] !== null,
-                      reason: erlaubt[m] ?? undefined, testid: `compare-mode-${m}`,
-                    }))} />
+                  {zeitraum === "custom" && ([["from", von ?? datiert[0]?.sample, setVon],
+                      ["to", bis ?? datiert[datiert.length - 1]?.sample, setBis]] as
+                      [string, string | undefined, (v: string) => void][]).map(([name, wert, setze]) => (
+                    <select key={name} data-testid={`compare-period-${name}`} aria-label={name}
+                      value={wert ?? ""} onChange={(e) => setze(e.target.value)}
+                      className="px-2 py-1 rounded bg-control border border-line-strong text-fg tabular-nums">
+                      {datiert.map((d) => <option key={d.sample} value={d.sample}>{d.date}</option>)}
+                    </select>
+                  ))}
                 </div>
 
-                <div ref={chartRef}>
-                <svg viewBox={`0 0 ${W} ${H}`} width="100%"
-                  data-testid="compare-chart" data-mode={mode} data-period={zeitraum} role="img"
-                  aria-label="the measured curves of the selected ASVs, modules and variables">
-                  <line x1={PAD_L} y1={PAD_T} x2={PAD_L} y2={PAD_T + plotH} stroke="var(--chart-axis)" />
-                  <line x1={PAD_L} y1={Y(Math.max(yMin, Math.min(0, yMax)))}
-                        x2={PAD_L + plotW} y2={Y(Math.max(yMin, Math.min(0, yMax)))} stroke="var(--chart-axis)" />
-                  <text x={PAD_L - 4} y={PAD_T + 8} textAnchor="end" fill="var(--text-muted)" fontSize="11">
-                    {achsenText(yMax)}
-                  </text>
-                  <text x={PAD_L - 4} y={PAD_T + plotH} textAnchor="end" fill="var(--text-muted)" fontSize="11">
-                    {achsenText(yMin)}
-                  </text>
-                  {marken.map((m) => (
-                    <g key={m.t}>
-                      <line x1={X(m.t)} y1={PAD_T + plotH} x2={X(m.t)} y2={PAD_T + plotH + 3}
-                            stroke="var(--chart-axis)" />
-                      <text x={X(m.t)} y={H - 8} textAnchor="middle" fill="var(--text-muted)" fontSize="11">
-                        {m.label}
-                      </text>
-                    </g>
-                  ))}
-                  {punktDatum && Date.parse(punktDatum) >= fenster[0] && Date.parse(punktDatum) <= fenster[1] && (
-                    <line data-testid="compare-timepoint" x1={X(Date.parse(punktDatum))} y1={PAD_T}
-                      x2={X(Date.parse(punktDatum))} y2={PAD_T + plotH}
-                      stroke="var(--text-muted)" strokeDasharray="2 3" />
-                  )}
-                  {series.map((s) => (
-                    <g key={s.key}>
-                      <path d={path(s.points)} fill="none" stroke={s.color} strokeWidth="1.5"
-                        strokeDasharray={s.kind === "env" ? "4 3" : undefined} />
-                      {s.points.map((p) => p.shown != null && p.value != null && (
-                        <circle key={p.date} cx={X(p.t)} cy={Y(p.shown)} r="2.4" fill={s.color}
-                          data-testid="compare-point" className="cursor-pointer"
-                          onClick={() => { const id = sampleAm(p.date); if (id) zeige(id); }}>
-                          <title>{`${s.label} · ${p.date}: ${wert(s, p.value)}`
-                            + (mode === "absolute" ? "" : ` (${(100 * p.shown).toFixed(0)} % of `
-                              + `${mode === "peak" ? "its peak" : "its own range"})`)
-                            + " · click to inspect this time point"}</title>
-                        </circle>
-                      ))}
-                    </g>
-                  ))}
-                </svg>
+                <div data-testid="compare-chart" data-period={zeitraum}>
+                  <ReactECharts option={option} style={{ height: 222 }} notMerge
+                    onChartReady={klickBereit} className="cursor-pointer" />
                 </div>
-
-                {(["absolute", "peak"] as Mode[]).some((m) => erlaubt[m]) && (
-                  <p className="text-2xs text-fg-muted" data-testid="compare-locked">
-                    {(["absolute", "peak"] as Mode[]).filter((m) => erlaubt[m])
-                      .map((m) => `${MODE_LABEL[m]}: ${erlaubt[m]}`).join(" · ")}
-                  </p>
-                )}
-                <p className="text-2xs text-fg-muted" data-testid="compare-caveat">
-                  {mode === "absolute"
-                    ? "Measured samples on their own dates — nothing averaged. Shares can rise because others fell."
-                    : mode === "peak"
-                      ? "Each curve divided by its own maximum in this window — shapes comparable, sizes not."
-                      : "Each curve stretched over its own min-max here — only the timing is comparable."}
-                </p>
               </>
             )}
           </>
