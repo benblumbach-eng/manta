@@ -8,6 +8,21 @@ export const KEYSTONE_LABEL: Record<KeystoneCrit, string> = {
   2: "2 · high closeness in its module",
 };
 
+export type KeystoneParams = { crit: KeystoneCrit; p1: number; links1: number; q2: number; module2: number };
+
+export const KEYSTONE_DEFAULTS: KeystoneParams = { crit: 2, p1: 0.05, links1: 1, q2: 0.05, module2: 3 };
+
+const keystoneKey = (ds: string) => `manta-keystone:${ds}`;
+
+export function loadKeystone(ds: string): KeystoneParams {
+  try { return { ...KEYSTONE_DEFAULTS, ...JSON.parse(localStorage.getItem(keystoneKey(ds)) ?? "{}") }; }
+  catch { return KEYSTONE_DEFAULTS; }
+}
+
+export function saveKeystone(ds: string, k: KeystoneParams) {
+  try { localStorage.setItem(keystoneKey(ds), JSON.stringify(k)); } catch { }
+}
+
 export type FilterKind = "modules" | "layer" | "cross" | "c2" | "function" | "taxon" | "asvs"
   | "presence" | "abundance" | "strength";
 

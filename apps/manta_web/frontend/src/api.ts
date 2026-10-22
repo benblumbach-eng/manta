@@ -439,6 +439,7 @@ export type NetEdge = {
   nmi_forward?: number | null; nmi_backward?: number | null;
   rejected_forward?: boolean; rejected_backward?: boolean; rejected_dirs?: number;
   nmi_rejected_forward?: number | null; nmi_rejected_backward?: number | null;
+  p_forward?: number | null; p_backward?: number | null;
 };
 
 export type Layers = {
@@ -1069,6 +1070,8 @@ export const renameDataset = (id: string, region: string) =>
   });
 export const getNetwork = (ds: string, edge: "con" | "ccm", marker?: string | null) =>
   get<Network>(`/datasets/${ds}/network?edge=${edge}${marker ? `&marker=${marker}` : ""}`);
+export const getCriterion2 = (ds: string, q: number, minModule: number) =>
+  get<Criterion2Summary>(`/datasets/${ds}/criterion2?q=${q}&min_module=${minModule}`);
 export const getAsv = (ds: string, id: string) => get<AsvDetail>(`/datasets/${ds}/asv/${id}`);
 export const getSpectrum = (ds: string, id: string) =>
   get<{ dataset_id: string; asv_id: string; spectrum: Spectrum }>(

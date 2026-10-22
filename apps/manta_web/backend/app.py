@@ -2277,6 +2277,14 @@ def _layers(dataset_id: str) -> dict:
     return out
 
 
+@app.get("/datasets/{dataset_id}/criterion2", dependencies=[Depends(visible_dataset)])
+def criterion2(dataset_id: str,
+               q: float = Query(semantics.CRITERION2_ALPHA, gt=0, le=1),
+               min_module: int = Query(semantics.CRITERION2_MIN_MODULE,
+                                       ge=semantics.CRITERION2_MIN_MODULE)):
+    return semantics.criterion2_summary(semantics.criterion2(_q, dataset_id, q, min_module))
+
+
 @app.get("/datasets/{dataset_id}/network", dependencies=[Depends(visible_dataset)])
 def network(dataset_id: str, edge: str = Query("con", pattern="^(con|ccm)$"), marker: str | None = None):
     if marker is not None:
@@ -2303,7 +2311,11 @@ def network(dataset_id: str, edge: str = Query("con", pattern="^(con|ccm)$"), ma
                    reduce(m = null, x IN [(a)-[f:CCM_REJECTED {dataset_id:$d}]->(b) | f.nmi] |
                           CASE WHEN m IS NULL OR x > m THEN x ELSE m END) AS nmi_rejected_forward,
                    reduce(m = null, x IN [(b)-[k:CCM_REJECTED {dataset_id:$d}]->(a) | k.nmi] |
-                          CASE WHEN m IS NULL OR x > m THEN x ELSE m END) AS nmi_rejected_backward
+                          CASE WHEN m IS NULL OR x > m THEN x ELSE m END) AS nmi_rejected_backward,
+                   reduce(m = null, x IN [(a)-[f:INFLUENCES|CCM_REJECTED {dataset_id:$d}]->(b) | f.p_value] |
+                          CASE WHEN m IS NULL OR x < m THEN x ELSE m END) AS p_forward,
+                   reduce(m = null, x IN [(b)-[k:INFLUENCES|CCM_REJECTED {dataset_id:$d}]->(a) | k.p_value] |
+                          CASE WHEN m IS NULL OR x < m THEN x ELSE m END) AS p_backward
             ORDER BY source, target
             """,
             d=dataset_id,

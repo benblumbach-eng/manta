@@ -2060,9 +2060,14 @@ CRITERION2_REASONS: dict[str, str] = {
 _CRITERION2_MODULE_REASONS = ("module_too_small", "module_disconnected", "zero_variance")
 
 
-def criterion2_compute(modules: dict, links, alpha: float = CRITERION2_ALPHA) -> dict:
+def criterion2_compute(modules: dict, links, alpha: float = CRITERION2_ALPHA,
+                       min_module: int = CRITERION2_MIN_MODULE) -> dict:
     from collections import deque
     from scipy import stats as sp_stats
+    min_module = max(min_module, CRITERION2_MIN_MODULE)
+    reasons = CRITERION2_REASONS if min_module == CRITERION2_MIN_MODULE else {
+        **CRITERION2_REASONS,
+        "module_too_small": f"its module has fewer than {min_module} members (min. module size)"}
 
     adj: dict = {a: set() for a in modules}
     for a, b in links:
@@ -2096,7 +2101,7 @@ def criterion2_compute(modules: dict, links, alpha: float = CRITERION2_ALPHA) ->
             dist_sum[s] = sum(seen.values())
         closeness = {s: ((n - 1) / dist_sum[s] if connected and n > 1 else None)
                      for s in members}
-        if n < CRITERION2_MIN_MODULE:
+        if n < min_module:
             reason = "module_too_small"
         elif not connected:
             reason = "module_disconnected"
@@ -2112,7 +2117,7 @@ def criterion2_compute(modules: dict, links, alpha: float = CRITERION2_ALPHA) ->
         defined = all(v is not None for v in vals) and n > 1
         module_rows.append({
             "module": label, "module_size": n, "testable": reason is None,
-            "reason": reason, "reason_text": CRITERION2_REASONS.get(reason) if reason else None,
+            "reason": reason, "reason_text": reasons.get(reason) if reason else None,
             "mean_closeness": (sum(vals) / n) if defined else None,
             "sd_closeness": statistics.stdev(vals) if defined else None,
             "n_pass": 0,
@@ -2121,7 +2126,7 @@ def criterion2_compute(modules: dict, links, alpha: float = CRITERION2_ALPHA) ->
             nodes[s] = {"module": label, "module_size": n, "closeness": closeness[s],
                         "p": None, "q": None, "passes": False, "testable": reason is None,
                         "reason": reason,
-                        "reason_text": CRITERION2_REASONS.get(reason) if reason else None}
+                        "reason_text": reasons.get(reason) if reason else None}
 
     tested = sorted(pvals)
     if tested:
@@ -2137,11 +2142,12 @@ def criterion2_compute(modules: dict, links, alpha: float = CRITERION2_ALPHA) ->
     for code in _CRITERION2_MODULE_REASONS:
         mods = [m for m in module_rows if m["reason"] == code]
         if mods:
-            not_testable.append({"reason": code, "reason_text": CRITERION2_REASONS[code],
+            not_testable.append({"reason": code, "reason_text": reasons[code],
                                  "n_asv": sum(m["module_size"] for m in mods),
                                  "n_modules": len(mods),
                                  "modules": [m["module"] for m in mods]})
-    return {"alpha": alpha, "n_network": len(nodes), "n_modules": len(module_rows),
+    return {"alpha": alpha, "min_module": min_module,
+            "n_network": len(nodes), "n_modules": len(module_rows),
             "n_testable": len(tested), "n_pass": len(ids),
             "n_not_testable": len(nodes) - len(tested), "not_testable": not_testable,
             "modules": module_rows, "ids": ids, "nodes": nodes}
@@ -2180,7 +2186,8 @@ def _criterion2_texts(res: dict) -> dict:
     }
 
 
-def criterion2(q: Runner, dataset_id: str) -> dict:
+def criterion2(q: Runner, dataset_id: str, alpha: float = CRITERION2_ALPHA,
+               min_module: int = CRITERION2_MIN_MODULE) -> dict:
     rows = q("MATCH (a:ASV {dataset_id:$d}) WHERE a.louvain_label IS NOT NULL "
              "RETURN a.id AS id, a.louvain_label AS module ORDER BY a.id", d=dataset_id)
     links = q("MATCH (a:ASV {dataset_id:$d})-[:CO_OCCURS_WITH {dataset_id:$d}]-"
@@ -2189,7 +2196,7 @@ def criterion2(q: Runner, dataset_id: str) -> dict:
               "AND a.louvain_label = b.louvain_label "
               "RETURN DISTINCT a.id AS asv, b.id AS partner ORDER BY asv, partner", d=dataset_id)
     res = criterion2_compute({r["id"]: r["module"] for r in rows},
-                             [(r["asv"], r["partner"]) for r in links])
+                             [(r["asv"], r["partner"]) for r in links], alpha, min_module)
     return {**_criterion2_texts(res), **res}
 
 
