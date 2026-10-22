@@ -1614,24 +1614,26 @@ def starred(dataset_id: str):
 NOTE_KINDS = ("dataset", "asv", "cluster", "sample", "env")
 
 
-class NoteBody(BaseModel):
+class NoteTarget(BaseModel):
     kind: str
     key: str = Field("", max_length=500)
+
+
+class NoteBody(BaseModel):
+    targets: list[NoteTarget] = Field(max_length=50)
     text: str = Field(max_length=MAX_NOTE_CHARS)
 
 
-def _check_note_target(dataset_id: str, kind: str, key: str) -> str | None:
+def _check_note_target(dataset_id: str, kind: str, key: str) -> None:
     if kind not in NOTE_KINDS:
         raise HTTPException(422, f"kind must be one of {', '.join(NOTE_KINDS)} — given: {kind!r}")
     if kind == "dataset":
-        return None
+        return
     if kind == "asv":
         ok = _q("MATCH (a:ASV {id:$k, dataset_id:$d}) RETURN a.id", d=dataset_id, k=key)
     elif kind == "cluster":
         ok = _q("MATCH (c:Cluster {dataset_id:$d}) WHERE toString(c.louvain_label) = $k "
-                "RETURN c.run_id AS run_id ORDER BY c.run_id DESC LIMIT 1", d=dataset_id, k=key)
-        if ok:
-            return ok[0]["run_id"]
+                "RETURN c.louvain_label LIMIT 1", d=dataset_id, k=key)
     elif kind == "sample":
         ok = _q("MATCH (s:Sample {sample_id:$k, dataset_id:$d}) RETURN s.sample_id",
                 d=dataset_id, k=key)
@@ -1639,18 +1641,33 @@ def _check_note_target(dataset_id: str, kind: str, key: str) -> str | None:
         ok = [v for v in semantics.environment(_q, dataset_id)["variables"] if v["key"] == key]
     if not ok:
         raise HTTPException(404, f"no {kind} {key!r} in dataset_id={dataset_id!r}")
-    return None
 
 
-_NOTE_FIELDS = "n.id AS id, n.kind AS kind, n.key AS key, n.text AS text, n.at AS at"
+def _note_targets(dataset_id: str, body: NoteBody) -> list[str]:
+    ziele = []
+    for t in body.targets:
+        _check_note_target(dataset_id, t.kind, "" if t.kind == "dataset" else t.key)
+        z = f"{t.kind}:{'' if t.kind == 'dataset' else t.key}"
+        if z not in ziele:
+            ziele.append(z)
+    if not ziele:
+        raise HTTPException(422, "a note belongs to at least one thing")
+    return ziele
+
+
+def _note_out(r: dict) -> dict:
+    return {**r, "targets": [dict(zip(("kind", "key"), z.split(":", 1))) for z in r["targets"]]}
+
+
+_NOTE_FIELDS = "n.id AS id, n.targets AS targets, n.text AS text, n.at AS at"
 
 
 def _note_count(dataset_id: str, kind: str, key: str) -> int:
     u = access.current().username
     if u is None:
         return 0
-    return _q("MATCH (n:Note {dataset_id:$d, username:$u, kind:$kind, key:$k}) RETURN count(n) AS n",
-              d=dataset_id, u=u, kind=kind, k=key)[0]["n"]
+    return _q("MATCH (n:Note {dataset_id:$d, username:$u}) WHERE $z IN n.targets "
+              "RETURN count(n) AS n", d=dataset_id, u=u, z=f"{kind}:{key}")[0]["n"]
 
 
 @app.get("/datasets/{dataset_id}/notes", dependencies=[Depends(visible_dataset)])
@@ -1659,38 +1676,36 @@ def notes(dataset_id: str):
     if u is None:
         return {"dataset_id": dataset_id, "notes": [],
                 "note": "Notes belong to an account — sign in to keep your own."}
-    # Notizen aus der Zeit mit einer Notiz pro ASV/Modul haben noch keine id
-    _w("MATCH (n:Note {dataset_id:$d, username:$u}) WHERE n.id IS NULL SET n.id = randomUUID()",
+    # Notizen aus der Zeit mit einer Notiz pro ASV/Modul haben noch keine id und kein targets
+    _w("MATCH (n:Note {dataset_id:$d, username:$u}) WHERE n.id IS NULL "
+       "SET n.id = randomUUID(), n.targets = [n.kind + ':' + n.key] REMOVE n.kind, n.key, n.run_id",
        d=dataset_id, u=u)
     rows = _q(f"MATCH (n:Note {{dataset_id:$d, username:$u}}) RETURN {_NOTE_FIELDS} "
               "ORDER BY coalesce(n.at,'') DESC", d=dataset_id, u=u)
-    return {"dataset_id": dataset_id, "notes": rows, "note": None}
+    return {"dataset_id": dataset_id, "notes": [_note_out(r) for r in rows], "note": None}
 
 
 @app.post("/datasets/{dataset_id}/notes", dependencies=[Depends(auth.user), Depends(visible_dataset)])
 def add_note(dataset_id: str, body: NoteBody, u: auth.User = Depends(auth.user)):
     _check_note(body.text)
-    run_id = _check_note_target(dataset_id, body.kind, body.key)
+    ziele = _note_targets(dataset_id, body)
     t = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    return _w(f"CREATE (n:Note {{dataset_id:$d, username:$u, id:randomUUID(), kind:$kind, key:$k, "
-              f"text:$text, at:$t, run_id:$run}}) RETURN {_NOTE_FIELDS}",
-              d=dataset_id, u=u.username, kind=body.kind, k=body.key, text=body.text.strip(),
-              t=t, run=run_id)[0]
+    return _note_out(_w(f"CREATE (n:Note {{dataset_id:$d, username:$u, id:randomUUID(), "
+                        f"targets:$z, text:$text, at:$t}}) RETURN {_NOTE_FIELDS}",
+                        d=dataset_id, u=u.username, z=ziele, text=body.text.strip(), t=t)[0])
 
 
 @app.put("/datasets/{dataset_id}/notes/{note_id}", dependencies=[Depends(auth.user), Depends(visible_dataset)])
 def edit_note(dataset_id: str, note_id: str, body: NoteBody, u: auth.User = Depends(auth.user)):
     _check_note(body.text)
-    run_id = _check_note_target(dataset_id, body.kind, body.key)
+    ziele = _note_targets(dataset_id, body)
     t = datetime.now(timezone.utc).isoformat(timespec="seconds")
     rows = _w(f"MATCH (n:Note {{dataset_id:$d, username:$u, id:$id}}) "
-              f"SET n.kind = $kind, n.key = $k, n.text = $text, n.at = $t, n.run_id = $run "
-              f"RETURN {_NOTE_FIELDS}",
-              d=dataset_id, u=u.username, id=note_id, kind=body.kind, k=body.key,
-              text=body.text.strip(), t=t, run=run_id)
+              f"SET n.targets = $z, n.text = $text, n.at = $t RETURN {_NOTE_FIELDS}",
+              d=dataset_id, u=u.username, id=note_id, z=ziele, text=body.text.strip(), t=t)
     if not rows:
         raise HTTPException(404, f"no note {note_id!r}")
-    return rows[0]
+    return _note_out(rows[0])
 
 
 @app.delete("/datasets/{dataset_id}/notes/{note_id}", dependencies=[Depends(auth.user), Depends(visible_dataset)])
