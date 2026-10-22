@@ -207,16 +207,16 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     return next;
   }), [dataset.dataset_id]);
   const crit = kp.crit;
-  const c2Default = kp.q2 === KEYSTONE_DEFAULTS.q2 && kp.module2 === KEYSTONE_DEFAULTS.module2;
+  const c2Default = kp.q2 === KEYSTONE_DEFAULTS.q2;
   const [c2Custom, setC2Custom] = useState<Criterion2Summary | null>(null);
   useEffect(() => {
     setC2Custom(null);
     if (c2Default || !net?.criterion2) return;
     let aktiv = true;
-    getCriterion2(dataset.dataset_id, kp.q2, kp.module2).then((r) => { if (aktiv) setC2Custom(r); })
+    getCriterion2(dataset.dataset_id, kp.q2).then((r) => { if (aktiv) setC2Custom(r); })
       .catch(() => { });
     return () => { aktiv = false; };
-  }, [dataset.dataset_id, net, kp.q2, kp.module2, c2Default]);
+  }, [dataset.dataset_id, net, kp.q2, c2Default]);
   const c2: Criterion2Summary | null = (c2Default ? net?.criterion2 : c2Custom) ?? null;
   const c1Ids = useMemo(() => {
     const links = new Map<string, number>();

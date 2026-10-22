@@ -5,12 +5,12 @@ export type KeystoneCrit = 1 | 2;
 
 export const KEYSTONE_LABEL: Record<KeystoneCrit, string> = {
   1: "1 · significant CCM link",
-  2: "2 · high closeness in its module",
+  2: "2 · high closeness in the CCM network",
 };
 
-export type KeystoneParams = { crit: KeystoneCrit; p1: number; links1: number; q2: number; module2: number };
+export type KeystoneParams = { crit: KeystoneCrit; p1: number; links1: number; q2: number };
 
-export const KEYSTONE_DEFAULTS: KeystoneParams = { crit: 2, p1: 0.05, links1: 1, q2: 0.05, module2: 3 };
+export const KEYSTONE_DEFAULTS: KeystoneParams = { crit: 2, p1: 0.05, links1: 1, q2: 0.05 };
 
 const keystoneKey = (ds: string) => `manta-keystone:${ds}`;
 

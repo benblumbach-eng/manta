@@ -491,11 +491,11 @@ export default function NetworkSidebar(p: SidebarProps) {
                   const enabled = k === 1 || !!c2;
                   const d = KEYSTONE_DEFAULTS;
                   const isDefault = k === 1 ? p.kp.p1 === d.p1 && p.kp.links1 === d.links1
-                    : p.kp.q2 === d.q2 && p.kp.module2 === d.module2;
+                    : p.kp.q2 === d.q2;
                   const reset = (
                     <button data-testid={`keystone-k${k}-reset`} disabled={isDefault}
                       onClick={() => p.onKp(k === 1 ? { p1: d.p1, links1: d.links1 }
-                        : { q2: d.q2, module2: d.module2 })}
+                        : { q2: d.q2 })}
                       title="back to the defaults" aria-label="back to the defaults"
                       className="rounded-md px-1 text-xs text-fg-muted hover:text-fg hover:bg-control disabled:text-fg-disabled disabled:hover:bg-transparent">↺</button>
                   );
@@ -520,9 +520,6 @@ export default function NetworkSidebar(p: SidebarProps) {
                             <KeystoneField testid="keystone-q2" label="max. corrected p-value" value={p.kp.q2}
                               min={0} max={1} onChange={(v) => p.onKp({ q2: v })} />
                             {reset}
-                            <KeystoneField testid="keystone-module2" label="min. module size"
-                              value={p.kp.module2} min={3} max={10000} integer
-                              onChange={(v) => p.onKp({ module2: v })} />
                           </>}
                         </div>
                       )}

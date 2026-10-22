@@ -9,9 +9,7 @@ function HubDefinition({ glow }: { glow: string }) {
 }
 
 const NICHT_TESTBAR: Record<string, string> = {
-  module_too_small: "module too small",
-  module_disconnected: "module not connected",
-  zero_variance: "all members equally central",
+  no_member_tested: "no member in the CCM network",
 };
 const stichwort = (reason: string | null, text: string | null) =>
   (reason && NICHT_TESTBAR[reason]) ?? text ?? "not testable";
@@ -42,7 +40,7 @@ export function HubAsvDetails({ c2, moduleLabel, testid }: {
       <p className="text-fg-muted tabular-nums" data-testid={`${testid}-values`}>
         {moduleLabel ?? `module ${c2.module}`}{c2.module_size != null ? ` (${c2.module_size} members)` : ""}
         {" "}· closeness {c2.closeness?.toFixed(3) ?? "—"}
-        {c2.module_mean_closeness != null && ` · module mean ${c2.module_mean_closeness.toFixed(3)}`}
+        {c2.mean_closeness != null && ` · network mean ${c2.mean_closeness.toFixed(3)}`}
         {" "}· q = {fmtP(c2.q)}
       </p>
     </div>
@@ -70,10 +68,6 @@ export function Criterion2ModuleLine({ c2, testid }: { c2: Criterion2Module; tes
         <div data-testid={`${testid}-details`}
           className="rounded-md border border-line bg-raised px-3 py-2 space-y-1 text-xs leading-snug">
           <p className="text-fg"><HubDefinition glow={c2.glow} /></p>
-          <p className="text-fg-muted tabular-nums">
-            module mean closeness {c2.mean_closeness?.toFixed(3) ?? "—"}
-            {c2.sd_closeness != null && ` · sd ${c2.sd_closeness.toFixed(3)}`}
-          </p>
         </div>
       )}
     </div>

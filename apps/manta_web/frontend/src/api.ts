@@ -411,22 +411,22 @@ export type Criterion2Texts = {
 };
 
 export type Criterion2Summary = Criterion2Texts & {
-  alpha: number; n_network: number; n_modules: number; n_testable: number; n_pass: number;
-  n_not_testable: number;
-  not_testable: { reason: string; reason_text: string; n_asv: number; n_modules: number;
-                  modules: number[] }[];
+  alpha: number; n_network: number; n_modules: number; n_graph: number; n_testable: number;
+  n_pass: number; n_not_testable: number;
+  mean_closeness: number | null; sd_closeness: number | null;
+  not_testable: { reason: string; reason_text: string; n_asv: number }[];
   ids: string[];
   statement: string;
 };
 
 export type Criterion2Asv = Criterion2Node & Criterion2Texts & {
   verdict: string;
-  module_mean_closeness?: number | null;
+  mean_closeness?: number | null;
 };
 
 export type Criterion2Module = Criterion2Texts & {
   module: number; module_size: number; testable: boolean; reason: string | null;
-  reason_text: string | null; mean_closeness: number | null; sd_closeness: number | null;
+  reason_text: string | null;
   n_pass: number; verdict: string;
   members_meeting: { asv_id: string; closeness: number | null; p: number | null;
                      q: number | null }[];
@@ -1070,8 +1070,8 @@ export const renameDataset = (id: string, region: string) =>
   });
 export const getNetwork = (ds: string, edge: "con" | "ccm", marker?: string | null) =>
   get<Network>(`/datasets/${ds}/network?edge=${edge}${marker ? `&marker=${marker}` : ""}`);
-export const getCriterion2 = (ds: string, q: number, minModule: number) =>
-  get<Criterion2Summary>(`/datasets/${ds}/criterion2?q=${q}&min_module=${minModule}`);
+export const getCriterion2 = (ds: string, q: number) =>
+  get<Criterion2Summary>(`/datasets/${ds}/criterion2?q=${q}`);
 export const getAsv = (ds: string, id: string) => get<AsvDetail>(`/datasets/${ds}/asv/${id}`);
 export const getSpectrum = (ds: string, id: string) =>
   get<{ dataset_id: string; asv_id: string; spectrum: Spectrum }>(

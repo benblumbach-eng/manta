@@ -2278,11 +2278,8 @@ def _layers(dataset_id: str) -> dict:
 
 
 @app.get("/datasets/{dataset_id}/criterion2", dependencies=[Depends(visible_dataset)])
-def criterion2(dataset_id: str,
-               q: float = Query(semantics.CRITERION2_ALPHA, gt=0, le=1),
-               min_module: int = Query(semantics.CRITERION2_MIN_MODULE,
-                                       ge=semantics.CRITERION2_MIN_MODULE)):
-    return semantics.criterion2_summary(semantics.criterion2(_q, dataset_id, q, min_module))
+def criterion2(dataset_id: str, q: float = Query(semantics.CRITERION2_ALPHA, gt=0, le=1)):
+    return semantics.criterion2_summary(semantics.criterion2(_q, dataset_id, q))
 
 
 @app.get("/datasets/{dataset_id}/network", dependencies=[Depends(visible_dataset)])
