@@ -1105,7 +1105,8 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
           color={clusterColor.get(selectedCluster)} onClose={() => setSelectedCluster(null)}
           onOpenAsv={onOpenAsv} onOpenEdge={onOpenEdge}
           colorOf={(c) => clusterColor.get(c)}
-          onOpenCluster={(c) => setSelectedCluster(c)} onInspectAt={onInspectAt} />
+          onOpenCluster={(c) => setSelectedCluster(c)} onInspectAt={onInspectAt}
+          crit={crit} c1Ids={c1Ids} />
         </PanelFrame>
       )}
 
