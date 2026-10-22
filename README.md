@@ -45,11 +45,11 @@ flowchart LR
     D --> E[Browser]
 ```
 
-- **DADA2** turns raw sequencing reads into **ASVs**: exact DNA sequences, each standing for
-  one kind of organism, with a count per sample.
+- **DADA2** turns raw sequencing reads into **ASVs** (amplicon sequence variants): exact DNA
+  sequences with a count per sample. Several ASVs can belong to the same organism.
 - **OTTER** finds which ASVs rise and fall together and groups them into **modules**.
 
-MANTA saves every result in a database and shows it in the browser. Every number you see comes
+MANTA saves every result in a database and shows it in the browser. Every number comes
 from one of these runs or is calculated directly from it, such as a monthly mean or the day
 length at the sampling site.
 
@@ -57,9 +57,9 @@ length at the sampling site.
 
 <table>
 <tr>
-<td width="33%" valign="top"><b>A world map</b> with all your datasets and the water depth.<br><img src="docs/images/map.png" alt="World map with datasets and water depth"></td>
+<td width="33%" valign="top"><b>A world map</b> with all your datasets.<br><img src="docs/images/map.png" alt="World map with datasets and water depth"></td>
 <td width="33%" valign="top"><b>A page per ASV</b> with its name, its abundance over time and its closest partners.<br><img src="docs/images/asv.png" alt="The detail page of one ASV"></td>
-<td width="33%" valign="top"><b>A year wheel</b> that shows when each module peaks, next to daylight and temperature.<br><img src="docs/images/wheel.png" alt="The year wheel with module windows and a temperature band"></td>
+<td width="33%" valign="top"><b>A year wheel</b> that shows when each module peaks.<br><img src="docs/images/wheel.png" alt="The year wheel with module windows and a temperature band"></td>
 </tr>
 </table>
 
@@ -275,7 +275,7 @@ A dataset needs at least 8 samples. Before starting, MANTA checks whether your c
 enough memory. DADA2 can take hours and needs a lot of memory; on a computer with 8 GB, run
 DADA2 elsewhere and import its results.
 
-At the end, MANTA looks up each organism name in published tables of what such organisms do.
+At the end, MANTA looks up the taxon name of each ASV in published tables of what such organisms do.
 This fills the function filter; it describes the name, it is not a measurement. If there are
 dates, MANTA also links the measurements to the ASVs.
 
