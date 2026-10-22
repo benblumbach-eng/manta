@@ -4,7 +4,7 @@ import { getStarred, type Capabilities, type Criterion2Summary, type Dataset,
 import DataAvailability from "./DataAvailability";
 import { useModules } from "../modules";
 import { fmtRun, fmtUtc } from "../format";
-import { isActive, type Filters, type FilterKind, layerLabel, layersDefault, functionLabel } from "../networkFilters";
+import { isActive, type Filters, type FilterKind, type KeystoneCrit, layerLabel, layersDefault, functionLabel } from "../networkFilters";
 import { FUNCTION_NONE, functionOther } from "../clusterPalette";
 import { useDatasetSearch } from "../datasetSearch";
 import ErrorNotice from "./ErrorNotice";
@@ -14,6 +14,17 @@ import { Segmented } from "./controls";
 
 const NEUTRAL_SWATCH = "var(--control-strong)";
 const BOX = "rounded-md border border-line bg-raised px-2 py-2 mb-2";
+
+const checkCls = (_on: boolean, enabled = true) =>
+  `flex items-center gap-2 rounded px-2 py-1 text-xs text-left tabular-nums ${enabled
+    ? "text-fg hover:bg-control" : "text-fg-disabled cursor-not-allowed"}`;
+const checkMark = (on: boolean) => (
+  <span aria-hidden className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center
+    rounded-[3px] border text-2xs leading-none ${on
+      ? "border-accent bg-accent-fill text-on-accent" : "border-line-strong"}`}>
+    {on ? "✓" : ""}
+  </span>
+);
 
 
 export const TAX_RANKS = ["species", "genus", "family", "order", "class", "phylum", "kingdom"];
@@ -29,6 +40,10 @@ export type SidebarProps = {
   caps: Capabilities | null;
   net: Network | null;
   c2: Criterion2Summary | null;
+  crit: KeystoneCrit;
+  onCrit: (c: KeystoneCrit) => void;
+  nCrit1: number;
+  nKey: number;
   thr: Thresholds | undefined;
   visibleNodes: NetNode[];
   clusters: number[];
@@ -186,7 +201,7 @@ export default function NetworkSidebar(p: SidebarProps) {
           : `${visibleClusters.length} of ${p.clusters.length}`);
       case "layer": return layerLabel(filters.layers);
       case "cross": return "crossing only";
-      case "c2": return "Hubs only";
+      case "c2": return "✦ only";
       case "function": return `Function: ${functionLabel(filters.fn ?? "")}`;
       case "taxon": return filters.taxon ? `${filters.taxon.value} (${filters.taxon.rank})` : "Taxon";
       case "asvs": {
@@ -558,6 +573,23 @@ export default function NetworkSidebar(p: SidebarProps) {
           )}
         </div>
 
+        {!p.taxaMode && (
+          <div className={BOX} data-testid="keystone-control">
+            <SectionHeading aside={<span className="text-xs text-mark tabular-nums"
+              data-testid="keystone-n">✦ {p.nKey}</span>}>Keystone</SectionHeading>
+            <div className="mt-1 flex flex-col gap-1">
+              <button data-testid="keystone-k1" aria-pressed={p.crit.k1}
+                onClick={() => p.onCrit({ ...p.crit, k1: !p.crit.k1 })} className={checkCls(p.crit.k1)}>
+                {checkMark(p.crit.k1)}<span>1 · CCM · {p.nCrit1} ASVs</span>
+              </button>
+              <button data-testid="keystone-k2" aria-pressed={p.crit.k2} disabled={!c2}
+                onClick={() => p.onCrit({ ...p.crit, k2: !p.crit.k2 })} className={checkCls(p.crit.k2, !!c2)}>
+                {checkMark(p.crit.k2)}<span>2 · closeness · {c2?.n_pass ?? "…"} ASVs</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className={BOX} data-testid="layer-control">
           <SectionHeading>Links</SectionHeading>
           <div className="mt-1 flex flex-col gap-1">
@@ -565,16 +597,8 @@ export default function NetworkSidebar(p: SidebarProps) {
               const L = filters.layers;
               const toggle = (k: "con" | "ccm" | "rejected") =>
                 p.onFilters({ layers: { ...L, [k]: !L[k] } });
-              const cls = (_on: boolean, enabled = true) =>
-                `flex items-center gap-2 rounded px-2 py-1 text-xs text-left tabular-nums ${enabled
-                  ? "text-fg hover:bg-control" : "text-fg-disabled cursor-not-allowed"}`;
-              const mark = (on: boolean) => (
-                <span aria-hidden className={`flex h-3.5 w-3.5 shrink-0 items-center justify-center
-                  rounded-[3px] border text-2xs leading-none ${on
-                    ? "border-accent bg-accent-fill text-on-accent" : "border-line-strong"}`}>
-                  {on ? "✓" : ""}
-                </span>
-              );
+              const cls = checkCls;
+              const mark = checkMark;
               const recorded = !!net?.layers?.ccm_tested_recorded;
               const unit = p.taxaMode ? "taxa" : "ASVs";
               return (
@@ -818,12 +842,11 @@ export default function NetworkSidebar(p: SidebarProps) {
                 className="w-full text-left px-2 py-1 hover:bg-control text-fg">
                 {filters.crossOnly ? "✓ " : ""}only module-crossing links
               </button>
-              <button data-testid="filter-add-c2" disabled={!c2}
+              <button data-testid="filter-add-c2"
                 onClick={() => { p.onFilters({ c2Only: !filters.c2Only }); setAddOpen(false); }}
-                title={c2?.glow}
                 className="w-full text-left px-2 py-1 hover:bg-control text-fg disabled:text-fg-muted">
-                {filters.c2Only ? "✓ " : ""}only hubs
-                {c2 && <span className="text-fg-muted"> ({c2.n_pass} of {c2.n_testable})</span>}
+                {filters.c2Only ? "✓ " : ""}only ✦
+                <span className="text-fg-muted"> ({p.nKey})</span>
               </button>
               <button data-testid="filter-add-function"
                 onClick={() => { setFunctionOpen(true); setAddOpen(false); }}
