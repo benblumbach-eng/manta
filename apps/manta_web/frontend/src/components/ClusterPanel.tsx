@@ -10,11 +10,12 @@ import FrequencyPanel from "./FrequencyPanel";
 import { NotesLink } from "./NotesPanel";
 import ErrorNotice from "./ErrorNotice";
 import { PanelHeader } from "./PanelFrame";
-import { Criterion2ModuleLine } from "./Criterion2";
+import { KEYSTONE_LABEL, type KeystoneCrit } from "../networkFilters";
 import StarButton from "./StarButton";
 
 export default function ClusterPanel({ datasetId, label, color, onClose, onOpenAsv, onOpenEdge,
-                                       onOpenCluster, onInspectAt, colorOf, isAdmin = false, signedIn = true }: {
+                                       onOpenCluster, onInspectAt, colorOf, crit = 2, c1Ids,
+                                       isAdmin = false, signedIn = true }: {
   datasetId: string;
   label: number;
   isAdmin?: boolean;
@@ -25,6 +26,8 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
   onOpenCluster?: (label: number) => void;
   onInspectAt?: (sample: string, mark?: InspectMark) => void;
   colorOf?: (label: number) => string | undefined;
+  crit?: KeystoneCrit;
+  c1Ids?: Set<string>;
   signedIn?: boolean;
 }) {
   const modules = useModules();
@@ -89,11 +92,16 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
   const genera = useMemo(
     () => Object.entries(c?.taxa_breakdown.genus ?? {}).sort((a, b) => b[1] - a[1]),
     [c]);
+  const keystone = (m: ClusterDetail["members"][number], k: KeystoneCrit) =>
+    k === 1 ? !!c1Ids?.has(m.id) : !!m.criterion2?.passes;
+  const anders: KeystoneCrit = crit === 1 ? 2 : 1;
   const members = useMemo(
     () => (c?.members ?? []).filter((m) => !genusFilter || m.genus === genusFilter)
-      .sort((a, b) => Number(!!b.criterion2?.passes) - Number(!!a.criterion2?.passes)
+      .sort((a, b) => Number(keystone(b, crit)) - Number(keystone(a, crit))
+        || Number(keystone(b, anders)) - Number(keystone(a, anders))
         || a.id.localeCompare(b.id)),
-    [c, genusFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [c, genusFilter, crit, c1Ids]);
 
   const Swatch = ({ n }: { n: number }) => (
     <span className="inline-block w-2.5 h-2.5 rounded-sm shrink-0 align-middle"
@@ -183,9 +191,12 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
                     className="flex items-baseline w-full text-left px-1 py-1 rounded
                                hover:bg-control disabled:hover:bg-transparent">
                     <span className="font-mono text-accent">{m.id}</span>
-                    {m.criterion2?.passes && (
-                      <span data-testid="member-c2" title="hub"
+                    {keystone(m, crit) ? (
+                      <span data-testid="member-keystone" title={`keystone · ${KEYSTONE_LABEL[crit]}`}
                         className="ml-1 text-mark">✦</span>
+                    ) : keystone(m, anders) && (
+                      <span data-testid="member-keystone-other" title={`keystone only under ${KEYSTONE_LABEL[anders]}`}
+                        className="ml-1 text-mark opacity-40">✦</span>
                     )}
                     {m.genus && <span className="text-fg-muted truncate ml-2">({m.genus})</span>}
                   </button>
@@ -200,12 +211,6 @@ export default function ClusterPanel({ datasetId, label, color, onClose, onOpenA
               </button>
             )}
           </section>
-
-          {c.criterion2 && (
-            <section data-testid="cluster-c2-section">
-              <Criterion2ModuleLine c2={c.criterion2} testid="cluster-c2" />
-            </section>
-          )}
 
           <section data-testid="cluster-connections">
             <h3 className="text-fg font-medium mb-1">Neighbours</h3>

@@ -378,9 +378,9 @@ def asv_detail(dataset_id: str, asv_id: str) -> dict:
         out["peak_month_note"] = "This dataset has no real time axis — no peak month."
     if out["cluster"] is None:
         out["network_note"] = NOT_IN_NETWORK_NOTE
-    out["funktion"] = ("Not derivable from amplicon data. Ecological function, metabolism, role "
-                       "in the food web and pathogenicity are NOT in these data. If asked, say "
-                       "exactly that — do not infer anything from the taxonomy.")
+    out["funktion"] = ("Not measured in these data. A function well known for this taxon may be "
+                       "named as general knowledge, not a result of this dataset; if the name "
+                       "does not clearly determine it, it is unknown.")
     out["environment_profile"] = semantics.environment_profile(_q, dataset_id, asv_id)
     out["cluster_name"] = ((semantics.module_label(_q, dataset_id, out["cluster"])["name"] or "")
                            if out.get("cluster") is not None else "")
@@ -425,24 +425,6 @@ def asv_spectrum(dataset_id: str, asv_id: str) -> dict:
             "value_declaration": {**semantics.value_declaration(_q, dataset_id, "the whole series, in sample order"),
                                   "applies_to": "amplitudes (input scale of the run)"}}
     return _envelope("asv_spectrum", q, {"dataset_id": dataset_id, "asv_id": asv_id}, data, sp["n"])
-
-
-def asv_function(dataset_id: str, asv_id: str) -> dict:
-    _require_dataset(dataset_id)
-    tr = semantics.asv_trait(_run, dataset_id, asv_id)
-    if tr is None:
-        raise ToolError(f"ASV {asv_id!r} not found in dataset {dataset_id!r}")
-    q = ("MATCH (a:ASV {id:$id, dataset_id:$d}) RETURN a.trait_function AS f, a.trait_source AS s, "
-         "a.trait_rank AS r, a.trait_run_id AS run")
-    genus = _run("MATCH (a:ASV {id:$id, dataset_id:$d}) RETURN a.genus AS g, a.species AS s",
-                 d=dataset_id, id=asv_id)[0]
-    data = {"asv_id": asv_id, "genus": genus["g"], "species": genus["s"], **tr,
-            "annotation_run": semantics.trait_run(_run, dataset_id)}
-    ok, grund = anwendbarkeit.pruefen(_q, dataset_id, _requires("asv_function"))
-    if not ok:
-        data["absent_reason"] = grund
-    return _envelope("asv_function", q, {"dataset_id": dataset_id, "asv_id": asv_id}, data,
-                     len(tr["functions"]))
 
 
 def asv_seasonality(dataset_id: str, asv_id: str) -> dict:
@@ -775,25 +757,6 @@ def cluster_detail(dataset_id: str, cluster: int) -> dict:
                      {"dataset_id": dataset_id, "cluster": cluster}, out, len(members))
 
 
-def cluster_functions(dataset_id: str, cluster: int) -> dict:
-    _require_dataset(dataset_id)
-    cf = semantics.cluster_functions(_run, dataset_id, cluster)
-    if cf["n_members"] == 0:
-        known = _run("MATCH (a:ASV {dataset_id:$d}) WHERE a.louvain_label IS NOT NULL "
-                     "RETURN DISTINCT a.louvain_label AS l ORDER BY l", d=dataset_id)
-        raise ToolError(f"no cluster {cluster} in {dataset_id!r}. "
-                        f"Present: {[r['l'] for r in known]}")
-    q = ("MATCH (a:ASV {dataset_id:$d}) WHERE a.louvain_label = $l "
-         "RETURN a.id AS id, a.trait_function AS f ORDER BY a.id")
-    data = {"cluster": cluster, "cluster_display": semantics.module_label(_q, dataset_id, cluster)["display"],
-            **cf, "annotation_run": semantics.trait_run(_run, dataset_id)}
-    ok, grund = anwendbarkeit.pruefen(_q, dataset_id, _requires("cluster_functions"))
-    if not ok:
-        data["absent_reason"] = grund
-    return _envelope("cluster_functions", q, {"dataset_id": dataset_id, "cluster": cluster}, data,
-                     cf["n_members"])
-
-
 def taxa_composition(dataset_id: str, rank: RankArg = "genus", limit: TaxaLimitArg = 15,
                      network_only: bool = False) -> dict:
     _require_dataset(dataset_id)
@@ -1009,7 +972,7 @@ _LIMIT_RE = re.compile(r"\bLIMIT\s+(\d+)", re.IGNORECASE)
 NICHT_ABFRAGBAR = {"Star", "Reference"}
 
 FREI_ABFRAGBAR = {"ASV", "Sample", "Dataset", "Cluster", "Run", "EnvVariable",
-                  "TraitRun", "EnvLinkRun", "Dada2Run"}
+                  "EnvLinkRun", "Dada2Run"}
 
 _NODE_RE = re.compile(
     r"(?<![A-Za-z0-9_.])\(\s*([A-Za-z_][A-Za-z0-9_]*)?\s*"
@@ -1360,8 +1323,6 @@ _REQUIRES: dict[str, list[str]] = {
     "group_comparison_test": ["time_axis=dates"],
     "pair_proportionality": ["value_kind=reads"],
     "environment_correlation": ["env_variables"],
-    "asv_function": ["traits"],
-    "cluster_functions": ["traits"],
 }
 
 

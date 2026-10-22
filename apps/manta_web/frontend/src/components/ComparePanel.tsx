@@ -7,6 +7,7 @@ import InfoTip from "./InfoTip";
 import { PanelHeader } from "./PanelFrame";
 import ProvenanceFooter from "./ProvenanceFooter";
 import ErrorNotice from "./ErrorNotice";
+import { fmtShare } from "../format";
 import InspectTimePoint from "./InspectTimePoint";
 import { useDatasetSearch } from "../datasetSearch";
 import { chartTooltip, FONT, useTokens } from "../design/tokens";
@@ -72,7 +73,8 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
       setPunkt((p) => p ?? r.samples[0]?.sample ?? null);
     }).catch(() => setSamples([]));
   }, [datasetId]);
-  const [asvListe, setAsvListe] = useState<{ id: string; label: string }[]>([]);
+  const [asvListe, setAsvListe] = useState<{ id: string; label: string; share: number }[]>([]);
+  const [searchFocus, setSearchFocus] = useState(false);
   useEffect(() => {
     setAsvListe([]);
     getAsvList(datasetId).then((r) => setAsvListe(r.asvs)).catch(() => setAsvListe([]));
@@ -91,10 +93,15 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
   const ganz = useDatasetSearch(datasetId, search, 8);
 
   type Kandidat = { key: string; kind: Kind; id: string; label: string; sub: string | null;
-                    outside?: boolean };
+                    outside?: boolean; share?: number };
   const candidates = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return [] as Kandidat[];
+    if (!q) {
+      if (!searchFocus) return [] as Kandidat[];
+      return asvListe.filter((a) => !chosen.has(`asv:${a.id}`)).slice(0, 10).map((a): Kandidat => ({
+        key: `asv:${a.id}`, kind: "asv", id: a.id, label: a.id,
+        sub: a.label !== "unassigned" ? a.label : null, share: a.share }));
+    }
     const treffer: Kandidat[] = [];
     for (const v of env?.variables ?? []) {
       if (v.label.toLowerCase().includes(q) || v.key.toLowerCase().includes(q)) {
@@ -111,13 +118,14 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
       }
     }
     const r = ganz.result;
-    for (const a of [...(r?.in_network.asvs ?? []), ...(r?.outside_network.asvs ?? [])]) {
+    for (const a of [...(r?.in_network.asvs ?? []), ...(r?.outside_network.asvs ?? [])]
+           .sort((x, y) => y.share - x.share)) {
       treffer.push({ key: `asv:${a.id}`, kind: "asv", id: a.id, label: a.id,
                      sub: a.genus ?? (a.label !== "unassigned" ? a.label : null),
-                     outside: a.cluster == null });
+                     outside: a.cluster == null, share: a.share });
     }
     return treffer.filter((t) => !chosen.has(t.key)).slice(0, 8);
-  }, [ganz.result, env, modules, search, chosen]);
+  }, [ganz.result, env, modules, search, chosen, searchFocus, asvListe]);
 
   const add = (kind: Kind, id: string) => {
     const key = `${kind}:${id}`;
@@ -321,6 +329,8 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
             <div>
               <input data-testid="compare-search" value={search}
                 onChange={(e) => setSearch(e.target.value)}
+                onFocus={() => setSearchFocus(true)}
+                onBlur={() => setTimeout(() => setSearchFocus(false), 150)}
                 placeholder={curves.length >= MAX_CURVES
                   ? `at most ${MAX_CURVES} curves`
                   : "add an ASV, a module or an environmental variable …"}
@@ -347,6 +357,9 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
                             · no link in the network
                           </span>
                         )}
+                        {t.share != null && (
+                          <span className="ml-auto text-fg font-semibold tabular-nums">{fmtShare(t.share)}</span>
+                        )}
                       </button>
                     </li>
                   ))}
@@ -370,7 +383,7 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
                   m.display || `module ${m.louvain_label}`])],
                 ["env", "environment", (env?.variables ?? []).map((v) => [v.key, v.label])],
                 ["asv", "ASV", asvListe.map((a) => [a.id,
-                  a.label !== "unassigned" ? `${a.id} · ${a.label}` : a.id])],
+                  `${a.id}${a.label !== "unassigned" ? ` · ${a.label}` : ""} · ${fmtShare(a.share)}`])],
               ] as [Kind, string, [string, string][]][]).map(([kind, name, eintraege]) => (
                 <select key={kind} data-testid={`compare-pick-${kind}`} value=""
                   aria-label={`add ${name}`}

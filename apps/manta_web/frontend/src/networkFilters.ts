@@ -5,10 +5,25 @@ export type KeystoneCrit = 1 | 2;
 
 export const KEYSTONE_LABEL: Record<KeystoneCrit, string> = {
   1: "1 · significant CCM link",
-  2: "2 · high closeness in its module",
+  2: "2 · high closeness in the CCM network",
 };
 
-export type FilterKind = "modules" | "layer" | "cross" | "c2" | "function" | "taxon" | "asvs"
+export type KeystoneParams = { crit: KeystoneCrit; p1: number; links1: number; q2: number };
+
+export const KEYSTONE_DEFAULTS: KeystoneParams = { crit: 2, p1: 0.05, links1: 1, q2: 0.05 };
+
+const keystoneKey = (ds: string) => `manta-keystone:${ds}`;
+
+export function loadKeystone(ds: string): KeystoneParams {
+  try { return { ...KEYSTONE_DEFAULTS, ...JSON.parse(localStorage.getItem(keystoneKey(ds)) ?? "{}") }; }
+  catch { return KEYSTONE_DEFAULTS; }
+}
+
+export function saveKeystone(ds: string, k: KeystoneParams) {
+  try { localStorage.setItem(keystoneKey(ds), JSON.stringify(k)); } catch { }
+}
+
+export type FilterKind = "modules" | "layer" | "cross" | "c2" | "taxon" | "asvs"
   | "presence" | "abundance" | "strength";
 
 export type TaxonFilter = { rank: string; value: string };
@@ -19,7 +34,6 @@ export type Filters = {
   layers: { con: boolean; ccm: boolean; rejected: boolean };
   crossOnly: boolean;
   c2Only: boolean;
-  fn: string | null;
   taxon: TaxonFilter | null;
   asvs: AsvFilter | null;
   presence: number | null;
@@ -31,7 +45,7 @@ export const DEFAULT_LAYERS = { con: true, ccm: true, rejected: false } as const
 
 export const emptyFilters = (): Filters => ({
   hidden: new Set(), layers: { ...DEFAULT_LAYERS }, crossOnly: false, c2Only: false,
-  fn: null, taxon: null, asvs: null, presence: null, abundance: null, strength: null,
+  taxon: null, asvs: null, presence: null, abundance: null, strength: null,
 });
 
 export const layersDefault = (l: Filters["layers"]): boolean =>
@@ -50,10 +64,8 @@ export function layerLabel(l: Filters["layers"]): string {
   return "all links";
 }
 
-export const FILTER_KINDS: FilterKind[] = ["modules", "layer", "cross", "c2", "function", "taxon",
+export const FILTER_KINDS: FilterKind[] = ["modules", "layer", "cross", "c2", "taxon",
                                            "asvs", "presence", "abundance", "strength"];
-
-export const functionLabel = (fn: string): string => (fn === "" ? "not annotated" : fn);
 
 export const isActive = (f: Filters, k: FilterKind): boolean => {
   switch (k) {
@@ -61,7 +73,6 @@ export const isActive = (f: Filters, k: FilterKind): boolean => {
     case "layer": return !layersDefault(f.layers);
     case "cross": return f.crossOnly;
     case "c2": return f.c2Only;
-    case "function": return f.fn != null;
     case "taxon": return f.taxon != null;
     case "asvs": return (f.asvs?.ids.length ?? 0) > 0;
     case "presence": return f.presence != null;
@@ -76,7 +87,6 @@ export const takeKind = (dst: Filters, src: Filters, k: FilterKind): Filters => 
     case "layer": return { ...dst, layers: { ...src.layers } };
     case "cross": return { ...dst, crossOnly: src.crossOnly };
     case "c2": return { ...dst, c2Only: src.c2Only };
-    case "function": return { ...dst, fn: src.fn };
     case "taxon": return { ...dst, taxon: src.taxon };
     case "asvs": return { ...dst, asvs: src.asvs };
     case "presence": return { ...dst, presence: src.presence };
@@ -111,7 +121,6 @@ export function computeVisible(net: Network, f: Filters, c2Ids: Set<string>): Vi
   const pass = (n: NetNode): boolean => {
     if (f.hidden.has(n.cluster)) return false;
     if (f.c2Only && !c2Ids.has(n.id)) return false;
-    if (f.fn != null && (n.trait_group ?? "") !== f.fn) return false;
     if (f.taxon
         && (n as unknown as Record<string, unknown>)[f.taxon.rank] !== f.taxon.value) return false;
     if (asvActive && !asvSet.has(n.id)
@@ -177,7 +186,6 @@ export function encodeFilters(f: Filters): string {
   if (f.layers.rejected) seg.push("rej");
   if (f.crossOnly) seg.push("x");
   if (f.c2Only) seg.push("c2");
-  if (f.fn != null) seg.push("fn-" + encodeURIComponent(f.fn));
   if (f.taxon) seg.push(`t-${f.taxon.rank}-${encodeURIComponent(f.taxon.value)}`);
   if (f.asvs?.ids.length)
     seg.push("a" + (f.asvs.neighbors ? "n" : "") + "-" + f.asvs.ids.join("."));
@@ -197,7 +205,6 @@ export function decodeFilters(s: string | null): Filters {
     else if (seg === "rej") f.layers = { ...f.layers, rejected: true };
     else if (seg === "x") f.crossOnly = true;
     else if (seg === "c2" || seg === "h") f.c2Only = true;
-    else if (seg.startsWith("fn-")) f.fn = decodeURIComponent(seg.slice(3));
     else if (seg.startsWith("m-")) {
       f.hidden = new Set(seg.slice(2).split(".").map(Number).filter(Number.isFinite));
     } else if (seg.startsWith("t-")) {
@@ -233,9 +240,6 @@ export const CROSS_LINK_COLOR = "var(--cross-link)";
 
 export function legendRows(o: {
   nModules: number;
-  colorMode?: "module" | "function";
-  nFunctionClasses?: number;
-  taxaMode?: boolean;
   nCross?: number | null;
   sizePresent: boolean | null;
   conTr: number | null; conAlpha: number | null; recorded: boolean;
@@ -247,10 +251,7 @@ export function legendRows(o: {
 }): LegendRow[] {
   const rows: LegendRow[] = [
     { key: "node", icon: "●", term: "Node",
-      desc: o.colorMode === "function"
-        ? `colour = function (${o.nFunctionClasses ?? 0} classes, grey = ${o.taxaMode
-            ? "not annotated or mixed classes" : "not annotated"})`
-        : `colour = module (${o.nModules})`,
+      desc: `colour = module (${o.nModules})`,
       dim: false },
     { key: "size", icon: "◯", term: "Size", desc: "reads summed over all samples",
       dim: o.sizePresent === false, struck: o.sizePresent === false },
