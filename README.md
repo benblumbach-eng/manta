@@ -78,7 +78,7 @@ You can also:
   number it cannot back up with `[no evidence]`. Its tools also work in other AI apps that
   support MCP (`apps/manta_mcp/start_mcp.sh`).
 
-The screenshots show the HAUSGARTEN F4 example data from OTTER, which is not included here.
+The screenshots show the made-up example dataset `examples/synthetic_12_samples`.
 
 ## Installation
 
@@ -449,13 +449,12 @@ downloads them from their original sources.
   [doi:10.5281/zenodo.15149453](https://doi.org/10.5281/zenodo.15149453), CC BY 4.0); for 16S:
   FAPROTAX 1.2.12 (Louca et al. 2016, *Science* 353:1272, [doi:10.1126/science.aaf4507](https://doi.org/10.1126/science.aaf4507);
   own license, included in the download). Downloads are checked against fixed checksums.
-- **Screenshots** — HAUSGARTEN F4 from OTTER's test data; Oldenburg et al. 2024, *Commun Earth
-  Environ* 5:643, [doi:10.1038/s43247-024-01782-0](https://doi.org/10.1038/s43247-024-01782-0).
-- **Example datasets** — synthetic, made for MANTA; MIT License.
+- **Example datasets and screenshots** — synthetic, made for MANTA; MIT License.
 
 **Methods**
 
-- Network terms — Oldenburg et al. 2024 (above).
+- Network terms — Oldenburg et al. 2024, *Commun Earth Environ* 5:643,
+  [doi:10.1038/s43247-024-01782-0](https://doi.org/10.1038/s43247-024-01782-0).
 - Seasonal recurrence and modules — Priest et al. 2025, *Nat Commun* 16:1326,
   [doi:10.1038/s41467-025-56203-3](https://doi.org/10.1038/s41467-025-56203-3). The paper measures
   annual oscillation and peak timing per ASV and year-to-year differences per community; MANTA's
