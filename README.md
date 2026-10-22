@@ -24,7 +24,7 @@ See which marine organisms occur together, and when in the year, in your browser
 
 <br>
 
-<img src="docs/images/network.png" alt="A dataset's network: modules in color, directed links, ASVs meeting criterion 2 highlighted" width="100%">
+<img src="docs/images/network.png" alt="A dataset's network: modules in color, directed links, possible keystone ASVs marked" width="100%">
 
 </div>
 
@@ -35,7 +35,7 @@ sequenced for a marker gene (16S or 18S). It turns these sequences into explorab
 shows where the samples come from, which organisms occur together, and in which season they
 peak.
 
-MANTA does not invent new statistics. It runs two established tools for you:
+MANTA builds on two established tools and runs them for you:
 
 ```mermaid
 flowchart LR
@@ -58,7 +58,7 @@ length at the sampling site.
 <table>
 <tr>
 <td width="33%" valign="top"><b>A world map</b> with all your datasets.<br><img src="docs/images/map.png" alt="World map with datasets and water depth"></td>
-<td width="33%" valign="top"><b>A page per ASV</b> with its name, its abundance over time and its closest partners.<br><img src="docs/images/asv.png" alt="The detail page of one ASV"></td>
+<td width="33%" valign="top"><b>A page per ASV</b> with its taxon name, its abundance over time and its closest partners.<br><img src="docs/images/asv.png" alt="The detail page of one ASV"></td>
 <td width="33%" valign="top"><b>A year wheel</b> that shows when each module peaks.<br><img src="docs/images/wheel.png" alt="The year wheel with module windows and a temperature band"></td>
 </tr>
 </table>
@@ -83,8 +83,8 @@ The screenshots show the HAUSGARTEN F4 example data from OTTER, which is not inc
 ## Installation
 
 Installation has two steps. Step 1 starts MANTA so you can look at data. Step 2 installs the
-analysis tools (OTTER and the steps that prepare and save its results, as Git submodules and
-Python environments) and the import page in the browser. You need step 2 for every dataset,
+analysis tools (OTTER as a Git submodule, plus the Python environments that prepare its input
+and save its results) and the import page in the browser. You need step 2 for every dataset,
 including the example.
 
 You need [Docker](https://docs.docker.com/get-started/get-docker/) with Compose and
@@ -194,8 +194,8 @@ change it in `deploy/.env`. The database's usage reporting is switched off.
    also appears at <http://localhost:8080>.
 
 After restarting your computer, run `cd ~/manta && bash apps/manta_web/dev.sh start` again (on
-Windows, start Docker Desktop first). Instead of `start`, the same script also takes `stop`,
-`restart`, `status` and `logs`. `stop --db` also stops the database, so
+Windows, start Docker Desktop first). Besides `start`, the script knows `stop`, `restart`,
+`status` and `logs`. `stop --db` also stops the database, so
 <http://localhost:8080> then shows no data. The import uses the ports 8000 and 5173; to change
 them, set `MANTA_BACKEND_PORT` and `MANTA_FRONTEND_PORT`.
 
@@ -253,8 +253,8 @@ your files.
    map, also enter a latitude and longitude.
 4. Click **Start import**.
 
-A card shows the progress. You can close the page; the import keeps running. It takes from
-minutes to hours, mostly for OTTER. When it is done, the dataset appears in the list.
+A card shows the progress. You can close the page; the import keeps running. It takes minutes
+to hours; most of that time goes to OTTER. When it is done, the dataset appears in the list.
 
 ### Which files you can import
 
@@ -262,7 +262,7 @@ minutes to hours, mostly for OTTER. When it is done, the dataset appears in the 
   `…_R2_001.fastq.gz`. MANTA runs DADA2 and then OTTER. This needs DADA2 from the optional
   section above.
 - **DADA2 results:** an abundance table, a taxonomy table and the ASV sequences, as `.Rdata`,
-  `.csv` or `.fasta` files. You can also use OTTER's input tables `abundance.csv`,
+  `.csv` or `.fa`/`.fasta` files. You can also use OTTER's input tables `abundance.csv`,
   `taxa_info.csv` and `environment_info.csv`. MANTA runs OTTER.
 - **OTTER results:** OTTER's network tables, plus `abundance.csv` and `environment_info.csv`
   (and `manta_manifest.json`, if you have it). MANTA only saves them.
@@ -282,12 +282,12 @@ measurements. Without dates, MANTA only knows the order of the samples and shows
 Read tracking (DADA2's table of how many reads each sample kept) is optional. If you add it,
 MANTA checks that no sample lost too many reads.
 
-A dataset needs at least 8 samples. Before starting, MANTA checks whether your computer has
+A dataset needs at least 8 samples. Before OTTER starts, MANTA checks whether your computer has
 enough memory. DADA2 can take hours and needs a lot of memory; on a computer with 8 GB, run
 DADA2 elsewhere and import its results.
 
-At the end, MANTA looks up the taxon name of each ASV in published tables of what such organisms do.
-This fills the function filter; it describes the name, it is not a measurement. If there are
+At the end, MANTA looks up the taxon name of each ASV in published tables of what such organisms
+do. This fills the function filter; it describes the name, it is not a measurement. If there are
 dates, MANTA also links the measurements to the ASVs.
 
 If you recalculate a network in MANTA, it creates a new dataset and leaves the original as it is.
@@ -315,7 +315,8 @@ cd ~/manta && bash update.sh
 This downloads the newest version, installs only what changed and restarts MANTA. Your data
 stay. Docker must be running.
 
-**Don't update while an import is running.** The update restarts the import and stops it.
+**Don't update while an import is running.** The update restarts the import page, which stops
+a running import.
 
 If you changed files in `~/manta` yourself, the update stops instead of overwriting them.
 `bash update.sh --check` only tells you whether an update exists (exit code `10` means yes, `0`
@@ -342,7 +343,7 @@ in `~/manta`, and start the import as in step 2. When everything works, delete `
 ### Backup
 
 `bash deploy/backup.sh` saves the database and the accounts from step 1 to `deploy/backups/`.
-MANTA is unavailable for about 20 seconds meanwhile. To restore, run
+MANTA pauses for about 20 seconds while it runs. To restore, run
 `bash deploy/restore.sh <neo4j-*.dump> [auth-*.db]`. Both explain their options with `--help`.
 
 ## Troubleshooting
@@ -456,16 +457,16 @@ downloads them from their original sources.
   [doi:10.1038/s41467-025-56203-3](https://doi.org/10.1038/s41467-025-56203-3). The paper measures
   annual oscillation and peak timing per ASV and year-to-year differences per community; MANTA's
   peak window and year-to-year variability per module build on these ideas but are its own.
-- Keystone criteria — Oldenburg et al. 2024 (above), Methods "Keystone species definition":
-  (1) "a significant influence on other ASV in the network", (2) "a high centrality (closeness)
+- Keystone criteria — Oldenburg et al. 2024 (above), Methods "Keystone species definition": (1)
+  "a significant influence on other ASV in the network", (2) "a high centrality (closeness)
   value within its co-occurrence community", (3) "presence in at least one stable state as
   predicted by ELA". For criterion 1, MANTA marks every ASV at either end of a link with a
-  significant CCM direction. For criterion 2, MANTA works on the undirected co-occurrence network:
-  closeness within the module subgraph (all members, all links with both ends in the module), unweighted (n − 1)/Σd; per ASV a
-  one-sided one-sample t-test of the module's closeness values against its own
-  (`scipy.stats.ttest_1samp(…, popmean=c_i, alternative='less')`); Benjamini–Hochberg over all
-  testable network ASVs, q ≤ 0.05. Criterion 3 is not tested, so marked ASVs are candidates,
-  not keystones.
+  significant CCM direction. For criterion 2, MANTA works on the undirected co-occurrence
+  network: closeness within the module subgraph (all members, all links with both ends in the
+  module), unweighted (n − 1)/Σd; per ASV a one-sided one-sample t-test of the module's
+  closeness values against its own (`scipy.stats.ttest_1samp(…, popmean=c_i,
+  alternative='less')`); Benjamini–Hochberg over all testable network ASVs, q ≤ 0.05. Criterion
+  3 is not tested, so marked ASVs are candidates, not keystones.
 
 <br>
 
