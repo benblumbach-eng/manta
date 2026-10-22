@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import OwnModelSettings from "./OwnModelSettings";
 import { createPortal } from "react-dom";
 import ReactECharts from "echarts-for-react";
 import { getCapabilities, getCriterion2, getNetwork,
@@ -1028,6 +1029,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                   </TextButton>
                 </div>
               )}
+              {signedIn && <OwnModelSettings />}
             </div>, document.body)}
         {net ? (
           <ReactECharts ref={chartRef} option={option} style={{ height: "100%", width: "100%" }}

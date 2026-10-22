@@ -2,9 +2,8 @@ import { useEffect, useState } from "react";
 import { adminTranscripts, type ConversationSummary, type Dataset } from "../api";
 import { ConversationView } from "./Transcript";
 
-export default function TranscriptsAdmin({ datasets = [], input, refresh = 0 }:
-  { datasets?: Dataset[]; input: string;
-    refresh?: number }) {
+export default function TranscriptsAdmin({ datasets = [], input }:
+  { datasets?: Dataset[]; input: string }) {
   const [rows, setRows] = useState<ConversationSummary[] | null>(null);
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [q, setQ] = useState("");
@@ -20,18 +19,17 @@ export default function TranscriptsAdmin({ datasets = [], input, refresh = 0 }:
         .catch((e) => { if (alive) setErr(String((e as Error).message ?? e)); });
     }, 250);
     return () => { alive = false; clearTimeout(t); };
-  }, [q, user, refresh]);
+  }, [q, user]);
 
   const label = (ds: string) =>
     ds ? (datasets.find((d) => d.dataset_id === ds)?.region ?? ds) : "no dataset";
 
   return (
     <section className="space-y-2" data-testid="admin-transcripts">
-      <h3 className="text-sm font-medium text-fg">Assistant transcripts</h3>
-      {err && <p className="text-xs text-danger">{err}</p>}
+            {err && <p className="text-xs text-danger">{err}</p>}
       {enabled === false && (
         <p data-testid="admin-transcripts-off" className="text-xs text-fg-muted">
-          Off: switch on &ldquo;Admins can read all transcripts&rdquo; under Assistant.
+          Off: <code>MANTA_ADMINS_READ_TRANSCRIPTS=off</code> is set in <code>deploy/.env</code>.
         </p>
       )}
       {enabled && (

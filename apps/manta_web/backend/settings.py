@@ -19,22 +19,10 @@ MAIL_KEYS: dict[str, str] = {
     "request_mailto": "MANTA_REQUEST_MAILTO",
     "public_url": "MANTA_PUBLIC_URL",
 }
-AGENT_KEYS: dict[str, str] = {
-    "ollama_model": "OLLAMA_MODEL",
-    "grounding": "MANTA_GROUNDING",
-    "openai_base_url": "MANTA_OPENAI_BASE_URL",
-    "openai_api_key": "MANTA_OPENAI_API_KEY",
-    "openai_models": "MANTA_OPENAI_MODELS",
-    "openai_timeout": "MANTA_OPENAI_TIMEOUT",
-    "provider_hosts": "MANTA_PROVIDER_HOSTS",
-    "admins_read_transcripts": "MANTA_ADMINS_READ_TRANSCRIPTS",
-}
-ALL_KEYS: dict[str, str] = {**MAIL_KEYS, **AGENT_KEYS}
+ALL_KEYS: dict[str, str] = MAIL_KEYS
 ENV_TO_KEY: dict[str, str] = {env: key for key, env in ALL_KEYS.items()}
-SECRET_KEYS = frozenset({"smtp_password", "openai_api_key"})
+SECRET_KEYS = frozenset({"smtp_password"})
 TLS_MODES = ("starttls", "ssl", "none")
-GROUNDING_MODES = ("off", "mark", "refuse")
-SWITCH_VALUES = ("on", "off")
 
 
 def _conn() -> sqlite3.Connection:
@@ -119,45 +107,15 @@ def validate(values: dict[str, str]) -> None:
     url = (values.get("public_url") or "").strip()
     if url and not re.match(r"^https?://", url):
         raise ValueError("public_url must start with http:// or https://")
-    belegpflicht = (values.get("grounding") or "").strip().lower()
-    if belegpflicht and belegpflicht not in GROUNDING_MODES:
-        raise ValueError(f"grounding must be {' | '.join(GROUNDING_MODES)}")
-    basis = (values.get("openai_base_url") or "").strip()
-    if basis and not re.match(r"^https?://", basis):
-        raise ValueError("openai_base_url must start with http:// or https://")
-    if basis.lower().startswith("http://"):
-        try:
-            host = (urlsplit(basis).hostname or "").lower()
-        except ValueError:
-            host = ""
-        if host not in ("localhost", "127.0.0.1", "::1"):
-            raise ValueError("openai_base_url must use https — http only to localhost")
-    mitlesen = (values.get("admins_read_transcripts") or "").strip().lower()
-    if mitlesen and mitlesen not in SWITCH_VALUES:
-        raise ValueError(f"admins_read_transcripts must be {' | '.join(SWITCH_VALUES)}")
-    hosts = (values.get("provider_hosts") or "").strip()
-    if hosts and not all(host_entry(h) for h in hosts.split(",") if h.strip()):
-        raise ValueError("provider_hosts: host names (optionally host:port) separated by commas, "
-                         "without scheme or path")
-    zeit = (values.get("openai_timeout") or "").strip()
-    if zeit:
-        try:
-            if float(zeit) <= 0:
-                raise ValueError
-        except ValueError:
-            raise ValueError("openai_timeout must be a number greater than 0") from None
 
 
 SECRET_TARGETS: dict[str, tuple[str, ...]] = {
     "smtp_password": ("smtp_host", "smtp_port", "smtp_tls"),
-    "openai_api_key": ("openai_base_url",),
 }
 
 
 def _ziel(key: str, value: str) -> str:
     v = (value or "").strip()
-    if key == "openai_base_url":
-        return (v or "https://api.openai.com/v1").rstrip("/").lower()
     if key == "smtp_tls":
         return (v or "starttls").lower()
     if key == "smtp_port":
@@ -183,7 +141,7 @@ def set_many(values: dict[str, str], by: str) -> dict:
     with _conn() as c:
         for key, value in values.items():
             wert = (value or "").strip()
-            if key in ("smtp_tls", "grounding", "admins_read_transcripts"):
+            if key == "smtp_tls":
                 wert = wert.lower()
             c.execute("INSERT INTO settings(key, value, updated_at, updated_by) VALUES (?,?,?,?) "
                       "ON CONFLICT(key) DO UPDATE SET value=excluded.value, "

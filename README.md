@@ -237,10 +237,14 @@ Instead of a local model you can use an OpenAI-compatible service with the `MANT
 settings in `deploy/.env`. Your questions and the values they touch are then sent to that
 service.
 
+Anyone with a key for a stronger model connects it for their own account under **⚙ settings →
+Own model** (address, model, API key). The key is stored encrypted with the account; it then
+appears in the chat's model menu.
+
 Each conversation is saved to the account that had it, one thread per dataset, with a full
 record of how each answer came about: the model, every tool it used with input and output, and
-the evidence check. Admins can read all conversations while *Admins can read all transcripts* is
-on in the admin panel (the default); the chat tells users so. Keys and passwords are never saved.
+the evidence check. Admins read all conversations under **admin → Transcripts**; the chat tells
+users so. Keys and passwords never appear in a transcript.
 
 ## Importing data
 

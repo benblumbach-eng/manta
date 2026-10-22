@@ -6,3 +6,4 @@ python-multipart==0.0.32
 scipy==1.15.3
 numpy==2.4.6
 mcp==2.0.0
+cryptography==50.0.1

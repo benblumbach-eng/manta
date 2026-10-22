@@ -249,11 +249,7 @@ export type MailSettingsView = {
   values: {
     smtp_host: string; smtp_port: string; smtp_tls: string; smtp_user: string;
     mail_from: string; request_mailto: string; public_url: string;
-    ollama_model: string; grounding: string; openai_base_url: string;
-    openai_models: string; openai_timeout: string;
-    provider_hosts?: string;
-    admins_read_transcripts?: string;
-    smtp_password_set: boolean; openai_api_key_set: boolean;
+    smtp_password_set: boolean;
   };
   source: Record<string, "panel" | "env" | "unset">;
   updated_at: number | null;
@@ -263,17 +259,6 @@ export type MailSettingsView = {
 export type MailSettingsPatch = Partial<Record<
   "smtp_host" | "smtp_port" | "smtp_tls" | "smtp_user" | "smtp_password" |
   "mail_from" | "request_mailto" | "public_url", string>>;
-
-export type AgentSettingsPatch = Partial<Record<
-  "ollama_model" | "grounding" | "openai_base_url" | "openai_api_key" |
-  "openai_models" | "openai_timeout" | "provider_hosts" | "admins_read_transcripts", string>>;
-
-export const agentSettings = (): Promise<MailSettingsView> =>
-  F(`${BASE}/admin/settings/agent`).then(okJson<MailSettingsView>);
-export const saveAgentSettings = (patch: AgentSettingsPatch) =>
-  adminSend("/admin/settings/agent", "PUT", patch) as Promise<MailSettingsView>;
-export const resetAgentSettings = (keys: string[]) =>
-  adminSend("/admin/settings/agent/reset", "POST", { keys }) as Promise<MailSettingsView>;
 
 export const mailSettings = (): Promise<MailSettingsView> =>
   F(`${BASE}/admin/settings/mail`).then(okJson<MailSettingsView>);
@@ -851,7 +836,11 @@ export type AgentAnswer = {
   check?: "cited" | "listed" | "numbers" | "off" | "failed" | "none";
 };
 
-export type OwnProvider = { base_url: string; model: string; key: string };
+export type OwnModel = { set: boolean; base_url?: string; model?: string };
+export const getOwnModel = () => get<OwnModel>("/me/own-model");
+export const saveOwnModel = (base_url: string, model: string, key?: string) =>
+  adminSend("/me/own-model", "PUT", { base_url, model, key: key || undefined }) as Promise<OwnModel>;
+export const removeOwnModel = () => adminSend("/me/own-model", "DELETE") as Promise<OwnModel>;
 
 export type ToolHelp = {
   name: string; usage: string; summary: string;
@@ -892,13 +881,12 @@ export class AgentAskError extends ApiError {
 }
 
 export const askAgent = (question: string, ctx: AgentContext, model?: string,
-                         own?: OwnProvider, history?: ChatTurn[], conversationId?: string | null) =>
+                         own?: boolean, history?: ChatTurn[], conversationId?: string | null) =>
   F(`${BASE}/agent/ask`, {
     method: "POST",
-    headers: { "Content-Type": "application/json",
-               ...(own ? { "X-MANTA-Provider-Key": own.key } : {}) },
-    body: JSON.stringify({ question, model: own ? own.model : model,
-                           provider_url: own ? own.base_url : undefined,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question, model: own ? undefined : model,
+                           own_model: own || undefined,
                            dataset_id: ctx.dataset_id,
                            asv_id: ctx.asv_id, cluster: ctx.cluster ?? null,
                            concept: ctx.concept, question_kind: ctx.question_kind,

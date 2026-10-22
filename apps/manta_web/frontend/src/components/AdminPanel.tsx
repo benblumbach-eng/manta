@@ -1,17 +1,32 @@
-import { Button, Dialog, SectionHeading } from "./ui";
+import { Button, Dialog } from "./ui";
+import { Segmented } from "./controls";
 import { useEffect, useState } from "react";
 import {
   adminCreateUser, adminDeleteUser, adminPatchUser, adminRevokeSessions, adminUsers,
   type AdminUser, type Dataset,
 } from "../api";
 import AccessRequests from "./AccessRequests";
-import AgentSettings from "./AgentSettings";
 import AuditLog from "./AuditLog";
 import DatasetAdmin from "./DatasetAdmin";
 import ImportsPanel from "./ImportsPanel";
 import MailSettings from "./MailSettings";
 import StatusPanel from "./StatusPanel";
 import TranscriptsAdmin from "./TranscriptsAdmin";
+
+type Tab = "accounts" | "datasets" | "mail" | "transcripts" | "log";
+
+const TABS: { value: Tab; label: string; intro: string }[] = [
+  { value: "accounts", label: "Accounts",
+    intro: "Answer access requests and manage who can sign in." },
+  { value: "datasets", label: "Datasets",
+    intro: "Rename, place, publish or delete datasets, and follow running imports." },
+  { value: "mail", label: "Mail",
+    intro: "The mail server MANTA uses to send access requests and replies." },
+  { value: "transcripts", label: "Transcripts",
+    intro: "Every assistant conversation of every account, for supervision." },
+  { value: "log", label: "Log",
+    intro: "Whether the services are running, and who changed what." },
+];
 
 export default function AdminPanel(
   { datasets, onClose, onDatasetsChanged, focusRequest }:
@@ -26,7 +41,8 @@ export default function AdminPanel(
   const [pw, setPw] = useState("");
   const [role, setRole] = useState("viewer");
   const [minPw, setMinPw] = useState(8);
-  const [settingsSaved, setSettingsSaved] = useState(0);
+  const [tab, setTab] = useState<Tab>("accounts");
+  useEffect(() => { if (focusRequest != null) setTab("accounts"); }, [focusRequest]);
 
   const reload = () =>
     adminUsers().then((d) => {
@@ -50,25 +66,17 @@ export default function AdminPanel(
 
         {error && <p data-testid="admin-error" className="text-sm text-danger">{error}</p>}
 
-        <StatusPanel />
+        <Segmented value={tab} onChange={setTab} testid="admin-tabs"
+          options={TABS.map((t) => ({ value: t.value, label: t.label, testid: `admin-tab-${t.value}` }))} />
+        <p data-testid="admin-intro" className="text-xs text-fg-muted">
+          {TABS.find((t) => t.value === tab)?.intro}
+        </p>
 
+        {tab === "accounts" && <>
         <AccessRequests onAccountsChanged={reload} focusRequest={focusRequest} minPassword={minPw} />
 
-        <MailSettings input={input} />
-
-        <AgentSettings input={input} onSaved={() => setSettingsSaved((n) => n + 1)} />
-
-        <DatasetAdmin datasets={datasets} visibilities={visibilities} input={input}
-                      onChanged={onDatasetsChanged} />
-
-        <ImportsPanel />
-
-        <AuditLog />
-
-        <TranscriptsAdmin datasets={datasets} input={input} refresh={settingsSaved} />
-
         <section className="space-y-3">
-          <SectionHeading as="h3">Accounts</SectionHeading>
+          <h3 className="text-sm font-medium text-fg">Accounts</h3>
           <table className="w-full text-sm">
             <thead className="text-xs font-semibold text-fg-muted">
               <tr><th className="text-left">user</th><th className="text-left">role</th>
@@ -122,6 +130,22 @@ export default function AdminPanel(
             </Button>
           </div>
         </section>
+        </>}
+
+        {tab === "datasets" && <>
+          <DatasetAdmin datasets={datasets} visibilities={visibilities} input={input}
+                        onChanged={onDatasetsChanged} />
+          <ImportsPanel />
+        </>}
+
+        {tab === "mail" && <MailSettings input={input} />}
+
+        {tab === "transcripts" && <TranscriptsAdmin datasets={datasets} input={input} />}
+
+        {tab === "log" && <>
+          <StatusPanel />
+          <AuditLog />
+        </>}
       </div>
     </Dialog>
   );

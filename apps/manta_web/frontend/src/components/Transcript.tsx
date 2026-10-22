@@ -80,7 +80,7 @@ const ms = (v: unknown) => (typeof v === "number" ? ` · ${v} ms` : "");
 
 export function providerText(kind: string, host: string): string {
   const at = host ? ` (${host})` : "";
-  if (kind === "own") return `your own key${at}`;
+  if (kind === "own") return `your own model${at}`;
   if (kind === "operator") return `the server's provider${at}`;
   if (kind === "local") return `a local model${at}`;
   return host || "unknown";
