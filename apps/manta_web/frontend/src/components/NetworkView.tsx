@@ -26,7 +26,7 @@ import ErrorNotice from "./ErrorNotice";
 import { esc, fmtP } from "../format";
 import { chainedCounts, clearKind, computeVisible, decodeFilters, emptyFilters, encodeFilters,
          hiddenBy, isActive, legendRows, thresholdLine, FILTER_KINDS,
-         type Filters, type FilterKind, type KeystoneCrit, layerLabel, functionLabel } from "../networkFilters";
+         type Filters, type FilterKind, type KeystoneCrit, KEYSTONE_LABEL, layerLabel, functionLabel } from "../networkFilters";
 
 const COLLIDE_MARGIN = 1.5;
 const COLLIDE_ITERATIONS = 80;
@@ -203,19 +203,14 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   const hasRejected = (e: NetEdge) => (e.rejected_dirs ?? 0) > 0;
 
   const c2: Criterion2Summary | null = net?.criterion2 ?? null;
-  const [crit, setCrit] = useState<KeystoneCrit>({ k1: false, k2: true });
+  const [crit, setCrit] = useState<KeystoneCrit>(2);
   const c1Ids = useMemo(() => {
     const s = new Set<string>();
     net?.edges.forEach((e) => { if ((e.ccm_dirs ?? 0) > 0) { s.add(e.source); s.add(e.target); } });
     return s;
   }, [net]);
-  const keyIds = useMemo(() => {
-    const sets = [crit.k1 ? c1Ids : null, crit.k2 ? new Set(c2?.ids ?? []) : null]
-      .filter((x): x is Set<string> => x != null);
-    if (!sets.length) return new Set<string>();
-    return new Set([...sets[0]].filter((id) => sets.every((s) => s.has(id))));
-  }, [c1Ids, c2, crit]);
-  const keyLabel = [crit.k1 && "1", crit.k2 && "2"].filter(Boolean).join(" + ");
+  const keyIds = useMemo(() => (crit === 1 ? c1Ids : new Set(c2?.ids ?? [])), [c1Ids, c2, crit]);
+  const keyLabel = KEYSTONE_LABEL[crit];
 
   const vis = useMemo(
     () => (net ? computeVisible(net, filters, keyIds) : null),
@@ -823,7 +818,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     ccmVisible: filters.layers.ccm && ccmCount > 0,
     rejectedVisible: filters.layers.rejected && rejectedCount > 0,
     widthText,
-    c2Glow: keyLabel ? `criteria ${keyLabel}` : null, c2Visible: !taxaMode && c2Visible > 0,
+    c2Glow: keyLabel, c2Visible: !taxaMode && c2Visible > 0,
     highlightActive: sel != null,
   }), [net, clusters.length, sizePresent, thr, ccmCount, rejectedCount, filters.layers,
        widthText, keyLabel, c2Visible, sel, colorMode, functionClasses.length, taxaMode, drawnCounts.cross]);
@@ -875,7 +870,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
           conTr: thr?.con_tr ?? null, conAlpha: thr?.con_alpha ?? null,
           recorded: thr?.recorded ?? false })}`,
         ...(widthText ? [`  ${widthText}`] : []),
-        ...(c2 && crit.k2 && !taxaMode ? [
+        ...(c2 && crit === 2 && !taxaMode ? [
           `  Hubs computed: ${c2.formula}`,
           `  Source: ${c2.source}`,
         ] : []),
@@ -888,7 +883,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         ] : []),
         `${drawnCounts.nodes} ${taxaMode ? "taxa" : "ASVs"} · ${drawnCounts.edges} edges · ${drawnCounts.ccm} with CCM · `
           + (!taxaMode && net.layers?.ccm_tested_recorded ? `${rejectedCount} with a rejected direction · ` : "")
-          + `${drawnCounts.cross} crossing modules${keyLabel && !taxaMode ? ` · ${c2Visible} ✦${c2Of}` : ""}`,
+          + `${drawnCounts.cross} crossing modules${!taxaMode ? ` · ${c2Visible} ✦${c2Of}` : ""}`,
       ];
       const pad = 24, lineH = 30;
       const c = document.createElement("canvas");
