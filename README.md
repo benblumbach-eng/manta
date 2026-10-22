@@ -30,9 +30,10 @@ See which marine organisms occur together, and when in the year, in your browser
 
 <br>
 
-You took water samples at the same place many times and sequenced a marker gene (16S or 18S)
-in each. MANTA turns those sequences into pictures you can explore: where the samples come
-from, which organisms appear together, and in which season they peak.
+MANTA is for amplicon time series: samples taken at the same place again and again, each
+sequenced for a marker gene (16S or 18S). It turns these sequences into explorable networks and
+shows where the samples come from, which organisms occur together, and in which season they
+peak.
 
 MANTA does not invent new statistics. It runs two established tools for you:
 
