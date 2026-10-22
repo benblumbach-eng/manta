@@ -1241,7 +1241,7 @@ export const getClusterAtSample = (ds: string, label: number, sample: string) =>
     .then(okJson<ClusterAtSample>);
 
 export const getAsvList = (ds: string) =>
-  get<{ asvs: { id: string; cluster: number | null; label: string }[] }>(`/datasets/${ds}/asvs`);
+  get<{ asvs: { id: string; cluster: number | null; label: string; share: number }[] }>(`/datasets/${ds}/asvs`);
 export const getSamples = (ds: string) => get<SampleList>(`/datasets/${ds}/samples`);
 export const getSample = (ds: string, sample: string) =>
   get<SampleDetail>(`/datasets/${ds}/sample/${encodeURIComponent(sample)}`);
@@ -1263,7 +1263,7 @@ export const setClusterStar = (ds: string, label: number, starred: boolean) =>
 
 export type SearchHit = {
   id: string; label: string; genus: string | null; cluster: number | null;
-  n_samples_present: number;
+  n_samples_present: number; share: number;
   id_match: boolean; matched_ranks: string[];
 };
 export type SearchTaxon = { rank: string; value: string; n_asv: number; asvs: SearchHit[] };

@@ -1507,6 +1507,24 @@ def samples(dataset_id: str):
     return {"dataset_id": dataset_id, "time_axis": _time_axis(dataset_id), "samples": rows}
 
 
+def _asv_rel_abundance(dataset_id: str) -> dict[str, float]:
+    return {r["id"]: r["rel"] for r in _q(
+        """
+        MATCH (s:Sample {dataset_id:$d})
+        OPTIONAL MATCH (s)-[all:HAS_ABUNDANCE]->(:ASV {dataset_id:$d})
+        WITH s, sum(all.count) AS live_total
+        WITH s, coalesce(s.analysed_reads_total, live_total) AS tot
+        WITH collect({s: s, tot: tot}) AS proben, count(s) AS n
+        UNWIND proben AS p
+        WITH p.s AS s, p.tot AS tot, n WHERE tot > 0
+        MATCH (s)-[h:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d})
+        WITH a, n, sum(toFloat(h.count) / tot) AS summe
+        RETURN a.id AS id, summe / n AS rel
+        """,
+        d=dataset_id,
+    )}
+
+
 @app.get("/datasets/{dataset_id}/asvs", dependencies=[Depends(visible_dataset)])
 def asv_list(dataset_id: str):
     rows = _q(
@@ -1517,9 +1535,11 @@ def asv_list(dataset_id: str):
         ORDER BY coalesce(a.read_count_total, 0) DESC, a.id
         """,
         d=dataset_id)
-    return {"dataset_id": dataset_id,
-            "asvs": [{"id": r["id"], "cluster": r["cluster"],
-                      "label": semantics.taxon_label({t: r[t] for t in TAXONOMY})} for r in rows]}
+    rel = _asv_rel_abundance(dataset_id)
+    asvs = [{"id": r["id"], "cluster": r["cluster"], "share": rel.get(r["id"], 0.0),
+             "label": semantics.taxon_label({t: r[t] for t in TAXONOMY})} for r in rows]
+    asvs.sort(key=lambda a: (-a["share"], a["id"]))
+    return {"dataset_id": dataset_id, "asvs": asvs}
 
 
 @app.get("/datasets/{dataset_id}/sample/{sample_id}", dependencies=[Depends(visible_dataset)])
@@ -1741,7 +1761,7 @@ SEARCH_MAX_TAXA = 8
 def _search_row(r: dict) -> dict:
     path = r["path"]
     genus = path.get("genus")
-    return {"id": r["id"], "label": semantics.taxon_label(path),
+    return {"id": r["id"], "label": semantics.taxon_label(path), "share": r["share"],
             "genus": genus if genus not in semantics.TAXONOMY_PLACEHOLDERS else None,
             "cluster": r["cluster"], "n_samples_present": r["n_samples_present"],
             "id_match": r["id_hit"], "matched_ranks": r["hit_ranks"]}
@@ -1770,12 +1790,15 @@ def search(dataset_id: str, q: str = Query(..., min_length=1, max_length=200),
         d=dataset_id, ql=ql, ranks=ranks, taxon_ok=taxon_ok,
         ph=list(semantics.TAXONOMY_PLACEHOLDERS))
     n_samples = _q("MATCH (s:Sample {dataset_id:$d}) RETURN count(s) AS n", d=dataset_id)[0]["n"]
+    rel = _asv_rel_abundance(dataset_id) if rows else {}
+    for r in rows:
+        r["share"] = rel.get(r["id"], 0.0)
 
-    def nach_vorkommen(x: dict):
-        return (-x["n_samples_present"], x["id"])
+    def nach_anteil(x: dict):
+        return (-x["share"], x["id"])
 
-    im_netz = sorted((r for r in rows if r["cluster"] is not None), key=nach_vorkommen)
-    draussen = sorted((r for r in rows if r["cluster"] is None), key=nach_vorkommen)
+    im_netz = sorted((r for r in rows if r["cluster"] is not None), key=nach_anteil)
+    draussen = sorted((r for r in rows if r["cluster"] is None), key=nach_anteil)
 
     gruppen: dict[tuple[str, str], list[dict]] = {}
     for r in draussen:
@@ -2198,21 +2221,7 @@ def _network_nodes(dataset_id):
         """,
         d=dataset_id,
     )
-    rel = {r["id"]: r["rel"] for r in _q(
-        """
-        MATCH (s:Sample {dataset_id:$d})
-        OPTIONAL MATCH (s)-[all:HAS_ABUNDANCE]->(:ASV {dataset_id:$d})
-        WITH s, sum(all.count) AS live_total
-        WITH s, coalesce(s.analysed_reads_total, live_total) AS tot
-        WITH collect({s: s, tot: tot}) AS proben, count(s) AS n
-        UNWIND proben AS p
-        WITH p.s AS s, p.tot AS tot, n WHERE tot > 0
-        MATCH (s)-[h:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) WHERE a.louvain_label IS NOT NULL
-        WITH a, n, sum(toFloat(h.count) / tot) AS summe
-        RETURN a.id AS id, summe / n AS rel
-        """,
-        d=dataset_id,
-    )}
+    rel = _asv_rel_abundance(dataset_id)
     stars = _user_star_keys(dataset_id, "asv")
     for r in rows:
         r["rel_abundance"] = rel.get(r["id"], 0.0) if r["size"] is not None else None

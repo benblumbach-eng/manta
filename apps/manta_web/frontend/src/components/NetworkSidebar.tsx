@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getStarred, type Criterion2Summary, type Dataset,
+import { getAsvList, getStarred, type Criterion2Summary, type Dataset,
          type Network, type NetNode } from "../api";
 import { useModules } from "../modules";
 import { isActive, type Filters, type FilterKind, type KeystoneCrit, KEYSTONE_LABEL, layerLabel, layersDefault } from "../networkFilters";
 import { useDatasetSearch } from "../datasetSearch";
+import { fmtShare } from "../format";
 import ErrorNotice from "./ErrorNotice";
 import DatasetFacts from "./DatasetFacts";
 import { Button, SectionHeading, TextButton, ToggleButton } from "./ui";
@@ -93,8 +94,17 @@ export default function NetworkSidebar(p: SidebarProps) {
     () => (q
       ? visibleNodes.filter((n) => n.id.toLowerCase().includes(q.toLowerCase())
           || (n.genus ?? "").toLowerCase().includes(q.toLowerCase()))
+        .sort((a, b) => (b.rel_abundance ?? 0) - (a.rel_abundance ?? 0))
       : []),
     [q, visibleNodes]);
+  const [searchFocus, setSearchFocus] = useState(false);
+  const [topAsvs, setTopAsvs] = useState<{ id: string; cluster: number | null; label: string;
+                                           share: number }[]>([]);
+  useEffect(() => {
+    setTopAsvs([]);
+    getAsvList(dataset.dataset_id).then((r) => setTopAsvs(r.asvs.slice(0, 10)))
+      .catch(() => setTopAsvs([]));
+  }, [dataset.dataset_id]);
   const ganz = useDatasetSearch(dataset.dataset_id, q);
   const [offeneGruppe, setOffeneGruppe] = useState<string | null>(null);
   useEffect(() => { setOffeneGruppe(null); }, [q, dataset.dataset_id]);
@@ -259,12 +269,35 @@ export default function NetworkSidebar(p: SidebarProps) {
 
       <div>
         <input data-testid="asv-search" value={search} onChange={(e) => setSearch(e.target.value)}
+          onFocus={() => setSearchFocus(true)} onBlur={() => setTimeout(() => setSearchFocus(false), 150)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && results.length === 1 && taxMatches.length === 0
                 && clusterMatch == null) p.onPickAsv(results[0].id);
           }}
           placeholder="search ASV, taxon or cluster …"
           className="w-full px-2 py-1 rounded-md bg-control border border-line-strong text-sm text-fg placeholder:text-fg-muted" />
+        {searchFocus && !q && topAsvs.length > 0 && (
+          <div className="mt-1 border border-line rounded-md bg-raised" data-testid="top-asvs">
+            <SectionHeading as="h4" className="px-2 pt-1">most abundant ASVs</SectionHeading>
+            <ul className="max-h-60 overflow-auto">
+              {topAsvs.map((a) => (
+                <li key={a.id}>
+                  <button data-testid="top-asv" data-asv={a.id}
+                    onClick={() => (a.cluster != null ? p.onPickAsv(a.id) : p.onOpenAsv(a.id))}
+                    className="w-full flex items-center gap-2 text-left px-2 py-1 hover:bg-control text-sm">
+                    <span className="inline-block w-2 h-2 rounded-full shrink-0"
+                      style={{ background: (a.cluster != null && p.clusterColor.get(a.cluster)) || "var(--text-disabled)" }} />
+                    <span className="text-fg">{a.id}</span>
+                    <span className="text-fg-muted truncate flex-1">
+                      {a.label !== "unassigned" ? a.label : ""}
+                    </span>
+                    <span className="text-fg font-semibold tabular-nums">{fmtShare(a.share)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
         {(results.length > 0 || taxMatches.length > 0 || clusterMatch != null) && (
           <ul className="mt-1 max-h-40 overflow-auto border border-line rounded-md bg-raised">
             {clusterMatch != null && (
@@ -298,7 +331,8 @@ export default function NetworkSidebar(p: SidebarProps) {
                   <span className="inline-block w-2 h-2 rounded-full mr-2"
                     style={{ background: p.clusterColor.get(n.cluster) ?? "var(--text-disabled)" }} />
                   <span className="text-fg">{n.id}</span>{" "}
-                  <span className="text-fg-muted">{n.genus}</span>
+                  <span className="text-fg-muted">{n.genus}</span>{" "}
+                  <span className="text-fg-muted tabular-nums">· {fmtShare(n.rel_abundance)}</span>
                 </button>
               </li>
             ))}
@@ -341,7 +375,7 @@ export default function NetworkSidebar(p: SidebarProps) {
                     className="w-full text-left px-2 py-1 hover:bg-control text-xs">
                     <span className="font-mono text-fg">{a.id}</span>{" "}
                     <span className="text-fg-muted">
-                      {a.label !== "unassigned" ? `${a.label} · ` : ""}found in {a.n_samples_present} of {r.n_samples} samples
+                      {a.label !== "unassigned" ? `${a.label} · ` : ""}{fmtShare(a.share)} · found in {a.n_samples_present} of {r.n_samples} samples
                     </span>{" "}
                     <span className="text-accent">→ open</span>
                   </button>

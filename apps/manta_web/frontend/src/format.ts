@@ -23,3 +23,10 @@ const HTML_ESC: Record<string, string> = {
 export function esc(v: unknown): string {
   return String(v ?? "").replace(/[&<>"']/g, (c) => HTML_ESC[c]);
 }
+
+export function fmtShare(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return "—";
+  const p = v * 100;
+  if (p > 0 && p < 0.01) return "< 0.01 %";
+  return `${p >= 10 ? p.toFixed(0) : p >= 1 ? p.toFixed(1) : p.toFixed(2)} %`;
+}
