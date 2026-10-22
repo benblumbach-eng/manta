@@ -2136,7 +2136,8 @@ def _network_nodes(dataset_id):
         UNWIND proben AS p
         WITH p.s AS s, p.tot AS tot, n WHERE tot > 0
         MATCH (s)-[h:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) WHERE a.louvain_label IS NOT NULL
-        RETURN a.id AS id, sum(toFloat(h.count) / tot) / n AS rel
+        WITH a, n, sum(toFloat(h.count) / tot) AS summe
+        RETURN a.id AS id, summe / n AS rel
         """,
         d=dataset_id,
     )}
