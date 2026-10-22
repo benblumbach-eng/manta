@@ -2126,8 +2126,24 @@ def _network_nodes(dataset_id):
         """,
         d=dataset_id,
     )
+    rel = {r["id"]: r["rel"] for r in _q(
+        """
+        MATCH (s:Sample {dataset_id:$d})
+        OPTIONAL MATCH (s)-[all:HAS_ABUNDANCE]->(:ASV {dataset_id:$d})
+        WITH s, sum(all.count) AS live_total
+        WITH s, coalesce(s.analysed_reads_total, live_total) AS tot
+        WITH collect({s: s, tot: tot}) AS proben, count(s) AS n
+        UNWIND proben AS p
+        WITH p.s AS s, p.tot AS tot, n WHERE tot > 0
+        MATCH (s)-[h:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d}) WHERE a.louvain_label IS NOT NULL
+        WITH a, n, sum(toFloat(h.count) / tot) AS summe
+        RETURN a.id AS id, summe / n AS rel
+        """,
+        d=dataset_id,
+    )}
     stars = _user_star_keys(dataset_id, "asv")
     for r in rows:
+        r["rel_abundance"] = rel.get(r["id"], 0.0) if r["size"] is not None else None
         r["starred"] = r["id"] in stars
         r["trait_group"] = (semantics.trait_group_label(r["trait_function"])
                             if r.get("trait_function") else None)
