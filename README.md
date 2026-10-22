@@ -24,17 +24,18 @@ See which marine organisms occur together, and when in the year, in your browser
 
 <br>
 
-<img src="docs/images/network.png" alt="A dataset's network: modules in color, directed links, ASVs meeting criterion 2 highlighted" width="100%">
+<img src="docs/images/network.png" alt="A dataset's network: ASVs colored by module, joined by links" width="100%">
 
 </div>
 
 <br>
 
-You took water samples at the same place many times and sequenced a marker gene (16S or 18S)
-in each. MANTA turns those sequences into pictures you can explore: where the samples come
-from, which organisms appear together, and in which season they peak.
+MANTA is for amplicon time series: samples taken at the same place again and again, each
+sequenced for a marker gene (16S or 18S). It turns these sequences into explorable networks and
+shows where the samples come from, which organisms occur together, and in which season they
+peak.
 
-MANTA does not invent new statistics. It runs two established tools for you:
+MANTA builds on two established tools and runs them for you:
 
 ```mermaid
 flowchart LR
@@ -44,11 +45,11 @@ flowchart LR
     D --> E[Browser]
 ```
 
-- **DADA2** turns raw sequencing reads into **ASVs**: exact DNA sequences, each standing for
-  one kind of organism, with a count per sample.
+- **DADA2** turns raw sequencing reads into **ASVs** (amplicon sequence variants): exact DNA
+  sequences with a count per sample. Several ASVs can belong to the same organism.
 - **OTTER** finds which ASVs rise and fall together and groups them into **modules**.
 
-MANTA saves every result in a database and shows it in the browser. Every number you see comes
+MANTA saves every result in a database and shows it in the browser. Every number comes
 from one of these runs or is calculated directly from it, such as a monthly mean or the day
 length at the sampling site.
 
@@ -56,29 +57,35 @@ length at the sampling site.
 
 <table>
 <tr>
-<td width="33%" valign="top"><b>A world map</b> with all your datasets and the water depth.<br><img src="docs/images/map.png" alt="World map with datasets and water depth"></td>
-<td width="33%" valign="top"><b>A page per ASV</b> with its name, its abundance over time and its closest partners.<br><img src="docs/images/asv.png" alt="The detail page of one ASV"></td>
-<td width="33%" valign="top"><b>A year wheel</b> that shows when each module peaks, next to daylight and temperature.<br><img src="docs/images/wheel.png" alt="The year wheel with module windows and a temperature band"></td>
+<td width="33%" valign="top"><b>A world map</b> with all your datasets.<br><img src="docs/images/map.png" alt="World map with datasets and water depth"></td>
+<td width="33%" valign="top"><b>A page per ASV</b> with its taxon name, its abundance over time and its closest partners.<br><img src="docs/images/asv.png" alt="The detail page of one ASV"></td>
+<td width="33%" valign="top"><b>A year wheel</b> that shows when each module peaks.<br><img src="docs/images/wheel.png" alt="The year wheel with module windows and a temperature band"></td>
 </tr>
 </table>
 
 You can also:
 
-- see the network of which ASVs occur together and which seem to influence others;
-- see which ASVs are unusually central in their module (one of three criteria for a keystone
-  species in Oldenburg et al. 2024; on its own it does not make an ASV a keystone);
-- filter by module, organism name or function, and share the exact view as a link;
+- see the co-occurrence network: a line joins two ASVs whose abundances rise and fall together,
+  and an arrow shows that one ASV significantly influences the other (convergent cross mapping,
+  CCM);
+- mark possible keystone ASVs (✦) by choosing the keystone criteria of Oldenburg et al. 2024 in
+  the sidebar: 1, a significant CCM link; 2, an unusually high closeness within its module.
+  The third criterion (a stable state from ELA) is not available, so a marked ASV is a
+  candidate, not a proven keystone;
+- filter by module, taxon name or function, and share the exact view as a link;
 - compare ASVs, modules and measurements over the year;
 - ask an optional chat assistant, which answers only from your stored results and marks any
   number it cannot back up with `[no evidence]`. Its tools also work in other AI apps that
   support MCP (`apps/manta_mcp/start_mcp.sh`).
 
-The screenshots show the HAUSGARTEN F4 example data from OTTER, which is not included here.
+The screenshots show the made-up example dataset `examples/synthetic_12_samples`.
 
 ## Installation
 
 Installation has two steps. Step 1 starts MANTA so you can look at data. Step 2 installs the
-import so you can add data; you need it for every dataset, including the example.
+analysis tools (OTTER as a Git submodule, plus the Python environments that prepare its input
+and save its results) and the import page in the browser. You need step 2 for every dataset,
+including the example.
 
 You need [Docker](https://docs.docker.com/get-started/get-docker/) with Compose and
 [Git](https://git-scm.com/downloads). For step 2 you also need
@@ -152,9 +159,9 @@ models.
 MANTA uses the ports 8080, 8443, 7474 and 7687 (and 11434 for the assistant). If one is taken,
 change it in `deploy/.env`. The database's usage reporting is switched off.
 
-### Step 2: Install the import
+### Step 2: Install the analysis tools and the import
 
-1. Install the import tools. This takes a while. If a line fails, the block stops; fix the
+1. Install the analysis tools. This takes a while. If a line fails, the block stops; fix the
    problem and run the whole block again. Don't use `sudo` here.
    ```bash
    cd ~/manta &&
@@ -187,12 +194,12 @@ change it in `deploy/.env`. The database's usage reporting is switched off.
    also appears at <http://localhost:8080>.
 
 After restarting your computer, run `cd ~/manta && bash apps/manta_web/dev.sh start` again (on
-Windows, start Docker Desktop first). Instead of `start`, the same script also takes `stop`,
-`restart`, `status` and `logs`. `stop --db` also stops the database, so
+Windows, start Docker Desktop first). Besides `start`, the script knows `stop`, `restart`,
+`status` and `logs`. `stop --db` also stops the database, so
 <http://localhost:8080> then shows no data. The import uses the ports 8000 and 5173; to change
 them, set `MANTA_BACKEND_PORT` and `MANTA_FRONTEND_PORT`.
 
-### Optional: raw reads, organism names, chat assistant
+### Optional: raw reads, taxonomy for raw reads, chat assistant
 
 **Raw sequencing reads (FASTQ).** To import raw reads, install DADA2:
 
@@ -206,9 +213,17 @@ password before installing R. On Ubuntu it takes 10 to 30 minutes. With `--check
 what is missing. The versions are fixed on purpose, because other versions can turn the same
 reads into different ASVs.
 
-**Organism names.** Download a [PR2 file](https://github.com/pr2database/pr2database/releases)
-in DADA2 format, set `MANTA_PR2=<path to the file>` in `apps/manta_web/backend/.env` and run
-`bash apps/manta_web/dev.sh restart`. Without it, ASVs from raw reads stay `unassigned`.
+**Taxonomy for raw reads.** PR2 is a reference database of known 18S rRNA sequences, mostly
+from protists (single-celled eukaryotes). When MANTA runs DADA2 on raw reads, DADA2 compares each
+ASV with this reference and assigns it a taxon name (from kingdom down to species, as far as the
+match allows). For 16S data, a SILVA reference in the same DADA2 format works too. You only need
+a reference for raw reads; if you import DADA2 results, your taxonomy table already has the
+names. Download the PR2 file in DADA2 format from the
+[PR2 releases](https://github.com/pr2database/pr2database/releases), set
+`MANTA_PR2=<path to the file>` in `apps/manta_web/backend/.env` and run
+`bash apps/manta_web/dev.sh restart`. Without it, the import still works, but ASVs from raw reads
+stay `unassigned`. (The function filter uses its own copy of PR2's tables, which step 2 already
+downloads.)
 
 **Chat assistant.** Switch it on with:
 
@@ -241,8 +256,8 @@ your files.
    map, also enter a latitude and longitude.
 4. Click **Start import**.
 
-A card shows the progress. You can close the page; the import keeps running. It takes from
-minutes to hours, mostly for OTTER. When it is done, the dataset appears in the list.
+A card shows the progress. You can close the page; the import keeps running. It takes minutes
+to hours; most of that time goes to OTTER. When it is done, the dataset appears in the list.
 
 ### Which files you can import
 
@@ -250,7 +265,7 @@ minutes to hours, mostly for OTTER. When it is done, the dataset appears in the 
   `…_R2_001.fastq.gz`. MANTA runs DADA2 and then OTTER. This needs DADA2 from the optional
   section above.
 - **DADA2 results:** an abundance table, a taxonomy table and the ASV sequences, as `.Rdata`,
-  `.csv` or `.fasta` files. You can also use OTTER's input tables `abundance.csv`,
+  `.csv` or `.fa`/`.fasta` files. You can also use OTTER's input tables `abundance.csv`,
   `taxa_info.csv` and `environment_info.csv`. MANTA runs OTTER.
 - **OTTER results:** OTTER's network tables, plus `abundance.csv` and `environment_info.csv`
   (and `manta_manifest.json`, if you have it). MANTA only saves them.
@@ -270,12 +285,12 @@ measurements. Without dates, MANTA only knows the order of the samples and shows
 Read tracking (DADA2's table of how many reads each sample kept) is optional. If you add it,
 MANTA checks that no sample lost too many reads.
 
-A dataset needs at least 8 samples. Before starting, MANTA checks whether your computer has
+A dataset needs at least 8 samples. Before OTTER starts, MANTA checks whether your computer has
 enough memory. DADA2 can take hours and needs a lot of memory; on a computer with 8 GB, run
 DADA2 elsewhere and import its results.
 
-At the end, MANTA looks up each organism name in published tables of what such organisms do.
-This fills the function filter; it describes the name, it is not a measurement. If there are
+At the end, MANTA looks up the taxon name of each ASV in published tables of what such organisms
+do. This fills the function filter; it describes the name, it is not a measurement. If there are
 dates, MANTA also links the measurements to the ASVs.
 
 If you recalculate a network in MANTA, it creates a new dataset and leaves the original as it is.
@@ -303,7 +318,8 @@ cd ~/manta && bash update.sh
 This downloads the newest version, installs only what changed and restarts MANTA. Your data
 stay. Docker must be running.
 
-**Don't update while an import is running.** The update restarts the import and stops it.
+**Don't update while an import is running.** The update restarts the import page, which stops
+a running import.
 
 If you changed files in `~/manta` yourself, the update stops instead of overwriting them.
 `bash update.sh --check` only tells you whether an update exists (exit code `10` means yes, `0`
@@ -330,7 +346,7 @@ in `~/manta`, and start the import as in step 2. When everything works, delete `
 ### Backup
 
 `bash deploy/backup.sh` saves the database and the accounts from step 1 to `deploy/backups/`.
-MANTA is unavailable for about 20 seconds meanwhile. To restore, run
+MANTA pauses for about 20 seconds while it runs. To restore, run
 `bash deploy/restore.sh <neo4j-*.dump> [auth-*.db]`. Both explain their options with `--help`.
 
 ## Troubleshooting
@@ -433,23 +449,26 @@ downloads them from their original sources.
   [doi:10.5281/zenodo.15149453](https://doi.org/10.5281/zenodo.15149453), CC BY 4.0); for 16S:
   FAPROTAX 1.2.12 (Louca et al. 2016, *Science* 353:1272, [doi:10.1126/science.aaf4507](https://doi.org/10.1126/science.aaf4507);
   own license, included in the download). Downloads are checked against fixed checksums.
-- **Screenshots** — HAUSGARTEN F4 from OTTER's test data; Oldenburg et al. 2024, *Commun Earth
-  Environ* 5:643, [doi:10.1038/s43247-024-01782-0](https://doi.org/10.1038/s43247-024-01782-0).
-- **Example datasets** — synthetic, made for MANTA; MIT License.
+- **Example datasets and screenshots** — synthetic, made for MANTA; MIT License.
 
 **Methods**
 
-- Network terms — Oldenburg et al. 2024 (above).
-- Recurrence and modules (peak window, annual oscillation, year-to-year variability of modules) —
-  Priest et al. 2025, *Nat Commun* 16:1326, [doi:10.1038/s41467-025-56203-3](https://doi.org/10.1038/s41467-025-56203-3).
-- Criterion 2 of the keystone definition — Oldenburg et al. 2024 (above), Methods "Keystone
-  species definition": "a high centrality (closeness) value within its co-occurrence community".
-  MANTA computes it on the undirected co-occurrence network: closeness within the module
-  subgraph (all members, all links with both ends in the module), unweighted (n − 1)/Σd; per ASV a
-  one-sided one-sample t-test of the module's closeness values against its own
-  (`scipy.stats.ttest_1samp(…, popmean=c_i, alternative='less')`); Benjamini–Hochberg over all
-  testable network ASVs, q ≤ 0.05. This is a selection step, not a keystone: criteria 1 and 3 are
-  not tested.
+- Network terms — Oldenburg et al. 2024, *Commun Earth Environ* 5:643,
+  [doi:10.1038/s43247-024-01782-0](https://doi.org/10.1038/s43247-024-01782-0).
+- Seasonal recurrence and modules — Priest et al. 2025, *Nat Commun* 16:1326,
+  [doi:10.1038/s41467-025-56203-3](https://doi.org/10.1038/s41467-025-56203-3). The paper measures
+  annual oscillation and peak timing per ASV and year-to-year differences per community; MANTA's
+  peak window and year-to-year variability per module build on these ideas but are its own.
+- Keystone criteria — Oldenburg et al. 2024 (above), Methods "Keystone species definition": (1)
+  "a significant influence on other ASV in the network", (2) "a high centrality (closeness)
+  value within its co-occurrence community", (3) "presence in at least one stable state as
+  predicted by ELA". For criterion 1, MANTA marks every ASV at either end of a link with a
+  significant CCM direction. For criterion 2, MANTA works on the undirected co-occurrence
+  network: closeness within the module subgraph (all members, all links with both ends in the
+  module), unweighted (n − 1)/Σd; per ASV a one-sided one-sample t-test of the module's
+  closeness values against its own (`scipy.stats.ttest_1samp(…, popmean=c_i,
+  alternative='less')`); Benjamini–Hochberg over all testable network ASVs, q ≤ 0.05. Criterion
+  3 is not tested, so marked ASVs are candidates, not keystones.
 
 <br>
 
