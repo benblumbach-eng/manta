@@ -37,7 +37,6 @@
   --net-link: #5b6b8c;
   --net-node-outline: #0f172a;
   --net-label: #cbd5e1;
-  --net-disc: #000000;
     --mark: #fbbf24;
     --cross-link: #f59e0b;
 }
@@ -78,7 +77,6 @@ html.light {
   --net-link: #94a3b8;
   --net-node-outline: #ffffff;
   --net-label: #1e293b;
-  --net-disc: #ffffff;
   --mark: #b45309;
   --cross-link: #d97706;
 }

@@ -57,7 +57,8 @@ export type SidebarProps = {
   chipCounts: Map<FilterKind, number>;
   unknownAsvIds: string[];
   taxaMode: boolean;
-  onTaxaMode: (v: boolean) => void;
+  points: "asvs" | "genus" | "species";
+  onPoints: (v: "asvs" | "genus" | "species") => void;
   linkLength: number;
   linkLengthDefault: number;
   onLinkLength: (v: number) => void;
@@ -503,14 +504,15 @@ export default function NetworkSidebar(p: SidebarProps) {
         </div>
 
         <div className="mb-2" data-testid="grain-control">
-          <Segmented full label="Points" value={p.taxaMode ? "taxa" : "asvs"}
-            onChange={(v) => p.onTaxaMode(v === "taxa")}
+          <Segmented full label="Points" value={p.points} onChange={p.onPoints}
             options={[{ value: "asvs", label: "ASVs", testid: "grain-asvs" },
-                      { value: "taxa", label: "Taxa", testid: "grain-taxa" }]} />
+                      { value: "genus", label: "Genus", testid: "grain-genus" },
+                      { value: "species", label: "Species", testid: "grain-taxa" }]} />
         </div>
         {p.taxaMode && (
           <p className="mb-2 text-2xs text-fg-muted leading-snug" data-testid="taxa-note">
-            One point per taxon (all seven ranks equal); a line counts member pairs with a link.
+            {p.points === "genus" ? "One point per genus" : "One point per species (all seven ranks equal)"};
+            {" "}click a point to pick one of its ASVs.
           </p>
         )}
 

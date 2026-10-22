@@ -20,7 +20,8 @@ import { Button, TextButton, StateNotice, SectionHeading } from "./ui";
 import { Segmented } from "./controls";
 
 const SWATCH = "\u0000swatch:";
-import { memberPoint, revolverPositions, taxonLinks, taxonPoints, type TaxonLink } from "../taxonView";
+import TaxonWheel from "./TaxonWheel";
+import { memberPoint, taxonLinks, taxonPoints, type TaxonLink, type TaxonRank } from "../taxonView";
 import ThresholdDialog from "./ThresholdDialog";
 import ErrorNotice from "./ErrorNotice";
 import { esc, fmtP } from "../format";
@@ -31,13 +32,7 @@ import { chainedCounts, clearKind, computeVisible, decodeFilters, emptyFilters, 
 const COLLIDE_MARGIN = 1.5;
 const COLLIDE_ITERATIONS = 80;
 const DIM_NODE = 0.2;
-const revolverRadiusPx = (n: number) => Math.max(70, 4.5 * n + 20);
-const istSatellit = (n: unknown) =>
-  (n as { revX?: number }).revX != null && (n as { revY?: number }).revY != null;
-const istRing = (p: { data?: { id?: unknown; source?: unknown } }) =>
-  /^(ring|disc):/.test(String(p.data?.id ?? p.data?.source ?? ""));
 const LINK_LENGTH_DEFAULT = 260;
-const NODE_SCALE_RATIO = 0.6;
 const RING_W = 2;
 const RING_GLOW = 14;
 const DIM_EDGE = 0.15;
@@ -224,16 +219,18 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   const visibleEdges = useMemo(() => vis?.edges ?? [], [vis]);
   const visibleIds = useMemo(() => new Set(visibleNodes.map((n) => n.id)), [visibleNodes]);
 
-  const [taxaMode, setTaxaMode] = useState(false);
+  const [points, setPoints] = useState<"asvs" | TaxonRank>("asvs");
+  const taxaMode = points !== "asvs";
+  const taxonRank: TaxonRank = points === "genus" ? "genus" : "species";
   const [legendeOffen, setLegendeOffen] = useState(false);
   const [revolver, setRevolver] =
-    useState<{ id: string; x: number; y: number; r: number; tick: number } | null>(null);
+    useState<{ id: string; x: number; y: number } | null>(null);
   const [linkLen, setLinkLen] = useState(LINK_LENGTH_DEFAULT);
   const [zoomTick, setZoomTick] = useState(0);
-  useEffect(() => { setRevolver(null); }, [taxaMode, filters, linkLen]);
+  useEffect(() => { setRevolver(null); }, [points, filters, linkLen]);
 
   const taxa = useMemo(
-    () => (taxaMode ? taxonPoints(visibleNodes) : []), [taxaMode, visibleNodes]);
+    () => (taxaMode ? taxonPoints(visibleNodes, taxonRank) : []), [taxaMode, taxonRank, visibleNodes]);
   const taxaLinks = useMemo(
     () => (taxaMode ? taxonLinks(taxa, visibleEdges) : []), [taxaMode, taxa, visibleEdges]);
   const taxaById = useMemo(() => new Map(taxa.map((t) => [t.id, t])), [taxa]);
@@ -262,7 +259,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   const nNotAnnotated = useMemo(() => net?.nodes.filter((n) => !n.trait_group).length ?? 0, [net]);
   const taxaLayers = useMemo(() => {
     if (!taxaMode || !net) return null;
-    const alle = taxonPoints(net.nodes);
+    const alle = taxonPoints(net.nodes, taxonRank);
     const con = taxonLinks(alle, net.edges);
     const mitRichtung = net.edges.filter((e) => (e.ccm_dirs ?? 0) > 0);
     const ccm = taxonLinks(alle, mitRichtung);
@@ -272,8 +269,16 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     return { n_con: con.length, n_asv_con: beruehrt(con),
              n_con_with_ccm: ccm.length, n_asv_ccm: beruehrt(ccm),
              n_con_with_rejected: rej.length, n_asv_rejected: beruehrt(rej) };
-  }, [taxaMode, net]);
+  }, [taxaMode, taxonRank, net]);
   const offenerTaxon = revolver ? taxaById.get(revolver.id) ?? null : null;
+  const radPx = useMemo(() => {
+    if (!revolver) return null;
+    try {
+      const inst = chartRef.current?.getEchartsInstance();
+      const a = (inst as any)?.convertToPixel({ seriesIndex: 0 }, [revolver.x, revolver.y]);
+      return a ? { x: a[0] as number, y: a[1] as number } : null;
+    } catch { return null; }
+  }, [revolver, zoomTick]);
 
   const drawNodes = useMemo<NetNode[]>(() => {
     if (!taxaMode) return visibleNodes;
@@ -285,15 +290,8 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
       size: t.size,
       n_samples_present: t.n_samples_present,
     } as NetNode));
-    if (!(offenerTaxon && revolver)) return punkte;
-    const pos = revolverPositions(offenerTaxon.members.length, revolver.r);
-    return [
-      ...punkte,
-      ...offenerTaxon.members.map((m, i) => ({
-        ...m, genus: "", revX: revolver.x + pos[i].dx, revY: revolver.y + pos[i].dy,
-      } as NetNode & { revX: number; revY: number })),
-    ];
-  }, [taxaMode, offenerTaxon, revolver, taxa, visibleNodes]);
+    return punkte;
+  }, [taxaMode, taxa, visibleNodes]);
 
   const drawEdges = useMemo<NetEdge[]>(() => {
     if (!taxaMode) return visibleEdges;
@@ -417,9 +415,9 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
 
   const layoutKey = useMemo(
     () => `${dataset.dataset_id}|${filters.layers.con}|${filters.layers.ccm}|${filters.layers.rejected}`
-         + `|${taxaMode ? "taxa" : "asvs"}|${linkLen}`
-         + `|${drawNodes.filter((n) => !istSatellit(n)).map((n) => n.id).join(",")}`,
-    [dataset.dataset_id, filters.layers, taxaMode, linkLen, drawNodes]);
+         + `|${points}|${linkLen}`
+         + `|${drawNodes.map((n) => n.id).join(",")}`,
+    [dataset.dataset_id, filters.layers, points, linkLen, drawNodes]);
   const frozenKey = useRef<string | null>(null);
   useEffect(() => {
     if (frozenKey.current !== layoutKey) { frozenKey.current = layoutKey; setFrozen(null); }
@@ -493,12 +491,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   useEffect(() => {
     (window as unknown as Record<string, unknown>).__mantaLayout = frozen
       ? drawNodes.map((n) => ({ id: n.id,
-                                xy: frozen.get(n.id)
-                                  ?? (istSatellit(n)
-                                    ? [(n as unknown as { revX: number }).revX,
-                                       (n as unknown as { revY: number }).revY] as [number, number]
-                                    : null),
-                                sat: istSatellit(n),
+                                xy: frozen.get(n.id) ?? null,
                                 r: radiusOf.get(n.id) ?? null,
                                 n: taxaById.get(n.id)?.members.length ?? 1 }))
       : null;
@@ -526,33 +519,6 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
       } catch { return null; }
     };
   }, []);
-  useEffect(() => {
-    (window as unknown as Record<string, unknown>).__mantaDisc = () => {
-      try {
-        const inst = chartRef.current?.getEchartsInstance();
-        const data = (inst as any)?.getModel()?.getSeriesByIndex(0)?.getData();
-        if (!data) return null;
-        let disc: { fill: string; r: number } | null = null;
-        let dimmed = 0, lit = 0;
-        for (let i = 0; i < data.count(); i++) {
-          const id = String(data.getId(i));
-          if (id.startsWith("ring:")) continue;
-          if (id.startsWith("disc:")) {
-            const el = data.getItemGraphicEl(i);
-            if (!el) return null;
-            const rect = el.getBoundingRect().clone();
-            rect.applyTransform(el.getComputedTransform());
-            const path = el.childAt?.(0) ?? el;
-            disc = { fill: String(path.style?.fill), r: rect.width / 2 };
-            continue;
-          }
-          if (data.getItemModel(i).get(["itemStyle", "opacity"]) === DIM_NODE) dimmed++;
-          else lit++;
-        }
-        return disc ? { ...disc, light, dimmed, lit } : null;
-      } catch { return null; }
-    };
-  }, [light]);
 
   const layoutHash = useMemo(() => {
     if (!frozen) return "";
@@ -566,59 +532,12 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   const totalSize = useMemo(
     () => (net?.nodes ?? []).reduce((acc, n) => acc + (n.size || 0), 0), [net]);
 
-  const ring = useMemo(() => {
-    if (!(taxaMode && offenerTaxon && revolver)) return { nodes: [] as unknown[], links: [] as unknown[] };
-    const N = 48;
-    const key = (i: number) => `ring:${revolver.tick}:${i}`;
-    const nodes = Array.from({ length: N }, (_, i) => {
-      const w = (2 * Math.PI * i) / N;
-      return { id: key(i), name: key(i), x: revolver.x + revolver.r * Math.cos(w),
-               y: revolver.y + revolver.r * Math.sin(w), fixed: true, symbol: "circle",
-               symbolSize: 1, silent: true, label: { show: false }, itemStyle: { opacity: 0 } };
-    });
-    const links = Array.from({ length: N }, (_, i) => ({
-      source: key(i), target: key((i + 1) % N), silent: true,
-      symbol: ["none", "none"],
-      lineStyle: { color: tok.chartLine, width: 1, opacity: 0.45, type: "dashed" as const },
-    }));
-    return { nodes, links };
-  }, [taxaMode, offenerTaxon, revolver, tok]);
-
-  const scheibe = useMemo(() => {
-    if (!(taxaMode && offenerTaxon && revolver)) return null;
-    let k = 1;
-    try {
-      const inst = chartRef.current?.getEchartsInstance();
-      const a = (inst as any)?.convertToPixel({ seriesIndex: 0 }, [revolver.x, revolver.y]);
-      const b = (inst as any)?.convertToPixel({ seriesIndex: 0 }, [revolver.x + 1, revolver.y]);
-      const d = a && b ? Math.abs(b[0] - a[0]) : 0;
-      if (Number.isFinite(d) && d > 0) k = d;
-    } catch { }
-    const nodeScale = ((roam.current?.zoom ?? 1) - 1) * NODE_SCALE_RATIO + 1;
-    const satR = Math.max(0, ...offenerTaxon.members.map((m) => scale(m.size ?? 0) / 2)) * nodeScale;
-    const rPx = revolver.r * k + satR + 8;
-    const id = `disc:${revolver.tick}`;
-    return { id, name: id, x: revolver.x, y: revolver.y, fixed: true, symbol: "circle",
-             symbolSize: (2 * rPx) / nodeScale, label: { show: false },
-             tooltip: { show: false }, emphasis: { disabled: true }, cursor: "default",
-             itemStyle: { color: tok.netDisc, opacity: 1, borderWidth: 1,
-                          borderType: "dashed" as const, borderColor: tok.chartLine } };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taxaMode, offenerTaxon, revolver, tok, scale, zoomTick]);
-  const imRevolver = useCallback(
-    (n: NetNode) => istSatellit(n) || (revolver != null && n.id === revolver.id), [revolver]);
-  const zeichenfolge = useMemo(
-    () => (scheibe
-      ? [...drawNodes.filter((n) => !imRevolver(n)), ...drawNodes.filter(imRevolver)]
-      : drawNodes),
-    [drawNodes, scheibe, imRevolver]);
-  const nUnterScheibe = scheibe ? drawNodes.filter((n) => !imRevolver(n)).length : 0;
 
   const nodeOutline = tok.netNodeOutline;
   const selRing = tok.text;
   const labelColor = tok.netLabel;
   const labelBorder = tok.surface;
-  const glowColours = glowRing(tok.light);
+  const glowColours = useMemo(() => glowRing(tok.light), [tok.light]);
 
 
   const option = useMemo(() => ({
@@ -626,7 +545,6 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     tooltip: {
       ...chartTooltip(tok),
       formatter: (p: any) => {
-        if (istRing(p)) return "";
         const tax = p.data?.taxon as { label: string; n: number; nModules: number } | undefined;
         if (p.dataType === "node" && tax) {
           return `${esc(tax.label)}<br/><span style="opacity:.75">${tax.n} ASV`
@@ -683,18 +601,13 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         ...(roam.current ? { zoom: roam.current.zoom, center: roam.current.center }
                     : {}),
         force: { repulsion: 2600, edgeLength: linkLen, gravity: 0.06, layoutAnimation: false },
-        data: [...ring.nodes, ...(() => { const pts = zeichenfolge.map((n) => {
-          const rev = n as unknown as { revX?: number; revY?: number };
-          const istRevolver = istSatellit(n);
-          const xy: [number, number] = istRevolver
-            ? [rev.revX as number, rev.revY as number]
-            : (frozen?.get(n.id) ?? seedXY(n.id));
+        data: drawNodes.map((n) => {
+          const xy: [number, number] = frozen?.get(n.id) ?? seedXY(n.id);
           const glows = keyIds.has(n.id);
           const isOpen = openAsvId != null && (n.id === openAsvId || n.id === gezeichnet(openAsvId));
           const isSelAsv = sel?.kind === "asv" && (n.id === sel.id || n.id === gezeichnet(sel.id));
           const marked = sel != null && sel.kind !== "asv" && markedDrawn.has(n.id);
-          const dimmed = (sel != null && !isSelAsv && !marked && !isOpen)
-            || (scheibe != null && !imRevolver(n) && !isOpen && !isSelAsv);
+          const dimmed = sel != null && !isSelAsv && !marked && !isOpen;
           const tp = taxaById.get(n.id);
           return {
             id: n.id, name: n.id, value: n.genus ?? "", genus: n.genus ?? "", c2: glows,
@@ -704,9 +617,8 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
             share: totalSize > 0 ? (n.size || 0) / totalSize : null, nPool: net?.nodes.length ?? 0,
             present: tp ? null : n.n_samples_present,
             x: xy[0], y: xy[1],
-            ...(istRevolver ? { fixed: true } : {}),
             symbolSize: scale(n.size ?? 0),
-            ...((isSelAsv && sel?.label) || istRevolver ? { label: { show: true } } : {}),
+            ...(isSelAsv && sel?.label ? { label: { show: true } } : {}),
             itemStyle: {
               color: colorOfNode(n),
               opacity: dimmed ? DIM_NODE : 1,
@@ -725,10 +637,8 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                 : "transparent",
             },
           };
-        });
-        return scheibe ? [...pts.slice(0, nUnterScheibe), scheibe, ...pts.slice(nUnterScheibe)] : pts;
-        })()],
-        links: [...ring.links, ...drawEdges.flatMap((e) => {
+        }),
+        links: drawEdges.flatMap((e) => {
           const cross = isCrossDrawn(e);
           const base = cross
             ? { color: tok.crossLink, opacity: 0.9 }
@@ -738,9 +648,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
             || e.source === selPunkt || e.target === selPunkt);
           const tl = (e as unknown as { tax?: TaxonLink }).tax;
           const L = filters.layers;
-          const anMitte = revolver != null && (e.source === revolver.id || e.target === revolver.id);
-          const opacity = scheibe != null ? (anMitte ? base.opacity : DIM_EDGE)
-            : sel == null || incident ? base.opacity : DIM_EDGE;
+          const opacity = sel == null || incident ? base.opacity : DIM_EDGE;
           const common = {
             source: e.source, target: e.target, value: e.corr, manta: tl ? undefined : e,
             ...(tl ? { tax: tl } : {}),
@@ -765,7 +673,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                          width: gerade ? EDGE_W_MIN : edgeWidth(e) },
           });
           return out;
-        })],
+        }),
         edgeSymbolSize: 9,
         label: {
           show: showLabels,
@@ -779,11 +687,11 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         emphasis: { focus: "adjacency" },
       },
     ],
-  }), [drawNodes, drawEdges, taxaMode, offenerTaxon, maxSize, totalSize, net, nodeCluster, showLabels, frozen,
-       c2, keyIds, seedXY, sel, selMarked, markedDrawn, gezeichnet, markColor, edgeWidth, openAsvId, dense, ring,
+  }), [drawNodes, drawEdges, taxaMode, maxSize, totalSize, net, nodeCluster, showLabels, frozen,
+       c2, keyIds, seedXY, sel, selMarked, markedDrawn, gezeichnet, markColor, edgeWidth, openAsvId, dense,
        scale, edgeStrength, ewMin, ewMax, filters.layers, light, nodeOutline, selRing,
        labelColor, labelBorder, glowColours, tok, modules, colorMode, functionColor,
-       linkLen, revolver, scheibe, zeichenfolge, nUnterScheibe, imRevolver, nSamples]);
+       linkLen, nSamples]);
 
   const optionRef = useRef(option);
   optionRef.current = option;
@@ -1004,7 +912,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         onClearKind={(k) => setFilters((f) => clearKind(f, k))}
         onClearAll={() => setFilters(emptyFilters())}
         order={order} chipCounts={chipCounts} unknownAsvIds={unknownAsvIds}
-        taxaMode={taxaMode} onTaxaMode={setTaxaMode} taxaLayers={taxaLayers}
+        taxaMode={taxaMode} points={points} onPoints={setPoints} taxaLayers={taxaLayers}
         linkLength={linkLen} linkLengthDefault={LINK_LENGTH_DEFAULT}
         onLinkLength={(v) => { roam.current = null; setLinkLen(v); }}
         colorMode={colorMode} onColorMode={setColorMode} functionClasses={functionClasses}
@@ -1046,25 +954,25 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
           </div>
         )}
 
-        {offenerTaxon && (
-          <div data-testid="revolver-bar"
-            className="absolute top-2 left-3 z-10 flex items-center gap-2
-                       rounded border border-line-strong bg-overlay px-3 py-1 text-xs
-                       shadow-lg">
-            <span className="text-fg">{offenerTaxon.label}</span>
-            <span className="text-fg-muted tabular-nums">
-              {offenerTaxon.members.length} ASVs
-            </span>
-            <TextButton data-testid="revolver-summary"
-              onClick={() => onOpenTaxon(offenerTaxon.members[0].id)}>summary</TextButton>
-            <button data-testid="revolver-close" onClick={() => setRevolver(null)}
-              aria-label="close" className="text-fg-muted hover:text-fg">✕</button>
-          </div>
+        {offenerTaxon && radPx && (
+          <TaxonWheel x={radPx.x} y={radPx.y} label={offenerTaxon.label}
+            members={offenerTaxon.members} colorOf={colorOfNode}
+            moduleOf={(m) => (m.cluster >= 0 ? modules.label(m.cluster) : null)}
+            onPick={(id) => {
+              setRevolver(null);
+              setSel({ kind: "asv", id, focus: Date.now() });
+              onOpenAsv(id);
+            }}
+            onCenter={() => {
+              setRevolver(null);
+              if (taxonRank === "species") onOpenTaxon(offenerTaxon.members[0].id);
+            }}
+            onClose={() => setRevolver(null)} />
         )}
 
         {sel && !(sel.kind === "asv" && sel.id === openAsvId && !selHiddenBy) && (
           <div data-testid="highlight-bar"
-            className={`absolute ${offenerTaxon ? "top-10" : "top-2"} left-3 z-10 flex
+            className={`absolute top-2 left-3 z-10 flex
                        items-center gap-2 rounded border border-line-strong bg-overlay
                        px-3 py-1 text-xs shadow-lg max-w-[70%]`}>
             {sel.kind === "asv" && (
@@ -1165,31 +1073,17 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                 const inst = chartRef.current?.getEchartsInstance();
                 const serie = (inst as any)?.getOption()?.series?.[0];
                 if (serie && Number.isFinite(serie.zoom) && Array.isArray(serie.center)) {
-                  const zoomVorher = roam.current?.zoom ?? 1;
                   roam.current = { zoom: serie.zoom, center: serie.center as [number, number] };
-                  if (revolver && Math.abs(serie.zoom - zoomVorher) > 1e-6) setZoomTick((t) => t + 1);
+                  if (revolver) setZoomTick((t) => t + 1);
                 }
               },
               click: (p: any) => {
-                if (istRing(p)) return;
                 if (p.dataType === "node" && taxaMode) {
                   const id: string = p.data.id;
-                  if (offenerTaxon && id === offenerTaxon.id) {
-                    onOpenTaxon(offenerTaxon.members[0].id);
-                    return;
-                  }
                   const t = taxaById.get(id);
                   if (t && t.members.length > 1) {
                     const xy = frozen?.get(id) ?? seedXY(id);
-                    let r = revolverRadiusPx(t.members.length);
-                    try {
-                      const inst = chartRef.current?.getEchartsInstance();
-                      const a = (inst as any)?.convertToPixel({ seriesIndex: 0 }, [xy[0], xy[1]]);
-                      const b = (inst as any)?.convertToPixel({ seriesIndex: 0 }, [xy[0] + 1, xy[1]]);
-                      const k = a && b ? Math.abs(b[0] - a[0]) : 0;
-                      if (Number.isFinite(k) && k > 0) r = r / k;
-                    } catch { }
-                    setRevolver({ id, x: xy[0], y: xy[1], r, tick: Date.now() });
+                    setRevolver({ id, x: xy[0], y: xy[1] });
                     return;
                   }
                   if (t) {
