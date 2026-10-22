@@ -1,6 +1,7 @@
 import { StateNotice } from "./ui";
 import { useEffect, useState } from "react";
 import ReactECharts from "echarts-for-react";
+import { useNearestPointClick } from "../chartClick";
 import { getEnvironment, type Environment, type EnvVariable } from "../api";
 import InfoTip from "./InfoTip";
 import { PanelHeader } from "./PanelFrame";
@@ -10,9 +11,10 @@ import ErrorNotice from "./ErrorNotice";
 import { chartTooltip, FONT, useTokens } from "../design/tokens";
 import { envColour } from "../design/dataColours";
 
-export default function EnvironmentPanel({ datasetId, onClose, focus }: {
+export default function EnvironmentPanel({ datasetId, onClose, focus, onInspectAt }: {
   datasetId: string; onClose: () => void;
   focus?: string;
+  onInspectAt?: (sample: string) => void;
 }) {
   const [e, setE] = useState<Environment | null>(null);
   const [err, setErr] = useState<unknown>(null);
@@ -60,7 +62,7 @@ export default function EnvironmentPanel({ datasetId, onClose, focus }: {
             </div>
           ) : (
             <>
-              {e.variables.map((v) => <VariableChart key={v.key} v={v} dated={e.time_axis === "dates"} />)}
+              {e.variables.map((v) => <VariableChart key={v.key} v={v} dated={e.time_axis === "dates"} onInspectAt={onInspectAt} />)}
             </>
           )}
 
@@ -76,7 +78,12 @@ export default function EnvironmentPanel({ datasetId, onClose, focus }: {
   );
 }
 
-function VariableChart({ v, dated }: { v: EnvVariable; dated: boolean }) {
+function VariableChart({ v, dated, onInspectAt }: {
+  v: EnvVariable; dated: boolean; onInspectAt?: (sample: string) => void;
+}) {
+  const klickBereit = useNearestPointClick(
+    v.points.map((p, i) => (dated && p.date ? Date.parse(p.date) : i)),
+    onInspectAt && ((i) => onInspectAt(v.points[i].sample)));
   const missing = v.total - v.n;
   const tok = useTokens();
   const achse = { color: tok.textMuted, fontSize: FONT.xs2 };
@@ -141,7 +148,8 @@ function VariableChart({ v, dated }: { v: EnvVariable; dated: boolean }) {
           </span>
         )}
       </div>
-      <ReactECharts option={option} style={{ height: 100 }} notMerge />
+      <ReactECharts option={option} style={{ height: 100 }} notMerge onChartReady={klickBereit}
+        className={onInspectAt ? "cursor-pointer" : undefined} />
     </div>
   );
 }

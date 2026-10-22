@@ -1488,6 +1488,68 @@ def cluster_at_sample(dataset_id: str, louvain_label: int, sample_id: str):
     }
 
 
+@app.get("/datasets/{dataset_id}/samples", dependencies=[Depends(visible_dataset)])
+def samples(dataset_id: str):
+    rows = _q("MATCH (s:Sample {dataset_id:$d}) "
+              "RETURN s.sample_id AS sample, toString(s.date) AS date "
+              "ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id", d=dataset_id)
+    return {"dataset_id": dataset_id, "time_axis": _time_axis(dataset_id), "samples": rows}
+
+
+@app.get("/datasets/{dataset_id}/asvs", dependencies=[Depends(visible_dataset)])
+def asv_list(dataset_id: str):
+    rows = _q(
+        f"""
+        MATCH (a:ASV {{dataset_id:$d}})
+        RETURN a.id AS id, a.louvain_label AS cluster, a.read_count_total AS total,
+               {", ".join(f"a.{t} AS {t}" for t in TAXONOMY)}
+        ORDER BY coalesce(a.read_count_total, 0) DESC, a.id
+        """,
+        d=dataset_id)
+    return {"dataset_id": dataset_id,
+            "asvs": [{"id": r["id"], "cluster": r["cluster"],
+                      "label": semantics.taxon_label({t: r[t] for t in TAXONOMY})} for r in rows]}
+
+
+@app.get("/datasets/{dataset_id}/sample/{sample_id}", dependencies=[Depends(visible_dataset)])
+def sample_detail(dataset_id: str, sample_id: str):
+    s = _q("MATCH (s:Sample {sample_id:$s, dataset_id:$d}) "
+           "RETURN toString(s.date) AS date, s.analysed_reads_total AS total",
+           d=dataset_id, s=sample_id)
+    if not s:
+        raise HTTPException(404, f"sample {sample_id!r} not in dataset_id={dataset_id!r}")
+    rows = _q(
+        f"""
+        MATCH (:Sample {{sample_id:$s, dataset_id:$d}})-[r:HAS_ABUNDANCE]->(a:ASV {{dataset_id:$d}})
+        WHERE r.count > 0
+        RETURN a.id AS id, a.louvain_label AS cluster, r.count AS count,
+               {", ".join(f"a.{t} AS {t}" for t in TAXONOMY)}
+        ORDER BY r.count DESC, a.id
+        """,
+        d=dataset_id, s=sample_id)
+    total = s[0]["total"] or sum(r["count"] or 0.0 for r in rows)
+    share = lambda c: (c / total) if total > 0 else None  # noqa: E731
+    mods: dict[int, dict] = {}
+    asvs = []
+    for i, r in enumerate(rows):
+        path = {t: r[t] for t in TAXONOMY}
+        asvs.append({"id": r["id"], "cluster": r["cluster"], "count": r["count"],
+                     "share": share(r["count"]), "rank": i + 1,
+                     "label": semantics.taxon_label(path),
+                     "taxa": [v for t in TAXONOMY if (v := path.get(t))
+                              and v not in semantics.TAXONOMY_PLACEHOLDERS]})
+        if r["cluster"] is not None:
+            m = mods.setdefault(r["cluster"], {"cluster": r["cluster"], "count": 0.0, "n_asv": 0})
+            m["count"] += r["count"] or 0.0
+            m["n_asv"] += 1
+    for m in mods.values():
+        m["share"] = share(m["count"])
+    return {"dataset_id": dataset_id, "sample": sample_id, "date": s[0]["date"],
+            "sample_total": total, "quantity": semantics.quantity(_q, dataset_id),
+            "asvs": asvs,
+            "modules": sorted(mods.values(), key=lambda m: (-m["count"], m["cluster"]))}
+
+
 def _sum_caveat(dataset_id: str) -> str | None:
     return None if _value_kind(dataset_id) == "reads" else semantics.CLUSTER_TIMESERIES_CAVEAT
 

@@ -497,6 +497,18 @@ export type ClusterAtSample = {
              share_of_sample: number | null; share_of_cluster: number | null }[];
 };
 
+export type SampleList = {
+  dataset_id: string; time_axis: "dates" | "ordinal";
+  samples: { sample: string; date: string | null }[];
+};
+
+export type SampleDetail = {
+  sample: string; date: string | null; sample_total: number; quantity: Quantity;
+  asvs: { id: string; cluster: number | null; count: number; share: number | null;
+          rank: number; label: string; taxa: string[] }[];
+  modules: { cluster: number; count: number; n_asv: number; share: number | null }[];
+};
+
 export type Starred = {
   dataset_id: string; n: number;
   asvs: { id: string; genus: string | null; cluster: number | null; at: string | null }[];
@@ -1303,6 +1315,12 @@ export const uploadFastq = (
 export const getClusterAtSample = (ds: string, label: number, sample: string) =>
   F(`${BASE}/datasets/${ds}/cluster/${label}/at/${encodeURIComponent(sample)}`)
     .then(okJson<ClusterAtSample>);
+
+export const getAsvList = (ds: string) =>
+  get<{ asvs: { id: string; cluster: number | null; label: string }[] }>(`/datasets/${ds}/asvs`);
+export const getSamples = (ds: string) => get<SampleList>(`/datasets/${ds}/samples`);
+export const getSample = (ds: string, sample: string) =>
+  get<SampleDetail>(`/datasets/${ds}/sample/${encodeURIComponent(sample)}`);
 
 export const getStarred = (ds: string) =>
   F(`${BASE}/datasets/${ds}/starred`).then(okJson<Starred>);

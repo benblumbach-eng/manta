@@ -1,7 +1,7 @@
 import { Button, StateNotice } from "./ui";
 import { useEffect, useRef, useState } from "react";
-import { getAsv, getEnvironment, getTaxon, setAsvNote, setAsvStar,
-         type AsvDetail, type Environment } from "../api";
+import { getAsv, getTaxon, setAsvNote, setAsvStar,
+         type AsvDetail } from "../api";
 import type { EdgeRef } from "../App";
 import { useModules } from "../modules";
 import FrequencyPanel from "./FrequencyPanel";
@@ -22,13 +22,14 @@ const PLACEHOLDERS = new Set(["unassigned", "NA", "", "Environment_Condition", "
 const named = (v: string | null | undefined) => (v && !PLACEHOLDERS.has(v) ? v : null);
 
 export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpenEdge,
-                                    onCompare, onOpenTaxon, onOpenCluster, signedIn = true }: {
+                                    onCompare, onInspectAt, onOpenTaxon, onOpenCluster, signedIn = true }: {
   datasetId: string;
   asvId: string;
   onClose: () => void;
   onOpenAsv: (id: string) => void;
   onOpenEdge: (e: EdgeRef) => void;
   onCompare?: (id: string) => void;
+  onInspectAt?: (sample: string) => void;
   onOpenTaxon?: (id: string) => void;
   onOpenCluster?: (label: number) => void;
   signedIn?: boolean;
@@ -39,7 +40,6 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
   const sternSchreib = useRef<{ asv: string; t: number; wert: boolean } | null>(null);
   const [err, setErr] = useState<unknown>(null);
   const [nochmal, setNochmal] = useState(0);
-  const [env, setEnv] = useState<Environment | null>(null);
   const [showSeq, setShowSeq] = useState(false);
   const [hubInfo, setHubInfo] = useState(false);
   useEffect(() => { setHubInfo(false); }, [asvId]);
@@ -62,8 +62,6 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
   }, [datasetId, asvId, nochmal]);
 
   useEffect(() => {
-    setEnv(null);
-    getEnvironment(datasetId).then(setEnv).catch(() => setEnv(null));
   }, [datasetId]);
 
   const blastUrl = d?.sequence
@@ -201,11 +199,11 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
               )}
               {onCompare && (
                 <Button data-testid="asv-compare" onClick={() => onCompare(asvId)} className="ml-auto">
-                  Compare ↗
+                  Inspect ↗
                 </Button>
               )}
             </h3>
-            <FrequencyPanel freq={d.frequency} env={env} testid="asv-frequency" />
+            <FrequencyPanel freq={d.frequency} testid="asv-frequency" onPointClick={onInspectAt} />
           </section>
 
           {findCap(caps, "environment")?.available && (

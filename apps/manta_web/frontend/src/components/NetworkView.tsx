@@ -74,7 +74,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                                       onOpenStarred, starredOpen, clusterVonAussen,
                                       onOpenWheel, wheelOpen,
                                       extraViews,
-                                      onOpenCompare, compareOpen,
+                                      onOpenCompare, compareOpen, onInspectAt,
                                       openAsvId, isAdmin, signedIn = true, onOpenTaxon, onCloseView,
                                       onShowNet,
                                       settingsOpen, onCloseSettings, theme, onTheme,
@@ -102,6 +102,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   extraViews: { view: ExtraView; kind: string; open: boolean; onOpen: () => void }[];
   onOpenCompare: () => void;
   compareOpen: boolean;
+  onInspectAt: (sample: string) => void;
   onRefresh?: () => void;
   onOpenDataset?: (datasetId: string) => void;
 }) {
@@ -875,7 +876,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     ...extraViews.map(({ view, kind, open, onOpen }) => ({
       key: view.key, testid: view.testid, label: view.label, icon: view.icon,
       open, onOpen: umschalten(kind, open, onOpen), disabledReason: null })),
-    { key: "compare", testid: "compare-toggle", label: "Compare", icon: "⇄",
+    { key: "compare", testid: "compare-toggle", label: "Inspect", icon: "⌕",
       open: compareOpen, onOpen: umschalten("compare", compareOpen, onOpenCompare),
       disabledReason: timeCap && !timeCap.available ? timeCap.detail : null },
     { key: "legend", testid: "legend-view-toggle", label: "Legend", icon: "ⓘ",
@@ -891,7 +892,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   return (
     <div className="h-full flex relative">
       <NetworkSidebar
-        dataset={dataset} caps={caps} net={net} c2={c2} thr={thr}
+        dataset={dataset} net={net} c2={c2}
         crit={crit} onCrit={setCrit} nCrit1={c1Ids.size} nKey={keyIds.size}
         visibleNodes={visibleNodes} nSamples={nSamples}
         clusters={clusters} clusterColor={clusterColor} countByCluster={countByCluster}
@@ -1109,7 +1110,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
           color={clusterColor.get(selectedCluster)} onClose={() => setSelectedCluster(null)}
           onOpenAsv={onOpenAsv} onOpenEdge={onOpenEdge}
           colorOf={(c) => clusterColor.get(c)}
-          onOpenCluster={(c) => setSelectedCluster(c)} />
+          onOpenCluster={(c) => setSelectedCluster(c)} onInspectAt={onInspectAt} />
         </PanelFrame>
       )}
 

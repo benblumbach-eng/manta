@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getStarred, type Capabilities, type Criterion2Summary, type Dataset,
-         type Network, type NetNode, type Thresholds } from "../api";
-import DataAvailability from "./DataAvailability";
+import { getStarred, type Criterion2Summary, type Dataset,
+         type Network, type NetNode } from "../api";
 import { useModules } from "../modules";
-import { fmtRun, fmtUtc } from "../format";
 import { isActive, type Filters, type FilterKind, type KeystoneCrit, KEYSTONE_LABEL, layerLabel, layersDefault, functionLabel } from "../networkFilters";
 import { FUNCTION_NONE, functionOther } from "../clusterPalette";
 import { useDatasetSearch } from "../datasetSearch";
@@ -38,14 +36,12 @@ export type ViewItem = {
 
 export type SidebarProps = {
   dataset: Dataset;
-  caps: Capabilities | null;
   net: Network | null;
   c2: Criterion2Summary | null;
   crit: KeystoneCrit;
   onCrit: (c: KeystoneCrit) => void;
   nCrit1: number;
   nKey: number;
-  thr: Thresholds | undefined;
   visibleNodes: NetNode[];
   clusters: number[];
   clusterColor: Map<number, string>;
@@ -82,12 +78,9 @@ export type SidebarProps = {
 const PRESENCE_START = 5;
 
 export default function NetworkSidebar(p: SidebarProps) {
-  const { dataset, caps, net, c2, thr, visibleNodes, filters } = p;
+  const { dataset, net, c2, visibleNodes, filters } = p;
   const modules = useModules();
 
-  const [infoOpen, setInfoOpen] = useState(false);
-  useEffect(() => { setInfoOpen(false); }, [dataset.dataset_id]);
-  const timeWord = caps ? (caps.time_axis === "dates" ? "calendar dates" : "ordinal") : null;
 
   const [search, setSearch] = useState("");
   const [lenDraft, setLenDraft] = useState(p.linkLength);
@@ -243,53 +236,27 @@ export default function NetworkSidebar(p: SidebarProps) {
       className="w-72 border-r border-line flex flex-col gap-3 p-3 overflow-auto">
       <div className="space-y-2">
         <div>
-          <div className="flex items-center gap-1">
-            <h2 className="text-base font-semibold text-fg truncate">
-              {dataset.region ?? dataset.dataset_id}
-            </h2>
-            <button data-testid="dataset-info-open" onClick={() => setInfoOpen((v) => !v)}
-              aria-label="dataset details" aria-expanded={infoOpen}
-              className={`rounded-md px-1 text-xs ${infoOpen
-                ? "bg-accent-soft text-accent" : "text-fg-muted hover:text-fg hover:bg-control"}`}>ⓘ</button>
-          </div>
+          <h2 className="text-base font-semibold text-fg truncate">
+            {dataset.region ?? dataset.dataset_id}
+          </h2>
           <div className="text-xs text-fg-muted" data-testid="dataset-marker">
-            Marker {dataset.marker ?? "?"}{timeWord ? ` · ${timeWord}` : ""}
+            Marker {dataset.marker ?? "?"}
           </div>
         </div>
-        {infoOpen && (
-          <div data-testid="dataset-info"
-            className="rounded-md border border-line bg-raised px-3 py-2 space-y-2">
-            <DatasetFacts dataset={dataset} caps={caps} />
-            {caps && (
-              <div className="border-t border-line-subtle pt-2">
-                <DataAvailability caps={caps} omit={["time_axis", "value_kind", "network"]} />
-              </div>
-            )}
-            {thr && (
-              <div className="border-t border-line-subtle pt-2 text-2xs text-fg-muted tabular-nums"
-                data-testid="dataset-info-run">
-                {thr.recorded
-                  ? <><span title={thr.run_id ? `run id: ${thr.run_id}` : undefined}>{fmtRun(thr.run_id)}</span>
-                      {" "}· computed <span className="whitespace-nowrap">{thr.computed_at ? fmtUtc(thr.computed_at) : "—"}</span></>
-                  : <>run not recorded — thresholds are defaults</>}
-                <br />CON r ≥ {thr.con_tr} · p &lt; {thr.con_alpha} · CCM{" "}
-                {thr.num_permutations} permutations
-              </div>
-            )}
-          </div>
-        )}
+        <DatasetFacts dataset={dataset} />
       </div>
 
       <div>
         <SectionHeading className="mb-1">Views</SectionHeading>
-        <div className="flex flex-wrap gap-1">
-          <ToggleButton data-testid="net-tab" pressed={!p.views.anyViewOpen} onClick={p.views.onShowNet}>
+        <div className="grid grid-cols-3 gap-1" data-testid="views-grid">
+          <ToggleButton data-testid="net-tab" pressed={!p.views.anyViewOpen} onClick={p.views.onShowNet}
+            className="justify-center">
             ◉ Network
           </ToggleButton>
           {p.views.items.map((v) => (
             <ToggleButton key={v.key} data-testid={v.testid} onClick={v.onOpen} pressed={v.open}
               title={v.disabledReason ?? undefined} aria-disabled={v.disabledReason ? true : undefined}
-              className={v.disabledReason ? "text-fg-disabled border-dashed" : ""}>
+              className={`justify-center${v.disabledReason ? " text-fg-disabled border-dashed" : ""}`}>
               {v.icon} {v.label}
             </ToggleButton>
           ))}
@@ -441,6 +408,103 @@ export default function NetworkSidebar(p: SidebarProps) {
       </div>
 
       <div>
+        <SectionHeading className="mb-1">Display</SectionHeading>
+        <div className={BOX} data-testid="display-section">
+          <div className="mb-2" data-testid="grain-control">
+            <Segmented full label="Points" value={p.points} onChange={p.onPoints}
+              options={[{ value: "asvs", label: "ASVs", testid: "grain-asvs" },
+                        { value: "genus", label: "Genus", testid: "grain-genus" },
+                        { value: "species", label: "Species", testid: "grain-taxa" }]} />
+          </div>
+          {p.taxaMode && (
+            <p className="mb-2 text-2xs text-fg-muted leading-snug" data-testid="taxa-note">
+              {p.points === "genus" ? "One point per genus" : "One point per species"}; click a point to pick one of its ASVs.
+            </p>
+          )}
+
+          <div className="mb-2" data-testid="link-length-control">
+            <div className="flex gap-2 items-center">
+              <span className="text-xs text-fg-muted">Link length</span>
+              <input type="range" data-testid="link-length" aria-label="link length"
+                min={60} max={900} step={20} value={lenDraft}
+                onChange={(e) => setLenDraft(Number(e.target.value))}
+                className="flex-1 accent-accent-fill" />
+              <span className="w-8 text-right text-xs tabular-nums text-fg-muted">{lenDraft}</span>
+              <button data-testid="link-length-reset" onClick={() => setLenDraft(p.linkLengthDefault)}
+                disabled={lenDraft === p.linkLengthDefault} title="back to the default length"
+                aria-label="back to the default length"
+                className="rounded-md px-1 text-xs text-fg-muted hover:text-fg hover:bg-control disabled:text-fg-disabled disabled:hover:bg-transparent">↺</button>
+            </div>
+          </div>
+
+          <div className="mb-2" data-testid="color-control">
+            <div>
+              <Segmented full label="Colour" value={p.colorMode} onChange={p.onColorMode}
+                options={[{ value: "module", label: "by module", testid: "color-module" },
+                          { value: "function", label: "by function", testid: "color-function",
+                            disabled: !net?.traits?.available,
+                            reason: net?.traits?.available ? undefined
+                              : (net?.traits?.absent_reason ?? "no literature annotation for this dataset") }]} />
+            </div>
+            {p.colorMode === "function" && (
+              <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-2xs" data-testid="function-key">
+                {p.functionClasses.filter((c) => !c.other).map((c) => (
+                  <span key={c.label} className="inline-flex items-center gap-1 text-fg"
+                    data-testid="function-key-class" data-label={c.label} data-color={c.color}>
+                    <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: c.color }} />
+                    {c.label} <span className="text-fg-muted tabular-nums">{c.n}</span>
+                  </span>
+                ))}
+                {p.functionClasses.some((c) => c.other) && (
+                  <span className="inline-flex items-center gap-1 text-fg" data-testid="function-key-other"
+                    title={p.functionClasses.filter((c) => c.other).map((c) => c.label).join(", ")}>
+                    <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: functionOther() }} />
+                    other classes <span className="text-fg-muted tabular-nums">
+                      {p.functionClasses.filter((c) => c.other).reduce((a, c) => a + c.n, 0)}</span>
+                  </span>
+                )}
+                <span className="inline-flex items-center gap-1 text-fg-muted" data-testid="function-key-none">
+                  <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: FUNCTION_NONE }} />
+                  {p.taxaMode ? "not annotated or mixed classes" : "not annotated"}
+                </span>
+              </div>
+            )}
+            {p.colorMode === "function" && net?.traits?.statement && (
+              <p className="mt-1 text-2xs text-fg-muted" data-testid="legend-function-coverage">
+                {net.traits.statement}
+              </p>
+            )}
+            {p.colorMode === "function" && net?.traits?.note && (
+              <p className="mt-1 text-2xs text-fg-muted leading-snug" data-testid="function-note">
+                {net.traits.note.split(". ")[0].replace(/\.?$/, ".")}
+              </p>
+            )}
+          </div>
+
+          {!p.taxaMode && (
+            <div className="border-t border-line-subtle pt-2" data-testid="keystone-control">
+              <SectionHeading aside={<span className="text-xs text-mark tabular-nums"
+                data-testid="keystone-n">✦ {p.nKey}</span>}>Keystone</SectionHeading>
+              <div className="mt-1 flex flex-col gap-1" role="radiogroup" aria-label="Keystone criterion">
+                {([1, 2] as const).map((k) => {
+                  const on = p.crit === k;
+                  const enabled = k === 1 || !!c2;
+                  return (
+                    <button key={k} data-testid={`keystone-k${k}`} role="radio" aria-checked={on}
+                      disabled={!enabled} onClick={() => p.onCrit(k)} className={checkCls(on, enabled)}>
+                      <span aria-hidden className={`h-3.5 w-3.5 shrink-0 rounded-full border ${on
+                        ? "border-accent bg-accent-fill" : "border-line-strong"}`} />
+                      <span>{KEYSTONE_LABEL[k]} · {k === 1 ? p.nCrit1 : (c2?.n_pass ?? "…")}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div>
         <SectionHeading className="mb-1" aside={anyActive && (
             <TextButton data-testid="filter-clear-all" onClick={p.onClearAll} className="text-xs">
               clear all</TextButton>
@@ -504,99 +568,6 @@ export default function NetworkSidebar(p: SidebarProps) {
             </p>
           )}
         </div>
-
-        <div className="mb-2" data-testid="grain-control">
-          <Segmented full label="Points" value={p.points} onChange={p.onPoints}
-            options={[{ value: "asvs", label: "ASVs", testid: "grain-asvs" },
-                      { value: "genus", label: "Genus", testid: "grain-genus" },
-                      { value: "species", label: "Species", testid: "grain-taxa" }]} />
-        </div>
-        {p.taxaMode && (
-          <p className="mb-2 text-2xs text-fg-muted leading-snug" data-testid="taxa-note">
-            {p.points === "genus" ? "One point per genus" : "One point per species (all seven ranks equal)"};
-            {" "}click a point to pick one of its ASVs.
-          </p>
-        )}
-
-        <div className="mb-2" data-testid="link-length-control">
-          <div className="flex gap-2 items-center">
-            <span className="text-xs text-fg-muted">Link length</span>
-            <input type="range" data-testid="link-length" aria-label="link length"
-              min={60} max={900} step={20} value={lenDraft}
-              onChange={(e) => setLenDraft(Number(e.target.value))}
-              className="flex-1 accent-accent-fill" />
-            <span className="w-8 text-right text-xs tabular-nums text-fg-muted">{lenDraft}</span>
-            <button data-testid="link-length-reset" onClick={() => setLenDraft(p.linkLengthDefault)}
-              disabled={lenDraft === p.linkLengthDefault} title="back to the default length"
-              aria-label="back to the default length"
-              className="rounded-md px-1 text-xs text-fg-muted hover:text-fg hover:bg-control disabled:text-fg-disabled disabled:hover:bg-transparent">↺</button>
-          </div>
-        </div>
-
-        <div className="mb-2" data-testid="color-control">
-          <div>
-            <Segmented full label="Colour" value={p.colorMode} onChange={p.onColorMode}
-              options={[{ value: "module", label: "by module", testid: "color-module" },
-                        { value: "function", label: "by function", testid: "color-function",
-                          disabled: !net?.traits?.available,
-                          reason: net?.traits?.available ? undefined
-                            : (net?.traits?.absent_reason ?? "no literature annotation for this dataset") }]} />
-          </div>
-          {p.colorMode === "function" && (
-            <div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-2xs" data-testid="function-key">
-              {p.functionClasses.filter((c) => !c.other).map((c) => (
-                <span key={c.label} className="inline-flex items-center gap-1 text-fg"
-                  data-testid="function-key-class" data-label={c.label} data-color={c.color}>
-                  <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: c.color }} />
-                  {c.label} <span className="text-fg-muted tabular-nums">{c.n}</span>
-                </span>
-              ))}
-              {p.functionClasses.some((c) => c.other) && (
-                <span className="inline-flex items-center gap-1 text-fg" data-testid="function-key-other"
-                  title={p.functionClasses.filter((c) => c.other).map((c) => c.label).join(", ")}>
-                  <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: functionOther() }} />
-                  other classes <span className="text-fg-muted tabular-nums">
-                    {p.functionClasses.filter((c) => c.other).reduce((a, c) => a + c.n, 0)}</span>
-                </span>
-              )}
-              <span className="inline-flex items-center gap-1 text-fg-muted" data-testid="function-key-none">
-                <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ background: FUNCTION_NONE }} />
-                {p.taxaMode ? "not annotated or mixed classes" : "not annotated"}
-              </span>
-            </div>
-          )}
-          {p.colorMode === "function" && net?.traits?.statement && (
-            <p className="mt-1 text-2xs text-fg-muted" data-testid="legend-function-coverage">
-              {net.traits.statement}
-            </p>
-          )}
-          {p.colorMode === "function" && net?.traits?.note && (
-            <p className="mt-1 text-2xs text-fg-muted leading-snug" data-testid="function-note">
-              {net.traits.note.split(". ")[0].replace(/\.?$/, ".")}
-            </p>
-          )}
-        </div>
-
-        {!p.taxaMode && (
-          <div className={BOX} data-testid="keystone-control">
-            <SectionHeading aside={<span className="text-xs text-mark tabular-nums"
-              data-testid="keystone-n">✦ {p.nKey}</span>}>Keystone</SectionHeading>
-            <div className="mt-1 flex flex-col gap-1" role="radiogroup" aria-label="Keystone criterion">
-              {([1, 2] as const).map((k) => {
-                const on = p.crit === k;
-                const enabled = k === 1 || !!c2;
-                return (
-                  <button key={k} data-testid={`keystone-k${k}`} role="radio" aria-checked={on}
-                    disabled={!enabled} onClick={() => p.onCrit(k)} className={checkCls(on, enabled)}>
-                    <span aria-hidden className={`h-3.5 w-3.5 shrink-0 rounded-full border ${on
-                      ? "border-accent bg-accent-fill" : "border-line-strong"}`} />
-                    <span>{KEYSTONE_LABEL[k]} · {k === 1 ? p.nCrit1 : (c2?.n_pass ?? "…")}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
 
         <div className={BOX} data-testid="layer-control">
           <SectionHeading>Links</SectionHeading>
