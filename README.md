@@ -19,7 +19,6 @@ in your browser.
 [Installation](#installation) ·
 [Importing data](#importing-data) ·
 [Updating](#updating) ·
-[Sharing](#sharing-with-others-on-a-server) ·
 [Troubleshooting](#troubleshooting) ·
 [Citing](#citing-manta) ·
 [Sources and licenses](#sources-and-licenses)
@@ -254,23 +253,6 @@ block. Then delete `~/manta-old`.
 **Backup:** `bash deploy/backup.sh` saves the step 1 database and accounts to `deploy/backups/`
 (MANTA pauses for about 20 s); `bash deploy/restore.sh <neo4j-*.dump> [auth-*.db]` restores
 them. Both explain their options with `--help`.
-
-## Sharing with others on a server
-
-On a shared server, other users need no installation of their own: MANTA listens on the server's
-`127.0.0.1`, which everyone logged in there can reach.
-
-1. **You** create an account (on the server, in `~/manta/deploy`):
-   `docker compose exec api python manage.py adduser <name> --role viewer`.
-   `manage.py list`, `passwd <name>`, `disable`/`enable <name>` and `deluser <name>` manage it.
-2. **They** open a tunnel from their computer with their own server login (`-J` only if there is
-   a jump host) and keep the window open:
-   `ssh -N -L 18080:127.0.0.1:8080 -J <login>@<jumphost> <login>@<server>`
-3. **They** open <http://localhost:18080> and sign in.
-
-To let someone import, also create an import account (step 2's `adduser … --role admin`); they
-then add `-L 15173:[::1]:15173 -L 18000:127.0.0.1:18000` to the tunnel. Their imports run under
-your account and stop when you run `update.sh`.
 
 ## Troubleshooting
 
