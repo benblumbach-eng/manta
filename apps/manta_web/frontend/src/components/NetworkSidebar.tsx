@@ -586,9 +586,6 @@ export default function NetworkSidebar(p: SidebarProps) {
                 onClick={() => p.onCrit({ ...p.crit, k2: !p.crit.k2 })} className={checkCls(p.crit.k2, !!c2)}>
                 {checkMark(p.crit.k2)}<span>2 · closeness · {c2?.n_pass ?? "…"} ASVs</span>
               </button>
-              <button data-testid="keystone-k3" disabled title="no ELA data" className={checkCls(false, false)}>
-                {checkMark(false)}<span>3 · ELA</span>
-              </button>
             </div>
           </div>
         )}
