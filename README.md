@@ -65,10 +65,14 @@ length at the sampling site.
 
 You can also:
 
-- see the network of which ASVs occur together and which seem to influence others;
-- see which ASVs are unusually central in their module (one of three criteria for a keystone
-  species in Oldenburg et al. 2024; on its own it does not make an ASV a keystone);
-- filter by module, organism name or function, and share the exact view as a link;
+- see the co-occurrence network: a line joins two ASVs whose abundances rise and fall together,
+  and an arrow shows that one ASV significantly influences the other (convergent cross mapping,
+  CCM);
+- mark possible keystone ASVs (✦) by choosing the keystone criteria of Oldenburg et al. 2024 in
+  the sidebar: 1, a significant CCM link; 2, an unusually high closeness within its module.
+  The third criterion (a stable state from ELA) is not available, so a marked ASV is a
+  candidate, not a proven keystone;
+- filter by module, taxon name or function, and share the exact view as a link;
 - compare ASVs, modules and measurements over the year;
 - ask an optional chat assistant, which answers only from your stored results and marks any
   number it cannot back up with `[no evidence]`. Its tools also work in other AI apps that
@@ -445,14 +449,16 @@ downloads them from their original sources.
   [doi:10.1038/s41467-025-56203-3](https://doi.org/10.1038/s41467-025-56203-3). The paper measures
   annual oscillation and peak timing per ASV and year-to-year differences per community; MANTA's
   peak window and year-to-year variability per module build on these ideas but are its own.
-- Criterion 2 of the keystone definition — Oldenburg et al. 2024 (above), Methods "Keystone
-  species definition": "a high centrality (closeness) value within its co-occurrence community".
-  MANTA computes it on the undirected co-occurrence network: closeness within the module
-  subgraph (all members, all links with both ends in the module), unweighted (n − 1)/Σd; per ASV a
+- Keystone criteria — Oldenburg et al. 2024 (above), Methods "Keystone species definition":
+  (1) "a significant influence on other ASV in the network", (2) "a high centrality (closeness)
+  value within its co-occurrence community", (3) "presence in at least one stable state as
+  predicted by ELA". For criterion 1, MANTA marks every ASV at either end of a link with a
+  significant CCM direction. For criterion 2, MANTA works on the undirected co-occurrence network:
+  closeness within the module subgraph (all members, all links with both ends in the module), unweighted (n − 1)/Σd; per ASV a
   one-sided one-sample t-test of the module's closeness values against its own
   (`scipy.stats.ttest_1samp(…, popmean=c_i, alternative='less')`); Benjamini–Hochberg over all
-  testable network ASVs, q ≤ 0.05. This is a selection step, not a keystone: criteria 1 and 3 are
-  not tested.
+  testable network ASVs, q ≤ 0.05. Criterion 3 is not tested, so marked ASVs are candidates,
+  not keystones.
 
 <br>
 
