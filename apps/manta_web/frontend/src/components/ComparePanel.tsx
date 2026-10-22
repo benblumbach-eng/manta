@@ -17,6 +17,7 @@ import { useNearestPointClick } from "../chartClick";
 
 const MAX_CURVES = 6;
 const DOTS = "time points";
+const MONATE = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 type Kind = "asv" | "cluster" | "env";
 export type InspectMark = { kind: "asv" | "cluster"; id: string };
@@ -54,6 +55,8 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
   const [search, setSearch] = useState("");
   const [err, setErr] = useState<unknown>(null);
   const [zeitraum, setZeitraum] = useState<string>("total");
+  const [von, setVon] = useState<string | null>(null);
+  const [bis, setBis] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("time");
   const [samples, setSamples] = useState<SampleList["samples"]>([]);
   const [punkt, setPunkt] = useState<string | null>(null);
@@ -61,7 +64,7 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
 
   useEffect(() => {
     setCurves([]); setErr(null); setEnv(null); setModules([]); setSamples([]); setPunkt(null);
-    setMarkiert(null);
+    setMarkiert(null); setVon(null); setBis(null); setZeitraum("total");
     getEnvironment(datasetId).then(setEnv).catch(() => setEnv(null));
     getModules(datasetId).then((m) => setModules(m.modules)).catch(() => setModules([]));
     getSamples(datasetId).then((r) => {
@@ -165,24 +168,48 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
     return [...j].sort();
   }, [curves]);
   useEffect(() => {
-    if (zeitraum !== "total" && !jahre.includes(zeitraum)) setZeitraum("total");
+    if (zeitraum !== "total" && zeitraum !== "custom" && !jahre.includes(zeitraum)) setZeitraum("total");
   }, [jahre, zeitraum]);
 
   const tok = useTokens();
 
+  const datiert = useMemo(() => samples
+    .map((s) => ({ sample: s.sample, date: s.date ?? "", t: s.date ? Date.parse(s.date) : NaN }))
+    .filter((s) => Number.isFinite(s.t)).sort((a, b) => a.t - b.t), [samples]);
+
   const fenster = useMemo(() => {
+    if (zeitraum === "custom" && datiert.length) {
+      const a = datiert.find((s) => s.sample === von) ?? datiert[0];
+      const b = datiert.find((s) => s.sample === bis) ?? datiert[datiert.length - 1];
+      return [Math.min(a.t, b.t), Math.max(a.t, b.t)] as const;
+    }
     if (zeitraum !== "total") {
       return [Date.parse(`${zeitraum}-01-01T00:00:00Z`),
               Date.parse(`${zeitraum}-12-31T23:59:59Z`)] as const;
     }
     const ts = curves.flatMap((c) => c.points.map((p) => p.t));
     return ts.length ? [Math.min(...ts), Math.max(...ts)] as const : [0, 1] as const;
-  }, [curves, zeitraum]);
+  }, [curves, zeitraum, datiert, von, bis]);
 
-  const zeitpunkte = useMemo(() => samples
-    .map((s) => ({ sample: s.sample, t: s.date ? Date.parse(s.date) : NaN }))
-    .filter((s) => Number.isFinite(s.t) && s.t >= fenster[0] && s.t <= fenster[1]),
-  [samples, fenster]);
+  const zeitpunkte = useMemo(() => datiert.filter((s) => s.t >= fenster[0] && s.t <= fenster[1]),
+    [datiert, fenster]);
+
+  // Long spans get one bracket per year, dense ones one per month, drawn under the x axis.
+  const klammern = useMemo(() => {
+    const proMonat = new Map<string, number>();
+    for (const z of zeitpunkte) proMonat.set(z.date.slice(0, 7), (proMonat.get(z.date.slice(0, 7)) ?? 0) + 1);
+    const art = fenster[1] - fenster[0] > 400 * 86400000 ? 4
+      : Math.max(0, ...proMonat.values()) >= 4 ? 7 : 0;
+    if (!art) return [];
+    const gruppen = new Map<string, { von: number; bis: number }>();
+    for (const z of zeitpunkte) {
+      const k = z.date.slice(0, art);
+      const g = gruppen.get(k);
+      gruppen.set(k, g ? { von: g.von, bis: z.t } : { von: z.t, bis: z.t });
+    }
+    return [...gruppen].map(([k, g]) => ({ ...g,
+      label: art === 4 ? k : `${MONATE[Number(k.slice(5, 7)) - 1]} ${k.slice(0, 4)}` }));
+  }, [zeitpunkte, fenster]);
 
   const option = useMemo(() => {
     const drin = curves.map((c) => c.points.filter((p) => p.t >= fenster[0] && p.t <= fenster[1]));
@@ -196,7 +223,8 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
     const achse = { color: tok.textMuted, fontSize: FONT.xs2 };
     return {
       backgroundColor: "transparent",
-      grid: { left: 56, right: 14, top: 14, bottom: 30 },
+      grid: [{ left: 56, right: 14, top: 14, bottom: klammern.length ? 52 : 30 },
+             { left: 56, right: 14, bottom: 4, height: 20 }],
       tooltip: {
         ...chartTooltip(tok),
         trigger: "item" as const,
@@ -209,17 +237,18 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
           return `<b>${esc(datum(p.data[0]))}</b><br/>${p.marker}${esc(c.label)}: ${esc(v)}`;
         },
       },
-      xAxis: { type: "time" as const, min: fenster[0], max: fenster[1], axisLabel: achse,
+      xAxis: [{ type: "time" as const, min: fenster[0], max: fenster[1], axisLabel: achse,
                axisPointer: { show: true, snap: true, type: "line" as const,
                               lineStyle: { color: tok.textMuted, type: "dashed" as const },
                               label: { show: true, formatter: (x: { value: number }) => datum(x.value),
                                        backgroundColor: tok.overlay, color: tok.text,
                                        borderColor: tok.border, borderWidth: 1 } } },
-      yAxis: {
+              { type: "time" as const, gridIndex: 1, min: fenster[0], max: fenster[1], show: false }],
+      yAxis: [{
         type: "value" as const, min: 0, max: genormt ? 1 : "dataMax",
         axisLabel: { ...achse, formatter: (v: number) => (genormt ? `${Math.round(100 * v)} %` : prozent(v, max)) },
         splitLine: { lineStyle: { color: tok.chartGrid } },
-      },
+      }, { type: "value" as const, gridIndex: 1, min: 0, max: 1, show: false }],
       series: [
         ...curves.map((c, i) => {
           const farbe = seriesColour(i, tok.light);
@@ -239,9 +268,18 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
         { name: DOTS, type: "scatter" as const, data: zeitpunkte.map((z) => [z.t, 0]),
           symbolSize: 4, itemStyle: { color: tok.textMuted }, silent: true,
           tooltip: { show: false }, clip: false },
+        { name: "brackets", type: "line" as const, xAxisIndex: 1, yAxisIndex: 1, silent: true,
+          symbol: "none", connectNulls: false, tooltip: { show: false },
+          lineStyle: { color: tok.textMuted, width: 1 },
+          data: klammern.flatMap((k) => [[k.von, 1], [k.von, 0.75], [k.bis, 0.75], [k.bis, 1], [k.bis, null]]) },
+        { name: "bracket labels", type: "scatter" as const, xAxisIndex: 1, yAxisIndex: 1, silent: true,
+          symbolSize: 0, tooltip: { show: false },
+          label: { show: true, position: "bottom" as const, distance: 0, color: tok.textMuted, fontSize: FONT.xs2,
+                   formatter: (x: { dataIndex: number }) => klammern[x.dataIndex]?.label ?? "" },
+          data: klammern.map((k) => [(k.von + k.bis) / 2, 0.75]) },
       ],
     };
-  }, [curves, fenster, zeitpunkte, punktDatum, tok]);
+  }, [curves, fenster, zeitpunkte, klammern, punktDatum, tok]);
 
   const klickBereit = useNearestPointClick(zeitpunkte.map((z) => z.t),
     (i) => { const z = zeitpunkte[i]; if (z) zeige(z.sample); });
@@ -380,7 +418,8 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
             {curves.length > 0 && (
               <>
                 <div className="flex flex-wrap items-center gap-2" data-testid="compare-controls">
-                  <Chooser label="period" summary={zeitraum === "total" ? "total" : zeitraum}
+                  <Chooser label="period"
+                    summary={zeitraum === "total" ? "total" : zeitraum === "custom" ? "from … to" : zeitraum}
                     closeOnPick testid="compare-period">
                     <ChooserRow radio checked={zeitraum === "total"} testid="compare-period-total"
                       onToggle={() => setZeitraum("total")} label="total"
@@ -390,7 +429,19 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
                         testid={`compare-period-${j}`} onToggle={() => setZeitraum(j)}
                         label={j} hint="the samples of this calendar year" />
                     ))}
+                    <ChooserRow radio checked={zeitraum === "custom"} testid="compare-period-custom"
+                      onToggle={() => setZeitraum("custom")} label="from … to"
+                      hint="from one time point to another" />
                   </Chooser>
+                  {zeitraum === "custom" && ([["from", von ?? datiert[0]?.sample, setVon],
+                      ["to", bis ?? datiert[datiert.length - 1]?.sample, setBis]] as
+                      [string, string | undefined, (v: string) => void][]).map(([name, wert, setze]) => (
+                    <select key={name} data-testid={`compare-period-${name}`} aria-label={name}
+                      value={wert ?? ""} onChange={(e) => setze(e.target.value)}
+                      className="px-2 py-1 rounded bg-control border border-line-strong text-fg tabular-nums">
+                      {datiert.map((d) => <option key={d.sample} value={d.sample}>{d.date}</option>)}
+                    </select>
+                  ))}
                 </div>
 
                 <div data-testid="compare-chart" data-period={zeitraum}>
