@@ -199,7 +199,7 @@ Windows, start Docker Desktop first). Instead of `start`, the same script also t
 <http://localhost:8080> then shows no data. The import uses the ports 8000 and 5173; to change
 them, set `MANTA_BACKEND_PORT` and `MANTA_FRONTEND_PORT`.
 
-### Optional: raw reads, organism names, chat assistant
+### Optional: raw reads, taxonomy for raw reads, chat assistant
 
 **Raw sequencing reads (FASTQ).** To import raw reads, install DADA2:
 
@@ -213,9 +213,14 @@ password before installing R. On Ubuntu it takes 10 to 30 minutes. With `--check
 what is missing. The versions are fixed on purpose, because other versions can turn the same
 reads into different ASVs.
 
-**Organism names.** Download a [PR2 file](https://github.com/pr2database/pr2database/releases)
-in DADA2 format, set `MANTA_PR2=<path to the file>` in `apps/manta_web/backend/.env` and run
-`bash apps/manta_web/dev.sh restart`. Without it, ASVs from raw reads stay `unassigned`.
+**Taxonomy for raw reads.** PR2 is a reference database of known DNA sequences. When MANTA
+runs DADA2 on raw reads, DADA2 compares each ASV with PR2 and assigns it a taxon name (from
+kingdom down to species, as far as the match allows). You only need it for raw reads; if you
+import DADA2 results, your taxonomy table already has the names. Download the PR2 file in DADA2
+format from the [PR2 releases](https://github.com/pr2database/pr2database/releases), set
+`MANTA_PR2=<path to the file>` in `apps/manta_web/backend/.env` and run
+`bash apps/manta_web/dev.sh restart`. Without it, the import still works, but ASVs from raw
+reads stay `unassigned`.
 
 **Chat assistant.** Switch it on with:
 
