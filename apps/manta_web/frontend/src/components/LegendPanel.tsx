@@ -1,7 +1,6 @@
 import type { Criterion2Summary, Thresholds } from "../api";
 import { useModules } from "../modules";
 import { useState } from "react";
-import { SectionHeading } from "./ui";
 import { PanelHeader } from "./PanelFrame";
 import { Criterion2Details } from "./Criterion2";
 
@@ -90,7 +89,7 @@ export default function LegendPanel({ thr, c2, keyLabel, labelMax,
   });
   const mini = (
     <svg viewBox="0 0 400 180" className="w-full rounded-md border border-line bg-raised" data-testid="legend-mini-network"
-         role="img" aria-label="example network; click a point or a link">
+         role="img" aria-label="example network; click a point or a link for its properties">
       <rect width={400} height={180} fill="transparent" onClick={() => setSel(null)} />
       {Object.keys(LINKS).map(drawLink)}
       {(Object.keys(P) as K[]).map((k) => part({ node: k }, <>
@@ -188,13 +187,6 @@ export default function LegendPanel({ thr, c2, keyLabel, labelMax,
       </>
     );
   };
-  const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
-    <div>
-      <SectionHeading className="mb-1">{title}</SectionHeading>
-      {children}
-    </div>
-  );
-
   return (
     <div data-testid="legend-panel">
       <PanelHeader title="Legend" onClose={onClose} closeTestid="legend-panel-close" />
@@ -202,34 +194,12 @@ export default function LegendPanel({ thr, c2, keyLabel, labelMax,
       <div className="p-4 space-y-4 text-xs">
         <div className="space-y-2">
           {mini}
-          <div className="rounded-md border border-line bg-raised px-2 py-2" data-testid="legend-definition">
-            {sel == null ? <span className="text-fg-muted">Click a point or a link.</span>
-              : "node" in sel ? nodeCard(sel.node) : linkCard(sel.link)}
-          </div>
-        </div>
-
-        <Section title="Thresholds of this run">
-          <p className="text-fg tabular-nums" data-testid="legend-thresholds-line">
-            {t?.recorded
-              ? `r ≥ ${t.con_tr} · p < ${t.con_alpha} · ${t.num_permutations} permutations`
-              : "the thresholds of this run are not recorded — the values shown elsewhere are OTTER's defaults"}
-          </p>
-          {t?.recorded && (
-            <p className="text-fg-muted leading-snug" data-testid="legend-ccm-threshold-note">
-              CCM threshold {t.ccmn_tr}: recorded in the run manifest only — OTTER does not
-              apply it; the directions are selected by the permutation test alone.
-            </p>
+          {sel && (
+            <div className="rounded-md border border-line bg-raised px-2 py-2" data-testid="legend-definition">
+              {"node" in sel ? nodeCard(sel.node) : linkCard(sel.link)}
+            </div>
           )}
-        </Section>
-
-        <Section title="Not encoded">
-          <p className="text-fg-muted leading-snug" data-testid="legend-means-nothing">
-            Position, circle shape, arrow-head size and list order carry no meaning.
-          </p>
-          <p className="text-fg-muted leading-snug" data-testid="legend-never-meant">
-            A link is co-occurrence, not an interaction; an arrow is predictive value, not a cause.
-          </p>
-        </Section>
+        </div>
       </div>
     </div>
   );
