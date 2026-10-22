@@ -18,11 +18,12 @@ import { useNearestPointClick } from "../chartClick";
 const MAX_CURVES = 6;
 const DOTS = "time points";
 
-type Kind = "asv" | "cluster";
-export type InspectMark = { kind: Kind; id: string };
+type Kind = "asv" | "cluster" | "env";
+export type InspectMark = { kind: "asv" | "cluster"; id: string };
 type Punkt = { t: number; date: string; value: number | null };
 type Curve = {
   key: string; kind: Kind; id: string; label: string; sub: string | null;
+  unit: string | null;
   points: Punkt[];
 };
 type Tab = "time" | "point";
@@ -92,6 +93,12 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
     const q = search.trim().toLowerCase();
     if (!q) return [] as Kandidat[];
     const treffer: Kandidat[] = [];
+    for (const v of env?.variables ?? []) {
+      if (v.label.toLowerCase().includes(q) || v.key.toLowerCase().includes(q)) {
+        treffer.push({ key: `env:${v.key}`, kind: "env", id: v.key, label: v.label,
+                       sub: v.unit });
+      }
+    }
     for (const m of modules) {
       const name = m.display || `module ${m.louvain_label}`;
       if (name.toLowerCase().includes(q) || String(m.louvain_label) === q
@@ -107,7 +114,7 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
                      outside: a.cluster == null });
     }
     return treffer.filter((t) => !chosen.has(t.key)).slice(0, 8);
-  }, [ganz.result, modules, search, chosen]);
+  }, [ganz.result, env, modules, search, chosen]);
 
   const add = (kind: Kind, id: string) => {
     const key = `${kind}:${id}`;
@@ -118,16 +125,20 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
 
     if (kind === "asv") {
       getAsv(datasetId, id).then((d) => anfuegen({
-        key, kind, id, label: id, sub: d.lineage?.genus ?? null,
+        key, kind, id, label: id, sub: d.lineage?.genus ?? null, unit: null,
         points: ausPunkten(d.frequency.points.map((p) => ({ date: p.date, value: p.share }))),
       })).catch((e) => setErr(e));
     } else if (kind === "cluster") {
       getCluster(datasetId, Number(id)).then((d) => anfuegen({
         key, kind, id, label: modules.find((m) => String(m.louvain_label) === id)?.display
                               ?? `module ${id}`,
-        sub: "collective curve",
+        sub: "collective curve", unit: null,
         points: ausPunkten(d.frequency.points.map((p) => ({ date: p.date, value: p.share }))),
       })).catch((e) => setErr(e));
+    } else {
+      const v = env?.variables.find((x) => x.key === id);
+      if (!v) return;
+      anfuegen({ key, kind, id, label: v.label, sub: v.unit, unit: v.unit ?? "", points: ausPunkten(v.points) });
     }
   };
 
@@ -175,48 +186,63 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
 
   const option = useMemo(() => {
     const drin = curves.map((c) => c.points.filter((p) => p.t >= fenster[0] && p.t <= fenster[1]));
-    const werte = drin.flat().map((p) => p.value).filter((v): v is number => v != null);
-    const max = werte.length ? Math.max(...werte) : 0;
+    const anteile = drin.filter((_, i) => curves[i].unit == null).flat()
+      .map((p) => p.value).filter((v): v is number => v != null);
+    const max = anteile.length ? Math.max(...anteile) : 0;
+    const einheiten = [...new Set(curves.filter((c) => c.unit != null).map((c) => c.unit!))];
     const punktT = punktDatum ? Date.parse(punktDatum) : NaN;
+    const datum = (t: number) => new Date(t).toISOString().slice(0, 10);
+    const achse = { color: tok.textMuted, fontSize: FONT.xs2 };
     return {
       backgroundColor: "transparent",
-      grid: { left: 56, right: 14, top: 14, bottom: 30 },
+      grid: { left: 56, right: 14 + 52 * einheiten.length, top: 22, bottom: 30 },
       tooltip: {
         ...chartTooltip(tok),
-        trigger: "axis" as const,
-        formatter: (ps: { seriesName: string; marker: string; data: [number, number | null] }[]) => {
-          const linien = ps.filter((x) => x.seriesName !== DOTS);
-          const t = (linien[0] ?? ps[0])?.data[0];
-          if (t == null) return "";
-          const zeilen = linien.filter((x) => x.data[1] != null)
-            .map((x) => `${x.marker}${esc(x.seriesName)}: ${prozent(x.data[1]!, x.data[1]!)}`);
-          return `<b>${esc(new Date(t).toISOString().slice(0, 10))}</b>`
-            + (zeilen.length ? `<br/>${zeilen.join("<br/>")}` : "");
+        trigger: "item" as const,
+        formatter: (p: { seriesIndex: number; marker: string; data: [number, number | null] }) => {
+          const c = curves[p.seriesIndex];
+          if (!c || p.data[1] == null) return "";
+          const v = c.unit == null ? prozent(p.data[1], p.data[1])
+            : `${Number(p.data[1].toFixed(3))}${c.unit ? ` ${c.unit}` : ""}`;
+          return `<b>${esc(datum(p.data[0]))}</b><br/>${p.marker}${esc(c.label)}: ${esc(v)}`;
         },
       },
-      xAxis: { type: "time" as const, min: fenster[0], max: fenster[1],
-               axisLabel: { color: tok.textMuted, fontSize: FONT.xs2 } },
-      yAxis: {
-        type: "value" as const, min: 0, max: "dataMax",
-        axisLabel: { color: tok.textMuted, fontSize: FONT.xs2, formatter: (v: number) => prozent(v, max) },
-        splitLine: { lineStyle: { color: tok.chartGrid } },
-      },
+      xAxis: { type: "time" as const, min: fenster[0], max: fenster[1], axisLabel: achse,
+               axisPointer: { show: true, snap: true, type: "line" as const,
+                              lineStyle: { color: tok.textMuted, type: "dashed" as const },
+                              label: { show: true, formatter: (x: { value: number }) => datum(x.value),
+                                       backgroundColor: tok.overlay, color: tok.text,
+                                       borderColor: tok.border, borderWidth: 1 } } },
+      yAxis: [
+        { type: "value" as const, min: 0, max: "dataMax", show: anteile.length > 0,
+          axisLabel: { ...achse, formatter: (v: number) => prozent(v, max) },
+          splitLine: { lineStyle: { color: tok.chartGrid } } },
+        ...einheiten.map((u, k) => ({
+          type: "value" as const, position: "right" as const, offset: 52 * k, scale: true,
+          min: "dataMin", max: "dataMax", name: u, nameTextStyle: achse,
+          axisLine: { show: true, lineStyle: { color: tok.chartAxis } },
+          axisLabel: { ...achse, formatter: (v: number) => String(Number(v.toFixed(2))) },
+          splitLine: { show: false },
+        })),
+      ],
       series: [
         ...curves.map((c, i) => {
           const farbe = seriesColour(i, tok.light);
           return {
-            name: c.label, type: "line" as const, showSymbol: true, symbolSize: 4,
+            name: c.label, type: "line" as const, showSymbol: true, symbolSize: 5,
+            yAxisIndex: c.unit == null ? 0 : 1 + einheiten.indexOf(c.unit),
             data: drin[i].map((p) => [p.t, p.value]),
-            lineStyle: { color: farbe, width: 1.8 }, itemStyle: { color: farbe },
+            lineStyle: { color: farbe, width: 1.8, type: c.kind === "env" ? "dashed" as const : "solid" as const },
+            itemStyle: { color: farbe },
             ...(i === 0 && Number.isFinite(punktT) ? {
               markLine: { symbol: "none", silent: true, label: { show: false },
-                          lineStyle: { color: tok.textMuted, type: "dashed" as const },
+                          lineStyle: { color: tok.textMuted, type: "dotted" as const },
                           data: [{ xAxis: punktT }] },
             } : {}),
           };
         }),
         { name: DOTS, type: "scatter" as const, data: zeitpunkte.map((z) => [z.t, 0]),
-          symbolSize: 4, itemStyle: { color: tok.textMuted }, silent: true,
+          yAxisIndex: 0, symbolSize: 4, itemStyle: { color: tok.textMuted }, silent: true,
           tooltip: { show: false }, clip: false },
       ],
     };
@@ -230,8 +256,9 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
       <PanelHeader title="Inspect" onClose={onClose} closeTestid="compare-close">
           <InfoTip title="What Inspect shows">
             <p><em>Over time</em> lays the measured series of ASVs and modules over each other,
-            as share of all reads of a sample. <em>Time point</em> shows one sample: which modules
+            as share of all reads of a sample, and measured environmental variables. <em>Time point</em> shows one sample: which modules
             and ASVs made up how much of it, and the environmental values measured with it.
+            Environmental variables get their own axis on the right, in their unit.
             Click a point on a curve to open its time point.</p>
           </InfoTip>
       </PanelHeader>
@@ -262,7 +289,7 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder={curves.length >= MAX_CURVES
                   ? `at most ${MAX_CURVES} curves`
-                  : "add an ASV or a module …"}
+                  : "add an ASV, a module or an environmental variable …"}
                 disabled={curves.length >= MAX_CURVES}
                 className="w-full px-2 py-1 rounded bg-control border border-line-strong text-fg" />
               {candidates.length > 0 && (
@@ -273,8 +300,9 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
                         onClick={() => add(t.kind, t.id)}
                         className="w-full text-left px-2 py-1 hover:bg-control flex items-baseline gap-1">
                         <span className={`text-2xs uppercase tracking-wide ${
-                          t.kind === "cluster" ? "text-accent" : "text-fg-muted"}`}>
-                          {t.kind === "cluster" ? "module" : "asv"}
+                          t.kind === "env" ? "text-ok"
+                          : t.kind === "cluster" ? "text-accent" : "text-fg-muted"}`}>
+                          {t.kind === "env" ? "env" : t.kind === "cluster" ? "module" : "asv"}
                         </span>
                         <span className={t.kind === "asv" ? "font-mono text-accent" : "text-fg"}>
                           {t.label}
@@ -302,10 +330,11 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
               ) : null)}
             </div>
 
-            <div className="grid grid-cols-2 gap-1" data-testid="compare-pickers">
+            <div className="grid grid-cols-3 gap-1" data-testid="compare-pickers">
               {([
                 ["cluster", "module", modules.map((m) => [String(m.louvain_label),
                   m.display || `module ${m.louvain_label}`])],
+                ["env", "environment", (env?.variables ?? []).map((v) => [v.key, v.label])],
                 ["asv", "ASV", asvListe.map((a) => [a.id,
                   a.label !== "unassigned" ? `${a.id} · ${a.label}` : a.id])],
               ] as [Kind, string, [string, string][]][]).map(([kind, name, eintraege]) => (
@@ -329,7 +358,7 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
                     className="inline-flex items-center gap-1 px-2 py-1 rounded border border-line">
                     <svg width="14" height="6" className="shrink-0">
                       <line x1="0" y1="3" x2="14" y2="3" stroke={seriesColour(i, tok.light)}
-                        strokeWidth="1.5" />
+                        strokeWidth="1.5" strokeDasharray={s.kind === "env" ? "3 2" : undefined} />
                     </svg>
                     {s.kind === "asv" ? (
                       <button onClick={() => onOpenAsv(s.id)}

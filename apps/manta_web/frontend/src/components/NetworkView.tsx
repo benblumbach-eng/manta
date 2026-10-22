@@ -33,7 +33,7 @@ import { chainedCounts, clearKind, computeVisible, decodeFilters, emptyFilters, 
 const COLLIDE_MARGIN = 1.5;
 const COLLIDE_ITERATIONS = 80;
 const DIM_NODE = 0.2;
-const LINK_LENGTH_DEFAULT = 29;
+const LINK_LENGTH_DEFAULT = 52;
 const RING_W = 2;
 const RING_GLOW = 14;
 const DIM_EDGE = 0.15;
@@ -587,10 +587,11 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         type: "graph",
         layout: frozen ? "none" : "force",
         roam: true,
+        nodeScaleRatio: 0,
         draggable: true,
         ...(roam.current ? { zoom: roam.current.zoom, center: roam.current.center }
                     : {}),
-        force: { repulsion: 2600, edgeLength: linkLen * 9, gravity: 0.06, layoutAnimation: false },
+        force: { repulsion: 2600, edgeLength: Math.round(10 * 1.065 ** linkLen), gravity: 0.06, layoutAnimation: false },
         data: drawNodes.map((n) => {
           const xy: [number, number] = frozen?.get(n.id) ?? seedXY(n.id);
           const glows = keyIds.has(n.id);
