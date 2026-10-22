@@ -360,7 +360,7 @@ export default function App() {
           </ErrorBoundary></PanelFrame>
         ))}
         {selected && finde("compare") && (
-          <PanelFrame id="compare" title="Comparison" onClose={() => schliesse("compare")} defaultWidth={PANEL_WIDTH.compare}><ErrorBoundary label="the seasonal comparison">
+          <PanelFrame id="compare" title="Inspect" onClose={() => schliesse("compare")} defaultWidth={PANEL_WIDTH.compare}><ErrorBoundary label="the seasonal comparison">
             <ComparePanel datasetId={selected.dataset_id} initialAsvId={finde("compare")!.seed}
               onClose={() => schliesse("compare")} onOpenAsv={openAsv} />
           </ErrorBoundary></PanelFrame>

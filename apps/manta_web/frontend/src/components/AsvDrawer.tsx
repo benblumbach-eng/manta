@@ -201,7 +201,7 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
               )}
               {onCompare && (
                 <Button data-testid="asv-compare" onClick={() => onCompare(asvId)} className="ml-auto">
-                  Compare ↗
+                  Inspect ↗
                 </Button>
               )}
             </h3>

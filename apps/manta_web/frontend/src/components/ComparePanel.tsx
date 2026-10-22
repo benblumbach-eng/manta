@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getAsv, getCluster, getEnvironment, getModules,
-         type Environment, type ModuleLabel } from "../api";
+import { getAsv, getCluster, getEnvironment, getModules, getSamples,
+         type Environment, type ModuleLabel, type SampleList } from "../api";
 import { Chooser, ChooserRow, Segmented } from "./controls";
 import InfoTip from "./InfoTip";
 import { PanelHeader } from "./PanelFrame";
 import ProvenanceFooter from "./ProvenanceFooter";
 import ErrorNotice from "./ErrorNotice";
+import InspectTimePoint from "./InspectTimePoint";
 import { useDatasetSearch } from "../datasetSearch";
 import { useTokens } from "../design/tokens";
 import { seriesColour } from "../design/dataColours";
@@ -25,6 +26,7 @@ type Curve = {
   points: Punkt[];
 };
 type Mode = "absolute" | "peak" | "range";
+type Tab = "time" | "point";
 
 const ausPunkten = (rohe: { date: string | null; value: number | null }[]): Punkt[] =>
   rohe
@@ -46,12 +48,21 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
   const [err, setErr] = useState<unknown>(null);
   const [mode, setMode] = useState<Mode>("absolute");
   const [zeitraum, setZeitraum] = useState<string>("total");
+  const [tab, setTab] = useState<Tab>("time");
+  const [samples, setSamples] = useState<SampleList["samples"]>([]);
+  const [punkt, setPunkt] = useState<string | null>(null);
 
   useEffect(() => {
-    setCurves([]); setErr(null); setEnv(null); setModules([]);
+    setCurves([]); setErr(null); setEnv(null); setModules([]); setSamples([]); setPunkt(null);
     getEnvironment(datasetId).then(setEnv).catch(() => setEnv(null));
     getModules(datasetId).then((m) => setModules(m.modules)).catch(() => setModules([]));
+    getSamples(datasetId).then((r) => {
+      setSamples(r.samples);
+      setPunkt((p) => p ?? r.samples[0]?.sample ?? null);
+    }).catch(() => setSamples([]));
   }, [datasetId]);
+  const zeige = (sample: string) => { setPunkt(sample); setTab("point"); };
+  const punktDatum = samples.find((s) => s.sample === punkt)?.date ?? null;
 
   const timeAxisIsDates = env ? env.time_axis === "dates" : true;
 
@@ -153,7 +164,16 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
   }, [erlaubt.absolute, erlaubt.peak, mode]);
 
   const tokLight = useTokens().light;
-  const W = 460, H = 222, PAD_L = 52, PAD_R = 8, PAD_T = 10, PAD_B = 26;
+  const [breite, setBreite] = useState(460);
+  const chartRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = chartRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setBreite(Math.max(320, Math.round(el.clientWidth))));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [tab, curves.length > 0]);
+  const W = breite, H = 222, PAD_L = 52, PAD_R = 8, PAD_T = 10, PAD_B = 26;
   const plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
 
   const fenster = useMemo(() => {
@@ -236,10 +256,15 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
     range: "own range",
   };
 
+  const sampleAm = (date: string) => samples.find((s) => s.date === date)?.sample;
+
   return (
     <div data-testid="compare-panel">
-      <PanelHeader title="Comparison" onClose={onClose} closeTestid="compare-close">
-          <InfoTip title="What is being compared">
+      <PanelHeader title="Inspect" onClose={onClose} closeTestid="compare-close">
+          <InfoTip title="What Inspect shows">
+            <p><em>Over time</em> lays measured series over each other. <em>Time point</em> shows
+            one sample: which modules and ASVs made up how much of it, and the environmental
+            values measured with it. Click a point on a curve to open its time point.</p>
             <p>Each line is the <strong>measured series</strong> of one thing — an ASV, a whole
             module, or a measured environmental variable. The same points its own page shows,
             each on its real sampling date. Nothing is averaged and nothing new is computed
@@ -258,6 +283,14 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
       </PanelHeader>
 
       <div className="p-4 text-xs text-fg space-y-3">
+        <Segmented full value={tab} onChange={setTab} testid="inspect-tabs"
+          options={[{ value: "time", label: "Over time", testid: "inspect-tab-time" },
+                    { value: "point", label: "Time point", testid: "inspect-tab-point" }]} />
+
+        {tab === "point" ? (
+          <InspectTimePoint datasetId={datasetId} samples={samples} sample={punkt}
+            onSample={setPunkt} env={env} onOpenAsv={onOpenAsv} />
+        ) : <>
         {err != null && <ErrorNotice error={err} inline what="Could not add this curve." />}
 
         {!timeAxisIsDates ? (
@@ -365,7 +398,8 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
                     }))} />
                 </div>
 
-                <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: 760 }}
+                <div ref={chartRef}>
+                <svg viewBox={`0 0 ${W} ${H}`} width="100%"
                   data-testid="compare-chart" data-mode={mode} data-period={zeitraum} role="img"
                   aria-label="the measured curves of the selected ASVs, modules and variables">
                   <line x1={PAD_L} y1={PAD_T} x2={PAD_L} y2={PAD_T + plotH} stroke="var(--chart-axis)" />
@@ -386,20 +420,29 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
                       </text>
                     </g>
                   ))}
+                  {punktDatum && Date.parse(punktDatum) >= fenster[0] && Date.parse(punktDatum) <= fenster[1] && (
+                    <line data-testid="compare-timepoint" x1={X(Date.parse(punktDatum))} y1={PAD_T}
+                      x2={X(Date.parse(punktDatum))} y2={PAD_T + plotH}
+                      stroke="var(--text-muted)" strokeDasharray="2 3" />
+                  )}
                   {series.map((s) => (
                     <g key={s.key}>
                       <path d={path(s.points)} fill="none" stroke={s.color} strokeWidth="1.5"
                         strokeDasharray={s.kind === "env" ? "4 3" : undefined} />
                       {s.points.map((p) => p.shown != null && p.value != null && (
-                        <circle key={p.date} cx={X(p.t)} cy={Y(p.shown)} r="1.8" fill={s.color}>
+                        <circle key={p.date} cx={X(p.t)} cy={Y(p.shown)} r="2.4" fill={s.color}
+                          data-testid="compare-point" className="cursor-pointer"
+                          onClick={() => { const id = sampleAm(p.date); if (id) zeige(id); }}>
                           <title>{`${s.label} · ${p.date}: ${wert(s, p.value)}`
                             + (mode === "absolute" ? "" : ` (${(100 * p.shown).toFixed(0)} % of `
-                              + `${mode === "peak" ? "its peak" : "its own range"})`)}</title>
+                              + `${mode === "peak" ? "its peak" : "its own range"})`)
+                            + " · click to inspect this time point"}</title>
                         </circle>
                       ))}
                     </g>
                   ))}
                 </svg>
+                </div>
 
                 {(["absolute", "peak"] as Mode[]).some((m) => erlaubt[m]) && (
                   <p className="text-2xs text-fg-muted" data-testid="compare-locked">
@@ -418,6 +461,7 @@ export default function ComparePanel({ datasetId, initialAsvId, onClose, onOpenA
             )}
           </>
         )}
+        </>}
         <ProvenanceFooter datasetId={datasetId} />
       </div>
     </div>
