@@ -1182,17 +1182,17 @@ export const recompute = (ds: string, t: ThresholdInput) =>
   });
 
 export type NoteKind = "dataset" | "asv" | "cluster" | "sample" | "env";
-export type Note = { id: string; kind: NoteKind; key: string; text: string; at: string };
+export type NoteTarget = { kind: NoteKind; key: string };
+export type Note = { id: string; targets: NoteTarget[]; text: string; at: string };
 export const getNotes = (ds: string) =>
   F(`${BASE}/datasets/${ds}/notes`).then(okJson<{ notes: Note[]; note: string | null }>);
-const noteBody = (n: { kind: NoteKind; key: string; text: string }) => ({
+type NoteBody = { targets: NoteTarget[]; text: string };
+const noteBody = (n: NoteBody) => ({
   headers: { "Content-Type": "application/json" }, body: JSON.stringify(n) });
-export const addNote = (ds: string, n: { kind: NoteKind; key: string; text: string }) =>
+export const addNote = (ds: string, n: NoteBody) =>
   F(`${BASE}/datasets/${ds}/notes`, { method: "POST", ...noteBody(n) }).then(okJson<Note>);
-export const editNote = (ds: string, id: string, n: { kind: NoteKind; key: string; text: string },
-                         opts?: { keepalive?: boolean }) =>
-  F(`${BASE}/datasets/${ds}/notes/${id}`, { method: "PUT", ...noteBody(n), keepalive: opts?.keepalive })
-    .then(okJson<Note>);
+export const editNote = (ds: string, id: string, n: NoteBody) =>
+  F(`${BASE}/datasets/${ds}/notes/${id}`, { method: "PUT", ...noteBody(n) }).then(okJson<Note>);
 export const deleteNote = (ds: string, id: string) =>
   F(`${BASE}/datasets/${ds}/notes/${id}`, { method: "DELETE" }).then(okJson<{ deleted: string }>);
 
