@@ -24,7 +24,7 @@ See which marine organisms occur together, and when in the year, in your browser
 
 <br>
 
-<img src="docs/images/network.png" alt="A dataset's network: modules in color, directed links, possible keystone ASVs marked" width="100%">
+<img src="docs/images/network.png" alt="A dataset's network: ASVs colored by module, joined by links" width="100%">
 
 </div>
 
