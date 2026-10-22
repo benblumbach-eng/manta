@@ -69,6 +69,15 @@ const TOOL_GROUPS: { title: string; names: string[] }[] = [
   { title: "Advanced", names: ["get_schema", "run_validated_cypher"] },
 ];
 
+const MCP_SOURCE = "https://github.com/benblumbach-eng/manta/tree/main/apps/manta_mcp";
+const MCP_START = "https://github.com/benblumbach-eng/manta/blob/main/apps/manta_mcp/start_mcp.sh";
+const EXTERNAL_SOURCES: { name: string; purpose: string; href: string; link: string }[] = [
+  { name: "WoRMS",
+    purpose: "Per-taxon attributes (e.g. functional group) from the World Register of Marine "
+           + "Species. Shown as general knowledge, never as a module's function.",
+    href: "https://www.marinespecies.org/rest/", link: "marinespecies.org/rest" },
+];
+
 type Param = ToolHelp["params"][number];
 type Sugg = { value: string; label?: string };
 type Ctx = {
@@ -251,7 +260,7 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
     try { return localStorage.getItem(MODEL_KEY) ?? ""; } catch { return ""; }
   });
   const endRef = useRef<HTMLDivElement>(null);
-  const [view, setView] = useState<"chat" | "tools" | "ontology" | "history">("chat");
+  const [view, setView] = useState<"chat" | "tools" | "ontology" | "mcp" | "history">("chat");
   const [concepts, setConcepts] = useState<Concepts | null>(null);
   const [conceptsError, setConceptsError] = useState<string | null>(null);
   const [conceptFilter, setConceptFilter] = useState("");
@@ -585,6 +594,15 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
     return groups.filter((g) => g.tools.length > 0);
   }, [tools, toolFilter]);
 
+  const toolCounts = useMemo(() => {
+    if (!tools) return [];
+    const known = new Set(TOOL_GROUPS.flatMap((g) => g.names));
+    const out = TOOL_GROUPS.map((g) => ({
+      title: g.title, n: tools.filter((t) => g.names.includes(t.name)).length }));
+    out.push({ title: "Other", n: tools.filter((t) => !known.has(t.name)).length });
+    return out.filter((g) => g.n > 0);
+  }, [tools]);
+
   const renderTool = (t: ToolHelp) => {
     const open = openTool === t.name;
     const form = forms[t.name] ?? {};
@@ -788,6 +806,10 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
           onClick={() => setView(view === "ontology" ? "chat" : "ontology")}>
           Ontology{concepts ? ` · ${concepts.n}` : ""}
         </ToggleButton>
+        <ToggleButton data-testid="agent-mcp-toggle" pressed={view === "mcp"}
+          onClick={() => setView(view === "mcp" ? "chat" : "mcp")}>
+          MCP · 1
+        </ToggleButton>
         {signedIn && (
           <ToggleButton data-testid="agent-history-tab" pressed={view === "history"}
             onClick={() => { setReading(null); setView(view === "history" ? "chat" : "history"); }}>
@@ -914,6 +936,77 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
           {concepts && gruppen.length === 0 && (
             <div className="text-xs text-fg-muted">No term matches “{conceptFilter}”.</div>
           )}
+        </div>
+      ) : view === "mcp" ? (
+        <div data-testid="agent-mcp" className="flex-1 min-h-0 overflow-auto px-4 py-3 space-y-4">
+          <div className="flex items-center gap-2">
+            <p className="text-xs text-fg-muted leading-snug flex-1">
+              Every source the assistant can query, what it is for, and where to check it.
+            </p>
+            <button data-testid="agent-mcp-close" onClick={() => setView("chat")}
+              className="text-xs text-fg-muted hover:text-fg shrink-0">← chat</button>
+          </div>
+          <section>
+            <SectionHeading className="mb-2">How an answer is built</SectionHeading>
+            <ol data-testid="mcp-steps" className="list-decimal pl-5 space-y-1 text-xs text-fg-muted leading-snug">
+              <li><span className="text-fg">Question</span> → sorted into a question kind</li>
+              <li><span className="text-fg">Plan</span> → a known kind runs a fixed list of tools;
+                any other question needs a larger model, which picks the tools itself</li>
+              <li><span className="text-fg">Results</span> → each tool result is kept with its
+                query (findings F1, F2 … on a fixed plan)</li>
+              <li><span className="text-fg">Model</span> <code className="text-2xs">{ownActive && own ? own.model : model}</code> →
+                writes the answer from these results</li>
+              <li><span className="text-fg">Check</span> → numbers in the answer are compared with
+                the results</li>
+            </ol>
+          </section>
+          <section>
+            <SectionHeading className="mb-2">Built in · 1</SectionHeading>
+            <div data-testid="mcp-source" data-name="manta" className="rounded border border-line px-3 py-2">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-fg">
+                  manta <span className="ml-1 px-1 rounded border border-ok text-ok text-2xs">local</span>
+                </span>
+                <code className="text-2xs text-fg-muted">{tools ? `${tools.length} tools` : "…"}</code>
+              </div>
+              <div className="text-xs text-fg-muted mt-1 leading-snug">
+                Datasets, ASVs, modules, links and environment from MANTA&rsquo;s Neo4j graph.
+                Statistical tests run in MANTA (SciPy) on the stored series; they do not change
+                OTTER&rsquo;s network.
+              </div>
+              {toolCounts.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {toolCounts.map((g) => (
+                    <span key={g.title} className="px-2 rounded-full border border-line text-2xs text-fg">
+                      {g.title} {g.n}
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="mt-2 flex gap-3 text-2xs">
+                <a href={MCP_SOURCE} target="_blank" rel="noreferrer"
+                   className="text-accent hover:underline">source ↗</a>
+                <a href={MCP_START} target="_blank" rel="noreferrer"
+                   className="text-accent hover:underline">use in other AI apps ↗</a>
+              </div>
+            </div>
+          </section>
+          <section>
+            <SectionHeading className="mb-2">External · {EXTERNAL_SOURCES.length} planned</SectionHeading>
+            <div className="space-y-2">
+              {EXTERNAL_SOURCES.map((x) => (
+                <div key={x.name} data-testid="mcp-source" data-name={x.name}
+                  className="rounded border border-line px-3 py-2">
+                  <span className="text-fg">
+                    {x.name} <span className="ml-1 px-1 rounded border border-warn text-warn text-2xs">planned</span>
+                  </span>
+                  <div className="text-xs text-fg-muted mt-1 leading-snug">{x.purpose}</div>
+                  <a href={x.href} target="_blank" rel="noreferrer"
+                     className="mt-2 inline-block text-2xs text-accent hover:underline">{x.link} ↗</a>
+                </div>
+              ))}
+            </div>
+          </section>
         </div>
       ) : view === "tools" ? (
         <div data-testid="agent-help" className="flex-1 min-h-0 overflow-auto px-4 py-3 space-y-4">
