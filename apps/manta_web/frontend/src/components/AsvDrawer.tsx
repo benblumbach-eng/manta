@@ -1,13 +1,12 @@
 import { Button, StateNotice } from "./ui";
 import { useEffect, useRef, useState } from "react";
-import { getAsv, getTaxon, setAsvNote, setAsvStar,
+import { getAsv, getTaxon, setAsvStar,
          type AsvDetail } from "../api";
 import type { EdgeRef } from "../App";
 import { useModules } from "../modules";
 import FrequencyPanel from "./FrequencyPanel";
-import EnvironmentBars from "./EnvironmentBars";
 import NeighbourNet from "./NeighbourNet";
-import NoteBox from "./NoteBox";
+import { NotesLink } from "./NotesPanel";
 import ErrorNotice from "./ErrorNotice";
 import { findCap } from "./DataAvailability";
 import StarButton from "./StarButton";
@@ -206,29 +205,13 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
             <FrequencyPanel freq={d.frequency} testid="asv-frequency" onPointClick={onInspectAt} />
           </section>
 
-          {findCap(caps, "environment")?.available && (
-          <section data-testid="asv-env-section">
-            <h3 className="text-fg font-medium mb-1">Environment where it was found</h3>
-            {d.environment_profile.items.length === 0 ? (
-              <p className="text-xs text-fg-muted" data-testid="asv-env-missing">
-                No measured conditions for the samples where this ASV was found.
-              </p>
-            ) : (
-              <EnvironmentBars profile={d.environment_profile} />
-            )}
-          </section>
-          )}
-
           <section>
             <h3 className="text-fg font-medium mb-1 flex items-center">Neighbours</h3>
             <NeighbourNet asvId={asvId} cluster={d.cluster} neighbors={d.neighbors}
                           onOpenAsv={onOpenAsv} onOpenEdge={onOpenEdge} />
           </section>
 
-          <NoteBox key={`${datasetId}/${asvId}`} testid="asv-note" value={d.note} savedAt={d.note_at}
-            readOnly={!signedIn} draftKey={`${datasetId}/asv/${asvId}`}
-            onSave={(t, o) => setAsvNote(datasetId, asvId, t, o)
-              .then((r) => setD((cur) => (cur ? { ...cur, note: r.note, note_at: r.note_at } : cur)))} />
+          {signedIn && <NotesLink datasetId={datasetId} kind="asv" id={asvId} n={d.n_notes} />}
 
         </div>
       )}

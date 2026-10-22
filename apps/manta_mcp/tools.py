@@ -378,9 +378,9 @@ def asv_detail(dataset_id: str, asv_id: str) -> dict:
         out["peak_month_note"] = "This dataset has no real time axis — no peak month."
     if out["cluster"] is None:
         out["network_note"] = NOT_IN_NETWORK_NOTE
-    out["funktion"] = ("Not derivable from amplicon data. Ecological function, metabolism, role "
-                       "in the food web and pathogenicity are NOT in these data. If asked, say "
-                       "exactly that — do not infer anything from the taxonomy.")
+    out["funktion"] = ("Not measured in these data. A function well known for this taxon may be "
+                       "named as general knowledge, not a result of this dataset; if the name "
+                       "does not clearly determine it, it is unknown.")
     out["environment_profile"] = semantics.environment_profile(_q, dataset_id, asv_id)
     out["cluster_name"] = ((semantics.module_label(_q, dataset_id, out["cluster"])["name"] or "")
                            if out.get("cluster") is not None else "")

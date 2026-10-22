@@ -16,11 +16,17 @@ RULE_CAVEATS = (
     "is a correlation, not an observed interaction; CCM measures directed predictive skill "
     "WITHOUT a convergence test. Never claim causality and never claim absolute growth.")
 RULE_NOT_IN_DATA = (
-    "Some things are not in these data at all: ecological function, metabolism, role in the "
-    "food web, pathogenicity, and any mechanism. When asked for one, write a plain sentence "
-    "saying it cannot be derived from amplicon data, and stop there — do not answer with a "
-    "single word, and do not infer it from the taxonomy. The same applies when a question is "
-    "phrased as \"causes\", \"drives\" or \"leads to\".")
+    "Ecological function, metabolism, food-web role and pathogenicity are not measured in "
+    "these data. You may name a function that is well known for a taxon (e.g. Syndiniales: "
+    "parasites), but only when its name clearly determines it, and mark it every time as "
+    "\"general knowledge, not a result of this dataset\". Give it per taxon, never as a "
+    "property of the module or the community. If the name does not clearly determine it "
+    "(placeholder, \"uncultured\", a genus whose species differ), say it is unknown. In a "
+    "module: list the assignable taxa with their number of ASVs and say how many members have "
+    "no assignment. Never conclude the module's function from them, and never derive a cause "
+    "or mechanism from a function. When a question touches function, offer the assignment. "
+    "Causes and mechanisms are not in these data either, also when a question is phrased as "
+    "\"causes\", \"drives\" or \"leads to\".")
 RULE_NO_DIVERSITY = (
     "Diversity indices (richness, Shannon, Simpson and the like) are NOT computed by this "
     "platform: the otter framework's chain does not produce them here, and MANTA does not "
@@ -149,7 +155,7 @@ TOOL_SPECS: list[dict] = [
         "description": (
             "Everything about ONE ASV: full taxonomy (kingdom to species), Louvain cluster and "
             "module name, size (reads summed over all samples), and criterion2 — whether it "
-            "meets criterion 2 of Oldenburg et al. 2024 (high closeness within its module; "
+            "meets criterion 2 of Oldenburg et al. 2024 (high closeness in the network of significant CCM links; "
             "one criterion, not a keystone; links between modules: "
             "cluster_bridges). Needs an exact asv_id from find_asv. Raw centrality numbers are "
             "deliberately not returned."
@@ -694,7 +700,7 @@ QUESTIONS: dict[str, tuple[str, str]] = {
     "cluster_network": ("dataset", "Which module predicts which, and how strongly?"),
     "cluster_year_overview": ("dataset", "When in the year is each module active, and does that repeat?"),
     "cluster_interannual_variability": ("dataset", "In which months do the years differ most?"),
-    "asv_detail": ("asv", "What is this ASV — taxonomy, module, size, is it central in its module?"),
+    "asv_detail": ("asv", "What is this ASV — taxonomy, module, size, is it central in the CCM network?"),
     "asv_seasonality": ("asv", "When is this ASV present, and does it come back every year?"),
     "asv_spectrum": ("asv", "Which rhythms does this ASV carry — a year, half a year, longer?"),
     "asv_drivers": ("asv", "Which measured variables does this ASV move with, and with what lag?"),

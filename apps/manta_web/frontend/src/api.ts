@@ -409,22 +409,22 @@ export type Criterion2Texts = {
 };
 
 export type Criterion2Summary = Criterion2Texts & {
-  alpha: number; n_network: number; n_modules: number; n_testable: number; n_pass: number;
-  n_not_testable: number;
-  not_testable: { reason: string; reason_text: string; n_asv: number; n_modules: number;
-                  modules: number[] }[];
+  alpha: number; n_network: number; n_modules: number; n_graph: number; n_testable: number;
+  n_pass: number; n_not_testable: number;
+  mean_closeness: number | null; sd_closeness: number | null;
+  not_testable: { reason: string; reason_text: string; n_asv: number }[];
   ids: string[];
   statement: string;
 };
 
 export type Criterion2Asv = Criterion2Node & Criterion2Texts & {
   verdict: string;
-  module_mean_closeness?: number | null;
+  mean_closeness?: number | null;
 };
 
 export type Criterion2Module = Criterion2Texts & {
   module: number; module_size: number; testable: boolean; reason: string | null;
-  reason_text: string | null; mean_closeness: number | null; sd_closeness: number | null;
+  reason_text: string | null;
   n_pass: number; verdict: string;
   members_meeting: { asv_id: string; closeness: number | null; p: number | null;
                      q: number | null }[];
@@ -437,6 +437,7 @@ export type NetEdge = {
   nmi_forward?: number | null; nmi_backward?: number | null;
   rejected_forward?: boolean; rejected_backward?: boolean; rejected_dirs?: number;
   nmi_rejected_forward?: number | null; nmi_rejected_backward?: number | null;
+  p_forward?: number | null; p_backward?: number | null;
 };
 
 export type Layers = {
@@ -653,8 +654,7 @@ export type AsvDetail = {
   cluster: number;
   color: string;
   centralities: Record<string, number | null>;
-  note: string | null;
-  note_at: string | null;
+  n_notes: number;
   sequence: string | null;
   seq_length: number | null;
   seq_hash: string | null;
@@ -720,7 +720,7 @@ export type ClusterDetail = {
                   other_genus: string | null; other_cluster: number; corr: number }[];
   activity: { axis: string; window: string[]; peak: string | null; n_min: number;
               statement: string | null };
-  note: { n: string | null; t: string | null };
+  n_notes: number;
   criterion2?: Criterion2Module;
   members: { id: string; genus: string | null; family: string | null;
              read_count_total: number | null; n_samples_present: number;
@@ -1025,6 +1025,8 @@ export const renameDataset = (id: string, region: string) =>
   });
 export const getNetwork = (ds: string, edge: "con" | "ccm", marker?: string | null) =>
   get<Network>(`/datasets/${ds}/network?edge=${edge}${marker ? `&marker=${marker}` : ""}`);
+export const getCriterion2 = (ds: string, q: number) =>
+  get<Criterion2Summary>(`/datasets/${ds}/criterion2?q=${q}`);
 export const getAsv = (ds: string, id: string) => get<AsvDetail>(`/datasets/${ds}/asv/${id}`);
 export const getSpectrum = (ds: string, id: string) =>
   get<{ dataset_id: string; asv_id: string; spectrum: Spectrum }>(
@@ -1073,24 +1075,6 @@ export const getCluster = (ds: string, label: number) => get<ClusterDetail>(`/da
 export const getCapabilities = (ds: string) => get<Capabilities>(`/datasets/${ds}/capabilities`);
 export const getEnvironment = (ds: string) => get<Environment>(`/datasets/${ds}/environment`);
 
-export type LightBand = {
-  kind: "polar_night" | "polar_day";
-  start: string; end: string;
-  clipped_start: boolean; clipped_end: boolean;
-};
-export type Light = {
-  available: boolean;
-  absent_reason: string | null;
-  station: { station_id: string; lat: number; lon: number } | null;
-  from: string | null; to: string | null;
-  bands: LightBand[];
-  legend: string; method: string; reference: string; caveat: string;
-  per_sample: { sample: string; date: string; day_length_h: number; polar_night: boolean;
-                polar_day: boolean }[];
-  year: LightYear | null;
-};
-export const getLight = (ds: string) => get<Light>(`/datasets/${ds}/light`);
-
 export type Concept = {
   key: string; label: string; kind: "klasse" | "beziehung" | "kennzahl" | "umweltgroesse";
   definition: string; source: string | null; caveats: string[];
@@ -1132,25 +1116,23 @@ export type ProvenanceChain = {
 export const getProvenanceChain = (ds: string) =>
   get<ProvenanceChain>(`/datasets/${ds}/provenance-chain`);
 
+export type WheelMonth = { month: number; mean: number; n: number };
 export type WheelCluster = {
   louvain_label: number;
   n_members: number;
-  window: string[];
-  window_months: number[];
-  peak: string | null;
-  peak_month: number | null;
-  by_month?: { month: number; mean: number; n: number }[];
-  n_min: number;
-  statement: string | null;
+  share_total: number | null;
+  by_month: WheelMonth[];
 };
+export type WheelAsv = { id: string; share_total: number | null; by_month: WheelMonth[] };
 export type WheelEnvMonth = { month: number; mean: number | null; n: number };
 export type Wheel = {
   dataset_id: string;
   time_axis: "dates" | "ordinal";
   months: string[];
   clusters: WheelCluster[];
+  asvs?: WheelAsv[];
   environment: {
-    variables: { key: string; label: string; unit: string; unit_note: string | null }[];
+    variables: { key: string; label: string; unit: string; unit_note: string | null; mean: number }[];
     monthly: Record<string, WheelEnvMonth[]>;
     units_note: string;
   } | null;
@@ -1160,24 +1142,12 @@ export type Wheel = {
   year?: WheelYear | null;
 };
 export type WheelYear = { year: string; n: number; months_covered: number; note: string | null };
-export type LightYear = {
-  available: boolean; absent_reason?: string; lat: number | null; reference_year?: number;
-  bands: { kind: "polar_night" | "polar_day"; start_doy: number; end_doy: number }[];
-  shortest_day_doy: number | null; sun_return_doy?: number | null; legend?: string;
-  day_length_doy?: number[];
-  solar_marks?: SeasonMark[];
-};
 
-export type SeasonMark = { doy: number; label: string };
-export type Seasons = {
-  dataset_id: string; available: boolean; absent_reason: string | null;
-  astronomical: SeasonMark[]; light: SeasonMark[]; water: SeasonMark[];
-  water_note: string; method: string; caveat: string;
+export const getWheel = (ds: string, year: string | null, asvs: string[]) => {
+  const q = [year ? `year=${encodeURIComponent(year)}` : "",
+             asvs.length ? `asvs=${asvs.map(encodeURIComponent).join(",")}` : ""].filter(Boolean);
+  return get<Wheel>(`/datasets/${ds}/wheel${q.length ? `?${q.join("&")}` : ""}`);
 };
-export const getSeasons = (ds: string) => get<Seasons>(`/datasets/${ds}/seasons`);
-
-export const getWheel = (ds: string, year?: string | null) =>
-  get<Wheel>(`/datasets/${ds}/wheel${year ? `?year=${encodeURIComponent(year)}` : ""}`);
 
 
 export type Params = {
@@ -1214,17 +1184,20 @@ export const recompute = (ds: string, t: ThresholdInput) =>
     return r.json() as Promise<RecomputeAck>;
   });
 
-export const setAsvNote = (ds: string, id: string, note: string, opts?: { keepalive?: boolean }) =>
-  F(`${BASE}/datasets/${ds}/asv/${id}/note`, {
-    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note }),
-    keepalive: opts?.keepalive,
-  }).then(okJson<{ note: string; note_at: string }>);
-export const setClusterNote = (ds: string, label: number, note: string,
-                               opts?: { keepalive?: boolean }) =>
-  F(`${BASE}/datasets/${ds}/cluster/${label}/note`, {
-    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note }),
-    keepalive: opts?.keepalive,
-  }).then(okJson<{ note: string; note_at: string }>);
+export type NoteKind = "dataset" | "asv" | "cluster" | "sample" | "env";
+export type NoteTarget = { kind: NoteKind; key: string };
+export type Note = { id: string; targets: NoteTarget[]; text: string; at: string };
+export const getNotes = (ds: string) =>
+  F(`${BASE}/datasets/${ds}/notes`).then(okJson<{ notes: Note[]; note: string | null }>);
+type NoteBody = { targets: NoteTarget[]; text: string };
+const noteBody = (n: NoteBody) => ({
+  headers: { "Content-Type": "application/json" }, body: JSON.stringify(n) });
+export const addNote = (ds: string, n: NoteBody) =>
+  F(`${BASE}/datasets/${ds}/notes`, { method: "POST", ...noteBody(n) }).then(okJson<Note>);
+export const editNote = (ds: string, id: string, n: NoteBody) =>
+  F(`${BASE}/datasets/${ds}/notes/${id}`, { method: "PUT", ...noteBody(n) }).then(okJson<Note>);
+export const deleteNote = (ds: string, id: string) =>
+  F(`${BASE}/datasets/${ds}/notes/${id}`, { method: "DELETE" }).then(okJson<{ deleted: string }>);
 
 export type FastqPreflight = {
   ok: boolean; rscript: boolean; cutadapt: boolean; dada2: boolean;
@@ -1273,7 +1246,7 @@ export const getClusterAtSample = (ds: string, label: number, sample: string) =>
     .then(okJson<ClusterAtSample>);
 
 export const getAsvList = (ds: string) =>
-  get<{ asvs: { id: string; cluster: number | null; label: string }[] }>(`/datasets/${ds}/asvs`);
+  get<{ asvs: { id: string; cluster: number | null; label: string; share: number }[] }>(`/datasets/${ds}/asvs`);
 export const getSamples = (ds: string) => get<SampleList>(`/datasets/${ds}/samples`);
 export const getSample = (ds: string, sample: string) =>
   get<SampleDetail>(`/datasets/${ds}/sample/${encodeURIComponent(sample)}`);
@@ -1295,7 +1268,7 @@ export const setClusterStar = (ds: string, label: number, starred: boolean) =>
 
 export type SearchHit = {
   id: string; label: string; genus: string | null; cluster: number | null;
-  n_samples_present: number;
+  n_samples_present: number; share: number;
   id_match: boolean; matched_ranks: string[];
 };
 export type SearchTaxon = { rank: string; value: string; n_asv: number; asvs: SearchHit[] };
