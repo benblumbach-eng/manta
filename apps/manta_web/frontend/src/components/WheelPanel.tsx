@@ -7,6 +7,7 @@ import { useModules } from "../modules";
 import ProvenanceFooter from "./ProvenanceFooter";
 import ErrorNotice from "./ErrorNotice";
 import { PanelHeader } from "./PanelFrame";
+import { fmtShare } from "../format";
 import { useTokens } from "../design/tokens";
 import { markerRings } from "../design/dataColours";
 
@@ -62,7 +63,7 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
   const [year, setYear] = useState<string | null>(null);
   const [rings, setRings] = useState<Ring[] | null>(null);
   const [adjust, setAdjust] = useState(false);
-  const [asvListe, setAsvListe] = useState<{ id: string; label: string }[]>([]);
+  const [asvListe, setAsvListe] = useState<{ id: string; label: string; share: number }[]>([]);
   useEffect(() => {
     setYear(null); setRings(null); setAsvListe([]);
     getAsvList(datasetId).then((r) => setAsvListe(r.asvs)).catch(() => setAsvListe([]));
@@ -225,7 +226,7 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
                   modules.label(c.louvain_label)])],
                 ["env", "environment", envVars.map((v) => [v.key, SHORT[v.key] ?? v.label])],
                 ["asv", "ASV", asvListe.map((a) => [a.id,
-                  a.label !== "unassigned" ? `${a.id} · ${a.label}` : a.id])],
+                  `${a.id}${a.label !== "unassigned" ? ` · ${a.label}` : ""} · ${fmtShare(a.share)}`])],
               ] as [Kind, string, [string, string][]][]).map(([kind, name, eintraege]) => (
                 <select key={kind} data-testid={`wheel-pick-${kind}`} value=""
                   aria-label={`add ${name}`}
