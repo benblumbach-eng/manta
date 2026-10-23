@@ -809,7 +809,7 @@ export type AgentStatus = {
 };
 export type AgentContext = {
   dataset_id?: string; asv_id?: string; cluster?: number | null;
-  concept?: string; question_kind?: string;
+  concept?: string; question_kind?: string; question_args?: Record<string, unknown>;
 };
 export type Finding = { id: string; art: "befund" | "vorbehalt"; text: string;
                         werte: number[]; namen: string[] };
@@ -890,6 +890,7 @@ export const askAgent = (question: string, ctx: AgentContext, model?: string,
                            dataset_id: ctx.dataset_id,
                            asv_id: ctx.asv_id, cluster: ctx.cluster ?? null,
                            concept: ctx.concept, question_kind: ctx.question_kind,
+                           question_args: ctx.question_args,
                            history: history?.length ? history : undefined,
                            conversation_id: conversationId ?? undefined }),
   }).then(async (r) => {

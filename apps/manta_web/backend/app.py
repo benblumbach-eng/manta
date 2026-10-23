@@ -1176,6 +1176,7 @@ class AgentAsk(BaseModel):
     concept: str | None = None
     conversation_id: str | None = Field(None, max_length=64)
     question_kind: str | None = Field(None, max_length=64)
+    question_args: dict[str, str | int | list[int]] | None = Field(None, max_length=8)
 
 
 class OwnModel(BaseModel):
@@ -1274,7 +1275,7 @@ def agent_ask(req: AgentAsk, me: auth.User = Depends(auth.user)):
             model=modell,
             request={"model_requested": req.model, "dataset_id": req.dataset_id,
                      "asv_id": req.asv_id, "cluster": req.cluster, "concept": req.concept,
-                     "question_kind": req.question_kind,
+                     "question_kind": req.question_kind, "question_args": req.question_args,
                      "history_turns": len(verlauf or []), "own_key": provider is not None},
             extra_secrets=(provider.api_key if provider is not None else None,))
 
@@ -1282,7 +1283,8 @@ def agent_ask(req: AgentAsk, me: auth.User = Depends(auth.user)):
         antwort = agent.run(req.question.strip(), req.dataset_id, model=req.model,
                             asv_id=req.asv_id, cluster=req.cluster, provider=provider,
                             history=verlauf, concept=req.concept, trace=ereignisse,
-                            question_kind=req.question_kind)
+                            question_kind=req.question_kind,
+                            question_args=req.question_args)
     except agent.AgentError as e:
         kennung = protokolliere("error", fehler=str(e))
         return _agent_failure(e, kennung)
