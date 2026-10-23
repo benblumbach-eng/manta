@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { subject, usePublishView } from "../viewContext";
 import ReactECharts from "echarts-for-react";
 import { getAsv, getAsvList, getCluster, getEnvironment, getModules, getSamples,
          type Environment, type ModuleLabel, type SampleList } from "../api";
@@ -178,6 +179,12 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
   useEffect(() => {
     if (zeitraum !== "total" && zeitraum !== "custom" && !jahre.includes(zeitraum)) setZeitraum("total");
   }, [jahre, zeitraum]);
+
+  usePublishView("compare", {
+    view: "inspect", subjects: curves.map((c) => subject(c.kind, c.id, c.label)),
+    year: zeitraum !== "total" && zeitraum !== "custom" ? Number(zeitraum) : null,
+    years: jahre.map(Number),
+  });
 
   const tok = useTokens();
 

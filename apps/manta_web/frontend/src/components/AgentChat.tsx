@@ -9,7 +9,8 @@ import { askAgent, describeError, errorText, getAgentStatus, getAgentTools, getA
          AgentAskError, getConversation, getConversations, type ConversationSummary,
          type StoredTurn } from "../api";
 import type { AskAssistant } from "./InfoTip";
-import { PanelHeader } from "./PanelFrame";
+import { PanelHeader, usePanelStack } from "./PanelFrame";
+import { NETWORK, suggestionsFor, useViews } from "../viewContext";
 import { useModules } from "../modules";
 import { OWN_MODEL_EVENT, hostOf } from "./OwnModelSettings";
 import { AnswerText, ConversationView, RawJson, TurnProtocol, checkText } from "./Transcript";
@@ -381,7 +382,8 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
   const tooLong = maxQ != null && qLen > maxQ;
 
   async function send(text?: string, tool?: { name: string; args: Record<string, unknown> },
-                      concept?: string, questionKind?: string) {
+                      concept?: string, questionKind?: string,
+                      questionArgs?: Record<string, unknown>) {
     const q = (text ?? input).trim();
     if (!q || busy) return;
     const k = threadKey;
@@ -409,8 +411,10 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
                         .map((e) => ({ name: e.tool, arguments: e.arguments ?? {} })) });
       }
       const verlauf = alle.slice(-8);
-      const res = await askAgent(q, { dataset_id: datasetId, asv_id: asvId, concept,
-                                      question_kind: questionKind },
+      const res = await askAgent(q, { dataset_id: datasetId,
+                                      asv_id: (questionArgs?.asv_id as string | undefined) ?? asvId,
+                                      cluster: questionArgs?.cluster as number | undefined, concept,
+                                      question_kind: questionKind, question_args: questionArgs },
                                  model || undefined,
                                  viaOwn, verlauf, fortsetzen);
       addTurn(k, { role: "agent", text: res.answer, evidence: res.evidence,
@@ -533,29 +537,41 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
     return { main: alle.filter((x) => rang(x.t.needs) === oben),
              more: alle.filter((x) => rang(x.t.needs) !== oben) };
   }, [tools, datasetId, asvId, caps]);
-  type Zeile = { t: ToolHelp; a: Applicability["tools"][string] | undefined };
-  const frageZeile = ({ t, a }: Zeile) => a?.applicable === "no" ? (
-    <div key={t.name} data-testid="agent-question" data-tool={t.name} data-state="no"
+  const panelStapel = usePanelStack();
+  const ansichten = useViews();
+  const ansicht = datasetId
+    ? [...panelStapel].reverse().map((id) => ansichten.get(id)).find(Boolean) ?? ansichten.get(NETWORK)
+    : undefined;
+  const ansichtFragen = useMemo(() => (ansicht ? suggestionsFor(ansicht) : null), [ansicht]);
+  const allgemein = [...entry.main, ...entry.more].filter((x) => x.t.needs !== "asv");
+  const anwendbar = (tool: string) => (caps && caps.ds === datasetId ? caps.app.tools[tool] : undefined);
+  type Zeile = { key: string; text: string; tool: string; a: Applicability["tools"][string] | undefined;
+                 ask: () => void };
+  const frageZeile = ({ key, text, tool, a, ask }: Zeile) => a?.applicable === "no" ? (
+    <div key={key} data-testid="agent-question" data-tool={tool} data-state="no"
       className="text-xs text-fg-muted leading-snug">
-      {t.question}
+      {text}
       <button data-testid="agent-question-why"
-        onClick={() => setWhyOpen(whyOpen === t.name ? null : t.name)}
+        onClick={() => setWhyOpen(whyOpen === key ? null : key)}
         className="ml-2 text-fg-muted hover:text-fg">
-        {whyOpen === t.name ? "not here ▾" : "not here — why?"}
+        {whyOpen === key ? "not here ▾" : "not here — why?"}
       </button>
-      {whyOpen === t.name && (
+      {whyOpen === key && (
         <div data-testid="agent-question-reason" className="mt-1 text-fg-muted">{a.reason}</div>
       )}
     </div>
   ) : (
-    <button key={t.name} data-testid="agent-question" data-tool={t.name}
+    <button key={key} data-testid="agent-question" data-tool={tool}
       data-state={a?.applicable ?? "yes"} disabled={busy}
       title={a?.applicable === "subject" && a.subject_condition ? a.subject_condition : undefined}
-      onClick={() => send(t.question!, undefined, undefined, t.name)}
+      onClick={ask}
       className="text-left text-xs text-fg hover:text-accent hover:underline disabled:opacity-50">
-      {t.question}
+      {text}
     </button>
   );
+  const toolZeile = ({ t, a }: { t: ToolHelp; a: Applicability["tools"][string] | undefined }) =>
+    frageZeile({ key: t.name, text: t.question!, tool: t.name, a,
+                 ask: () => send(t.question!, undefined, undefined, t.name) });
 
   const gruppen = useMemo(() => {
     const alle = concepts?.concepts ?? [];
@@ -1055,7 +1071,8 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
                 </div>
                 <div className="min-w-0">
                   <div className="text-fg font-medium">
-                    {asvId ? `Ask about ${asvId}` : datasetId ? "Ask about this dataset" : "Ask about the datasets"}
+                    {ansichtFragen ? "Ask about this view" : asvId ? `Ask about ${asvId}`
+                      : datasetId ? "Ask about this dataset" : "Ask about the datasets"}
                   </div>
                   <p className="text-xs text-fg-muted mt-1 leading-snug">
                     Pick a question or ask in your own words. Answers come only from audited tools.
@@ -1065,18 +1082,27 @@ export default function AgentChat({ datasets = [], datasetId, asvId, ask, onClos
               <div>
                 <div data-testid="agent-entry-title"
                   className="text-xs font-semibold text-fg-muted mb-1">
-                  {asvId ? `What I can tell you about ${asvId}`
+                  {ansichtFragen ? "What I can tell you about this view"
+                    : asvId ? `What I can tell you about ${asvId}`
                     : datasetId ? "What I can tell you about this dataset" : "Where to start"}
                 </div>
                 <div className="flex flex-col gap-1" data-testid="agent-entry">
-                  {entry.main.map(frageZeile)}
-                  {entry.more.length > 0 && (
+                  {ansichtFragen ? ansichtFragen.map((g, i) => (
+                    <div key={`${i}:${g.title}`} data-testid="agent-entry-group"
+                      className="flex flex-col gap-1">
+                      <div className="text-2xs text-fg-muted mt-1">{g.title}</div>
+                      {g.questions.map((q) => frageZeile({
+                        key: q.text, text: q.text, tool: q.tool, a: anwendbar(q.tool),
+                        ask: () => send(q.text, undefined, undefined, q.tool, q.args) }))}
+                    </div>
+                  )) : entry.main.map(toolZeile)}
+                  {(ansichtFragen ? allgemein : entry.more).length > 0 && (
                     <button data-testid="agent-entry-more" onClick={() => setMoreOpen((v) => !v)}
                       className="text-left text-xs text-fg-muted hover:text-fg mt-1">
-                      {moreOpen ? "▾" : "▸"} {asvId ? "about the dataset, and in general" : "in general"} ({entry.more.length})
+                      {moreOpen ? "▾" : "▸"} {ansichtFragen || asvId ? "about the dataset, and in general" : "in general"} ({(ansichtFragen ? allgemein : entry.more).length})
                     </button>
                   )}
-                  {moreOpen && entry.more.map(frageZeile)}
+                  {moreOpen && (ansichtFragen ? allgemein : entry.more).map(toolZeile)}
                   <button onClick={() => setView("tools")}
                     className="text-left text-xs text-accent hover:underline mt-1">
                     all tools →
