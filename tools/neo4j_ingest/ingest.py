@@ -103,6 +103,15 @@ def _i(v):
     return None if f is None else int(round(f))
 
 
+TAXONOMY_RANKS = ("kingdom", "phylum", "class", "order", "family", "genus", "species")
+# OTTER fills every empty taxonomy cell of its network table with this text
+# (lutra/networkz.py create_meta_data); it is not a taxon.
+OTTER_TAXA_FILL = "Environment_Condition"
+Q_CLEAR_OTTER_FILL = ("MATCH (a:ASV {dataset_id:$d}) SET "
+                      + ", ".join(f"a.`{r}` = CASE WHEN a.`{r}` = $fill THEN null ELSE a.`{r}` END"
+                                  for r in TAXONOMY_RANKS))
+
+
 def read_enriched():
     rows = []
     with open(_table("enriched", ENRICHED), newline="", encoding="utf-8") as fh:
@@ -126,6 +135,9 @@ def read_enriched():
                 "color_label": r.get("ColorLabel"), "louvain_label_color": r.get("louvain_label_color"),
                 "max_abundance_month_color": r.get("max_abundance_month_color"), "shape": r.get("Shape"),
             }
+            for rank in TAXONOMY_RANKS:
+                if props[rank] == OTTER_TAXA_FILL:
+                    props[rank] = None
             rows.append({"id": asv_id, "props": {k: v for k, v in props.items() if v is not None}})
     return rows
 
@@ -529,6 +541,7 @@ def ingest_network(driver, dataset_id, run_id, marker=None, region=None, params=
                 props[prop] = int(val)
         s.run(Q_RUN, d=dataset_id, run=run_id, params=params, threshold_props=props)
         s.run(Q_ASV, rows=asvs, d=dataset_id, run=run_id)
+        s.run(Q_CLEAR_OTTER_FILL, d=dataset_id, fill=OTTER_TAXA_FILL)
         s.run(Q_CLUSTER, labels=labels, d=dataset_id, run=run_id)
         s.run(Q_MEMBER, rows=members, d=dataset_id, run=run_id)
         s.run(Q_CO, rows=con, d=dataset_id, run=run_id)
