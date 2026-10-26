@@ -76,7 +76,12 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
   useEffect(() => {
     let live = true;
     setErr(null);
-    getWheel(datasetId, year, asvIds).then((r) => { if (live) setW(r); })
+    getWheel(datasetId, year, asvIds).then((r) => {
+      if (!live) return;
+      // No average year: the wheel always shows one year, the first by default.
+      if (year == null && r.years?.length) setYear(r.years[0].year);
+      else setW(r);
+    })
       .catch((e) => { if (live) setErr(e); });
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -177,11 +182,8 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
 
           <div className="flex flex-wrap items-center gap-2" data-testid="wheel-controls">
             {(w.years?.length ?? 0) > 0 && (
-              <Chooser label="year" summary={year ?? "average"} closeOnPick
+              <Chooser label="year" summary={year ?? undefined} closeOnPick
                 testid="wheel-year-select">
-                <ChooserRow radio checked={year == null} testid="wheel-year-avg"
-                  onToggle={() => setYear(null)} label="average year"
-                  hint="all samples folded onto the calendar" />
                 {w.years!.map((y) => (
                   <ChooserRow key={y.year} radio checked={year === y.year}
                     testid={`wheel-year-${y.year}`} onToggle={() => setYear(y.year)}

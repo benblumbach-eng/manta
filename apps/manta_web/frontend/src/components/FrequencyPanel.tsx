@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
+import type { ECharts } from "echarts";
 import type { Frequency, SeasonalYear } from "../api";
 import { esc } from "../format";
 import { useNearestPointClick } from "../chartClick";
@@ -8,9 +9,6 @@ import { chartTooltip, FONT, useTokens } from "../design/tokens";
 import { primarySeries, yearColour } from "../design/dataColours";
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
-const MEAN = "Average of all years";
-const BAND = "Spread between years";
 
 const pct = (v: number | null | undefined, d = 2) => (v == null ? "—" : `${(100 * v).toFixed(d)}%`);
 
@@ -28,7 +26,8 @@ export default function FrequencyPanel({ freq, color: colorProp,
   const hasSeason = freq.seasonal != null;
   const [view, setView] = useState<View>("measured");
   const [shownYears, setShownYears] = useState<string[]>([]);
-  const [selectedYear, setSelectedYear] = useState<string | null>(null);
+  const [chosenYear, setSelectedYear] = useState<string | null>(null);
+  const selectedYear = chosenYear ?? freq.seasonal?.years[0]?.year ?? null;
 
   const dated = freq.time_axis === "dates";
 
@@ -93,65 +92,33 @@ export default function FrequencyPanel({ freq, color: colorProp,
     }
 
 
-    const clim = freq.seasonal!.climatology;
     const years = freq.seasonal!.years;
-
-    const sel = selectedYear ? years.find((y) => y.year === selectedYear) ?? null : null;
-    if (sel) {
-      return {
-        ...base,
-        tooltip: {
-          ...tip,
-          trigger: "axis" as const,
-          formatter: (ps: { axisValue: string; seriesName: string; value: number | null }[]) => {
-            const p = ps.find((x) => x.seriesName === sel.year) ?? ps[0];
-            return p ? `<b>${esc(p.axisValue)} ${esc(sel.year)}</b><br/>${pct(p.value as number | null)}` : "";
-          },
-        },
-        xAxis: { type: "category" as const, data: MONTHS, axisLabel: xLabel },
-        series: [
-          { name: sel.year, type: "line" as const, showSymbol: true, symbolSize: 5,
-            connectNulls: false, z: 3,
-            data: MONTHS.map((_, mi) => sel.by_month.find((m) => m.month === mi + 1)?.mean ?? null),
-            lineStyle: { color, width: 2.5 }, itemStyle: { color } },
-        ],
-      };
-    }
+    const shown = [selectedYear!, ...shownYears.filter((y) => y !== selectedYear)];
     return {
       ...base,
-      legend: { show: true, top: 0, right: 8, textStyle: { color: tok.textMuted, fontSize: FONT.xs2 },
-                data: [MEAN, BAND, ...shownYears] },
+      legend: { show: shown.length > 1, top: 0, right: 8,
+                textStyle: { color: tok.textMuted, fontSize: FONT.xs2 }, data: shown },
       tooltip: {
         ...tip,
         trigger: "axis" as const,
         formatter: (ps: { axisValue: string; seriesName: string; value: number | null }[]) => {
-          const m = clim.find((c) => c.label === ps[0]?.axisValue);
-          const rows = ps.filter((x) => x.seriesName !== BAND && x.value != null)
-            .map((x) => `${esc(x.seriesName)}: ${pct(x.value)}`).join("<br/>");
-          const n = m ? ` · ${m.n} samples from ${m.n_years} year${m.n_years === 1 ? "" : "s"}` : "";
-          return `<b>${esc(ps[0]?.axisValue)}</b>${n}<br/>${rows}`;
+          const rows = ps.filter((x) => x.value != null)
+            .map((x) => `${shown.length > 1 ? `${esc(x.seriesName)}: ` : ""}${pct(x.value)}`).join("<br/>");
+          return `<b>${esc(ps[0]?.axisValue)}${shown.length > 1 ? "" : ` ${esc(selectedYear ?? "")}`}</b><br/>${rows}`;
         },
       },
-      xAxis: { type: "category" as const, data: clim.map((c) => c.label), axisLabel: xLabel },
-      series: [
-        { name: "​", type: "line" as const, stack: "band", showSymbol: false, silent: true,
-          lineStyle: { opacity: 0 }, tooltip: { show: false }, data: clim.map((c) => c.lo) },
-        { name: BAND, type: "line" as const, stack: "band", showSymbol: false, silent: true,
-          lineStyle: { opacity: 0 }, areaStyle: { color: tok.chartLine, opacity: 0.18 },
-          data: clim.map((c) => (c.lo == null || c.hi == null ? null : c.hi - c.lo)) },
-        { name: MEAN, type: "line" as const, showSymbol: true, symbolSize: 5, connectNulls: true, z: 3,
-          data: clim.map((c) => c.mean), lineStyle: { color, width: 2.5 }, itemStyle: { color } },
-        ...shownYears.map((y) => {
-          const yr = years.find((x) => x.year === y);
-          const i = years.findIndex((x) => x.year === y);
-          const c = yearColour(i, years.length, tok.light);
-          return {
-            name: y, type: "line" as const, showSymbol: true, symbolSize: 4, connectNulls: false, z: 2,
-            data: MONTHS.map((_, mi) => yr?.by_month.find((m) => m.month === mi + 1)?.mean ?? null),
-            lineStyle: { color: c, width: 1.4 }, itemStyle: { color: c },
-          };
-        }),
-      ],
+      xAxis: { type: "category" as const, data: MONTHS, axisLabel: xLabel },
+      series: shown.map((y, k) => {
+        const yr = years.find((x) => x.year === y);
+        const c = k === 0 ? color
+          : yearColour(years.findIndex((x) => x.year === y), years.length, tok.light);
+        return {
+          name: y, type: "line" as const, showSymbol: true, symbolSize: k === 0 ? 5 : 4,
+          connectNulls: false, z: k === 0 ? 3 : 2,
+          data: MONTHS.map((_, mi) => yr?.by_month.find((m) => m.month === mi + 1)?.mean ?? null),
+          lineStyle: { color: c, width: k === 0 ? 2.5 : 1.4 }, itemStyle: { color: c },
+        };
+      }),
     };
   }, [active, freq, shownYears, selectedYear, dated, color, tok]);
 
@@ -160,6 +127,31 @@ export default function FrequencyPanel({ freq, color: colorProp,
     onPointClick && active === "measured"
       ? (i) => { const pt = freq.points[i]; if (pt?.sample) onPointClick(pt.sample, pt.date); }
       : undefined);
+
+  // By year: a click picks the nearest month and, of the years shown, the line closest to the
+  // click; Inspect opens at the first sample of that month in that year.
+  const jahrKlick = useRef<(chart: ECharts, ev: { offsetX: number; offsetY: number }) => void>();
+  jahrKlick.current = (chart, ev) => {
+    if (!onPointClick || active !== "season" || !freq.seasonal || !selectedYear) return;
+    if (!chart.containPixel({ gridIndex: 0 }, [ev.offsetX, ev.offsetY])) return;
+    const mi = Math.round((chart.convertFromPixel({ seriesIndex: 0 }, [ev.offsetX, ev.offsetY]) as number[])[0]);
+    const shown = [selectedYear, ...shownYears.filter((y) => y !== selectedYear)];
+    let best: string | null = null, abstand = Infinity;
+    shown.forEach((y, k) => {
+      const v = freq.seasonal!.years.find((x) => x.year === y)?.by_month.find((m) => m.month === mi + 1)?.mean;
+      if (v == null) return;
+      const py = (chart.convertToPixel({ seriesIndex: k }, [mi, v]) as number[])[1];
+      if (Math.abs(py - ev.offsetY) < abstand) { abstand = Math.abs(py - ev.offsetY); best = y; }
+    });
+    if (best == null) return;
+    const prefix = `${best}-${String(mi + 1).padStart(2, "0")}`;
+    const pt = freq.points.find((p) => p.sample && p.date?.startsWith(prefix));
+    if (pt?.sample) onPointClick(pt.sample, pt.date);
+  };
+  const chartBereit = (chart: ECharts) => {
+    klickBereit(chart);
+    chart.getZr().on("click", (ev: { offsetX: number; offsetY: number }) => jahrKlick.current?.(chart, ev));
+  };
 
   const selYear = active === "season" && freq.seasonal && selectedYear
     ? freq.seasonal.years.find((y) => y.year === selectedYear) ?? null
@@ -178,25 +170,22 @@ export default function FrequencyPanel({ freq, color: colorProp,
 
         {active === "season" && freq.seasonal && (
           <Chooser label="year" closeOnPick testid={`${testid}-year-select`}
-            summary={selYear ? `${selYear.year}${teilweise(selYear)}` : "average of all years"}>
-            <ChooserRow radio checked={selectedYear == null} testid="year-select-avg"
-              onToggle={() => setSelectedYear(null)}
-              label={MEAN}
-              hint={`all ${freq.points.length} samples`} />
+            summary={selYear ? `${selYear.year}${teilweise(selYear)}` : undefined}>
             {freq.seasonal.years.map((y) => (
               <ChooserRow key={y.year} radio checked={selectedYear === y.year}
                 testid={`year-select-${y.year}`}
-                onToggle={() => setSelectedYear(y.year)}
+                onToggle={() => { setSelectedYear(y.year);
+                                   setShownYears((cur) => cur.filter((x) => x !== y.year)); }}
                 label={y.year}
                 hint={`${y.n} samples${teilweise(y)}`} />
             ))}
           </Chooser>
         )}
 
-        {active === "season" && !selectedYear && freq.seasonal && (
+        {active === "season" && freq.seasonal && freq.seasonal.years.length > 1 && (
           <Chooser label="add years" testid={`${testid}-years`} count={shownYears.length}
             summary={shownYears.length ? undefined : "none"}>
-            {freq.seasonal.years.map((y, i) => (
+            {freq.seasonal.years.map((y, i) => y.year !== selectedYear && (
               <ChooserRow key={y.year} testid={`year-${y.year}`}
                 checked={shownYears.includes(y.year)}
                 onToggle={() => setShownYears((cur) => cur.includes(y.year)
@@ -220,8 +209,8 @@ export default function FrequencyPanel({ freq, color: colorProp,
 
 
       <div data-testid={`${testid}-chart`}>
-      <ReactECharts option={option} style={{ height: 210 }} notMerge onChartReady={klickBereit}
-        className={onPointClick && active === "measured" ? "cursor-pointer" : undefined} />
+      <ReactECharts option={option} style={{ height: 210 }} notMerge onChartReady={chartBereit}
+        className={onPointClick ? "cursor-pointer" : undefined} />
       </div>
 
     </div>
