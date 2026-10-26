@@ -55,7 +55,7 @@ def ollama_url() -> str:
     return _wert("OLLAMA_URL", "http://localhost:11434")
 
 
-DEFAULT_OLLAMA_MODEL = "qwen2.5:7b"
+DEFAULT_OLLAMA_MODEL = "qwen3:8b"
 
 
 def ollama_model() -> str:

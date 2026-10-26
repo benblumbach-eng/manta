@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-VORGABE="qwen2.5:7b"
+VORGABE="qwen3:8b"
 
 hilfe() {
   echo "MANTA assistant"
@@ -12,7 +12,8 @@ hilfe() {
   echo "  bash assistant.sh status       what is running right now"
   echo
   echo "Models that MANTA has been used with (all of them speak the tool protocol):"
-  echo "  qwen2.5:7b     4.7 GB   Apache 2.0        the default"
+  echo "  qwen3:8b       5.2 GB   Apache 2.0        the default"
+  echo "  qwen2.5:7b     4.7 GB   Apache 2.0        a little faster, weaker at choosing tools"
   echo "  qwen2.5:1.5b   1.0 GB   Apache 2.0        for an 8 GB machine"
   echo "  llama3.1:8b    4.9 GB   Llama 3.1 licence  a second opinion"
   echo
