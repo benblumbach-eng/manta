@@ -74,7 +74,8 @@ def wahrheit(api: Api, ds: str) -> dict:
         nb = api.tool("neighbors", dataset_id=ds, asv_id=w["top_asv"])
         w["top_asv_n_neighbors"] = nb.get("n_neighbors_total")
     w["n_bridges"] = api.tool("cluster_bridges", dataset_id=ds, edge="con").get("n_bridges_total")
-    w["n_ccm_pairs"] = api.tool("cluster_network", dataset_id=ds).get("n_cluster_pairs")
+    w["n_ccm_pairs"] = sum(1 for e in api.tool("cluster_network", dataset_id=ds).get("edges") or []
+                           if e.get("from_cluster") != e.get("to_cluster"))
     groessen = {m["louvain_label"]: api.tool("cluster_detail", dataset_id=ds,
                                              cluster=m["louvain_label"]).get("n_members") or 0
                 for m in s.get("modules") or []}
@@ -102,6 +103,8 @@ def enthalten(wert, antwort: str) -> bool:
         return False
     if isinstance(wert, bool) or not isinstance(wert, (int, float)):
         return re.search(r"(?<!\w)" + re.escape(str(wert)) + r"(?!\w)", antwort, re.I) is not None
+    if wert == 0 and re.search(r"\b(no|none|kein\w*)\b", antwort, re.I):
+        return True
     return any(abs(z - wert) <= max(0.005 * abs(wert), 1e-9) for z in _zahlen(antwort))
 
 
@@ -154,6 +157,8 @@ def urteilen(ollama: str, modell: str, frage: str, erwartet: str, antwort: str,
     try:
         with urllib.request.urlopen(req, timeout=900) as r:
             return json.loads(json.loads(r.read())["message"]["content"])
+    except urllib.error.HTTPError as e:
+        return {"error": f"judge failed: HTTP {e.code} {e.read().decode(errors='replace')[:200]}"}
     except (OSError, ValueError, KeyError) as e:
         return {"error": f"judge failed: {e}"}
 
@@ -184,9 +189,10 @@ def bewerte(frage: dict, r: dict, w: dict, gesehen: str = "", urteil: dict | Non
     if urteil and "correct" in urteil:
         teile["quality"] = ((urteil["correct"] - 1) / 4 + (urteil["complete"] - 1) / 4) / 2
     if frage.get("group") == "trap":
+        # A number the question itself names (a year, say) is not invented when repeated.
         aus_frage = set(_zahlen(frage.get("_text", "")))
-        teile["no_invented"] = float(not r.get("ungrounded")
-                                     and not set(_zahlen(antwort)) - aus_frage)
+        teile["no_invented"] = float(not [u for u in r.get("ungrounded") or []
+                                          if set(_zahlen(u)) - aus_frage])
     else:
         teile["grounded"] = float(not r.get("ungrounded") and r.get("check") not in ("failed",)
                                   and not r.get("truncated"))
@@ -207,6 +213,16 @@ def laufen(a) -> None:
     nutzer = a.user or input("MANTA user: ")
     passwort = os.environ.get("MANTA_PASSWORD") or getpass.getpass(f"Password for {nutzer}: ")
     api.call("POST", "/auth/login", {"username": nutzer, "password": passwort})
+    if a.judge != "none":
+        try:
+            with urllib.request.urlopen(a.ollama.rstrip("/") + "/api/tags", timeout=10) as r:
+                da = [m["name"] for m in json.loads(r.read()).get("models", [])]
+        except OSError as e:
+            sys.exit(f"The judge's Ollama is not reachable at {a.ollama} ({e}). "
+                     f"Pass --ollama, or --judge none.")
+        if a.judge not in da:
+            sys.exit(f"Judge model {a.judge!r} is not in the Ollama at {a.ollama} "
+                     f"(it has: {', '.join(da) or 'none'}).")
     katalog = json.loads((HIER / "fragen.json").read_text(encoding="utf-8"))["questions"]
     if a.only:
         katalog = [f for f in katalog if f["id"] in a.only.split(",") or f["group"] in a.only.split(",")]
