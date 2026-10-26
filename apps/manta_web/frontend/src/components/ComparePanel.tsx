@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
-import { getAsv, getAsvList, getCluster, getEnvironment, getModules, getSamples,
-         type Environment, type ModuleLabel, type SampleList } from "../api";
+import { getAsv, getAsvList, getCluster, getEdge, getEnvironment, getModules, getSamples,
+         type EdgeDetail, type Environment, type ModuleLabel, type SampleList } from "../api";
 import { Chooser, ChooserRow, Segmented } from "./controls";
 import InfoTip from "./InfoTip";
 import { PanelHeader } from "./PanelFrame";
@@ -14,6 +14,7 @@ import { chartTooltip, FONT, useTokens } from "../design/tokens";
 import { seriesColour } from "../design/dataColours";
 import { esc } from "../format";
 import { useNearestPointClick } from "../chartClick";
+import type { EdgeRef } from "../App";
 
 
 const MAX_CURVES = 6;
@@ -41,12 +42,14 @@ const ausPunkten = (rohe: { date: string | null; value: number | null }[]): Punk
     .sort((a, b) => a.t - b.t);
 
 export default function ComparePanel({ datasetId, initialAsvId, initialSample, mark, sampleTick,
-                                       onClose, onOpenAsv }: {
+                                       link, onOpenEdge, onClose, onOpenAsv }: {
   datasetId: string;
   initialAsvId?: string;
   initialSample?: string;
   mark?: InspectMark;
   sampleTick?: number;
+  link?: EdgeRef;
+  onOpenEdge?: (e: EdgeRef) => void;
   onClose: () => void;
   onOpenAsv: (id: string) => void;
 }) {
@@ -169,6 +172,23 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
     setMarkiert(`${mark.kind}:${mark.id}`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mark?.kind, mark?.id, sampleTick]);
+
+  const [linkD, setLinkD] = useState<EdgeDetail | null>(null);
+  useEffect(() => {
+    setLinkD(null);
+    if (!link) return;
+    setTab("time");
+    Promise.all([link.source, link.target].map((id) => getAsv(datasetId, id).then((d): Curve => ({
+      key: `asv:${id}`, kind: "asv", id, label: id, sub: d.lineage?.genus ?? null, unit: null,
+      points: ausPunkten(d.frequency.points.map((p) => ({ date: p.date, value: p.share }))),
+    })))).then((zwei) => setCurves((cur) => [...cur.filter((c) => c.kind !== "asv"), ...zwei]))
+      .catch((e) => setErr(e));
+    let live = true;
+    getEdge(datasetId, link.source, link.target, link.type)
+      .then((d) => { if (live) setLinkD(d); }).catch(() => {});
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [link?.source, link?.target, link?.type, sampleTick]);
 
   const jahre = useMemo(() => {
     const j = new Set<string>();
@@ -317,6 +337,7 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
             onAdd={(kind, id) => add(kind, id)} />
         ) : <>
         {err != null && <ErrorNotice error={err} inline what="Could not add this curve." />}
+        {link && linkD && <LinkBox d={linkD} onDetails={() => onOpenEdge?.(link)} />}
 
         {!timeAxisIsDates ? (
           <p className="text-fg-muted" data-testid="compare-no-dates">
@@ -468,6 +489,41 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
         </>}
         <ProvenanceFooter datasetId={datasetId} />
       </div>
+    </div>
+  );
+}
+
+// Draft: the values of the clicked link above its two curves.
+function LinkBox({ d, onDetails }: { d: EdgeDetail; onDetails: () => void }) {
+  const f = d.directions?.forward ?? null, b = d.directions?.backward ?? null;
+  const richtung = (von: string, nach: string, x: typeof f) => x && (
+    <div className="flex items-baseline gap-2">
+      <span className="font-mono">{von} → {nach}</span>
+      <span className="tabular-nums">NMI {x.nmi.toFixed(2)}</span>
+      <span className={x.decision === "rejected" ? "text-warn" : "text-ok"}>
+        {x.decision === "rejected" ? "rejected" : "kept"}</span>
+    </div>
+  );
+  const r = d.edge.corr;
+  return (
+    <div className="rounded-md border border-line bg-raised px-3 py-2 space-y-1" data-testid="inspect-link">
+      <div className="flex items-baseline gap-2">
+        <span className="text-fg-muted">Link</span>
+        <span className="font-mono text-accent">{d.source.id}</span>
+        <span className="text-fg-muted">—</span>
+        <span className="font-mono text-accent">{d.target.id}</span>
+        <button onClick={onDetails} className="ml-auto text-accent hover:underline">details</button>
+      </div>
+      {r != null && (
+        <div className="flex items-baseline gap-2">
+          <span className="tabular-nums text-base">r {r.toFixed(2)}</span>
+          <span className="text-fg-muted">
+            strongest {d.strength_context.rank} of {d.strength_context.n_edges} links ·
+            together in {d.co_detected_in} of {d.n_samples} samples</span>
+        </div>
+      )}
+      {richtung(d.source.id, d.target.id, f)}
+      {richtung(d.target.id, d.source.id, b)}
     </div>
   );
 }

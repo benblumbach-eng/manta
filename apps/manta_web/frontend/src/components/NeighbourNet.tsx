@@ -106,6 +106,30 @@ export default function NeighbourNet({ asvId, cluster, neighbors, onOpenAsv, onO
         <circle cx={CX} cy={CY} r={10} fill="var(--accent)" stroke="var(--raised)" strokeWidth={2} />
         <text x={CX} y={CY + 24} fontSize={11} fill="var(--text)" textAnchor="middle">{asvId}</text>
       </svg>
+      {/* Draft: the same links as a list, strongest first; a row opens both ASVs in Inspect. */}
+      <table className="w-full text-xs mt-1" data-testid="neighbour-list">
+        <thead><tr className="text-fg-muted text-left">
+          <th className="font-normal py-0.5">linked ASV</th><th className="font-normal">r</th>
+          <th className="font-normal">direction (CCM)</th><th /></tr></thead>
+        <tbody>
+          {alle.map((p) => (
+            <tr key={p.id} className="border-t border-line hover:bg-control cursor-pointer"
+                onClick={() => onOpenEdge({ source: asvId, target: p.id, type: p.con ? "con" : "ccm" })}>
+              <td className="py-1">
+                <span className="inline-block w-2 h-2 rounded-full mr-1 align-middle"
+                      style={{ background: modules.color(p.cluster) }} />
+                <span className="font-mono text-accent">{p.id}</span>
+                {p.genus && <span className="text-fg-muted"> {p.genus}</span>}
+              </td>
+              <td className="tabular-nums">{p.corr != null ? p.corr.toFixed(2) : "—"}</td>
+              <td className="font-mono">{p.direction === "out" ? `${asvId} → ${p.id}`
+                : p.direction === "in" ? `${p.id} → ${asvId}`
+                : p.direction === "both" ? "both ways" : "—"}</td>
+              <td className="text-right text-accent">Inspect ↗</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

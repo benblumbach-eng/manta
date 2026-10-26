@@ -37,7 +37,7 @@ type RightPanel =
   | { kind: "taxon"; asvId: string }
   | { kind: "wheel" }
   | { kind: `view:${string}` }
-  | { kind: "compare"; seed?: string; sample?: string; mark?: InspectMark; tick?: number };
+  | { kind: "compare"; seed?: string; sample?: string; mark?: InspectMark; link?: EdgeRef; tick?: number };
 
 const PANEL_WIDTH: Record<string, number> = { asv: 560, edge: 560, starred: 480, notes: 480, wheel: 520, compare: 560, taxon: 520, agent: 460 };
 
@@ -135,7 +135,8 @@ export default function App() {
   const wishCluster = (l: number) =>
     setStarredCluster((p) => ({ label: l, tick: (p?.tick ?? 0) + 1, ds: selected?.dataset_id }));
   const openAsv = (id: string) => setRight({ kind: "asv", id });
-  const openEdge = (edge: EdgeRef) => setRight({ kind: "edge", edge });
+  const openEdge = (edge: EdgeRef) => setRight({ kind: "compare", link: edge, tick: Date.now() });
+  const openEdgeDetails = (edge: EdgeRef) => setRight({ kind: "edge", edge });
   const closeRight = () => setRight(null);
 
   const selectDataset = (d: Dataset | null) => {
@@ -382,7 +383,8 @@ export default function App() {
           <PanelFrame id="compare" title="Inspect" onClose={() => schliesse("compare")} defaultWidth={PANEL_WIDTH.compare}><ErrorBoundary label="the seasonal comparison">
             <ComparePanel datasetId={selected.dataset_id} initialAsvId={finde("compare")!.seed}
               initialSample={finde("compare")!.sample} mark={finde("compare")!.mark}
-              sampleTick={finde("compare")!.tick}
+              sampleTick={finde("compare")!.tick} link={finde("compare")!.link}
+              onOpenEdge={openEdgeDetails}
               onClose={() => schliesse("compare")} onOpenAsv={openAsv} />
           </ErrorBoundary></PanelFrame>
         )}
