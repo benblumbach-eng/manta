@@ -27,7 +27,7 @@ export default function FrequencyPanel({ freq, color: colorProp,
   const [view, setView] = useState<View>("measured");
   const [shownYears, setShownYears] = useState<string[]>([]);
   const [chosenYear, setSelectedYear] = useState<string | null>(null);
-  const selectedYear = chosenYear ?? freq.seasonal?.years[0]?.year ?? null;
+  const selectedYear = chosenYear ?? freq.seasonal?.full_years[0] ?? freq.seasonal?.years[0]?.year ?? null;
 
   const dated = freq.time_axis === "dates";
 

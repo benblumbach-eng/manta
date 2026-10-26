@@ -78,8 +78,8 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
     setErr(null);
     getWheel(datasetId, year, asvIds).then((r) => {
       if (!live) return;
-      // No average year: the wheel always shows one year, the first by default.
-      if (year == null && r.years?.length) setYear(r.years[0].year);
+      // No average year: the wheel always shows one year, the first complete one by default.
+      if (year == null && r.years?.length) setYear((r.years.find((y) => !y.note) ?? r.years[0]).year);
       else setW(r);
     })
       .catch((e) => { if (live) setErr(e); });
