@@ -1236,6 +1236,12 @@ export const getClusterAtSample = (ds: string, label: number, sample: string) =>
 export const getAsvList = (ds: string) =>
   get<{ asvs: { id: string; cluster: number | null; label: string; share: number }[] }>(`/datasets/${ds}/asvs`);
 export const getSamples = (ds: string) => get<SampleList>(`/datasets/${ds}/samples`);
+export type Occurrence = {
+  dataset_id: string; time_axis: "dates" | "ordinal";
+  dates: (string | null)[];
+  asvs: Record<string, [number, number][]>;
+};
+export const getOccurrence = (ds: string) => get<Occurrence>(`/datasets/${ds}/occurrence`);
 export const getSample = (ds: string, sample: string) =>
   get<SampleDetail>(`/datasets/${ds}/sample/${encodeURIComponent(sample)}`);
 
