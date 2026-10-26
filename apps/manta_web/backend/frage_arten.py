@@ -54,6 +54,35 @@ BEGRIFFE = ("module = community = group = cluster (a Louvain cluster of the netw
 RAENGE = ("kingdom", "phylum", "class", "order", "family", "genus", "species")
 
 
+# Questions that no fixed plan answers, whatever the model sorting them says: they name one ASV
+# or one cluster, or ask for a test, a trend or a measure the plans do not compute. A small model
+# tends to push them into the nearest plan, which then answers a different question.
+_EIN_ASV = re.compile(r"\b\w*asv\w*\d\w*\b|\b[0-9a-f]{16,}\b", re.I)
+_EIN_MODUL = re.compile(r"\b(cluster|module?|modul|community|group|gruppe)\s*#?\d+\b|\bM\d+\b",
+                        re.I)
+_OFFEN = re.compile(
+    r"\b(trend|rising|falling|increas\w*|decreas\w*|steig\w*|sink\w*|correlat\w*|korrel\w*|"
+    r"season\w*|saison\w*|calendar month|monat\w*|signific\w*|signifikant\w*|p-value|test\w*|"
+    r"compar\w*|vergleich\w*|divers\w*|shannon|keystone|function\w*|funktion\w*|"
+    r"first half|second half|rise and fall|go together|move together)\b", re.I)
+
+
+def nie_geplant(frage: str) -> bool:
+    return bool(_EIN_ASV.search(frage or "") or _EIN_MODUL.search(frage or "")
+                or _OFFEN.search(frage or ""))
+
+
+# A rank the question names outright counts over the one the model filled in.
+_RANG_WORTE = (("phylum", r"phylum|phyla"), ("class", r"class|classes|klassen?"),
+               ("family", r"family|families|familien?"),
+               ("genus", r"genus|genera|gattung|gattungen"), ("species", r"species|spezies"))
+
+
+def rang_im_text(frage: str) -> str | None:
+    treffer = [r for r, muster in _RANG_WORTE if re.search(rf"\b({muster})\b", frage or "", re.I)]
+    return treffer[0] if len(treffer) == 1 else None
+
+
 def beispiel(art: str) -> str:
     return (registry.QUESTIONS.get(art) or ("", ""))[1]
 

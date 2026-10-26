@@ -137,6 +137,34 @@ def test_other_suggested_questions_call_their_tool_first(calls, monkeypatch):
     assert out["evidence"][0]["tool"] == "asv_seasonality"
 
 
+def test_question_about_one_asv_skips_the_plans(calls, monkeypatch):
+    sent = model_says(monkeypatch, {"content": "", "tool_calls": [
+        {"function": {"name": "asv_detail", "arguments": {"asv_id": "euk_asv_001"}}}]},
+        "euk_asv_001 is a Gyrodinium.")
+    out = agent.run("Is euk_asv_001 rising or falling over time?", DS, model="m")
+    assert sent[0]["fmt"] is None, "no sorting form: it can only be 'andere'"
+    assert out["question_kind"] == "andere"
+    assert calls[-1] == ("asv_detail", {"asv_id": "euk_asv_001", "dataset_id": DS})
+
+
+def test_rank_named_in_the_question_wins(calls, monkeypatch):
+    model_says(monkeypatch, json.dumps({"frage_art": "taxa_composition", "rang": "none"}),
+               "Gyrodinium leads [F1].")
+    agent.run("What is the most common class here?", DS, model="m")
+    assert calls[0] == ("taxa_composition", {"dataset_id": DS, "rank": "class", "limit": 15})
+
+
+def test_repeated_tool_call_is_not_run_again(calls, monkeypatch):
+    nochmal = {"content": "", "tool_calls": [
+        {"function": {"name": "cluster_detail", "arguments": {"cluster": 1}}}]}
+    sent = model_says(monkeypatch, nochmal, nochmal, "The cluster consists of the members listed.")
+    out = agent.run("What is in cluster 1?", DS, model="m")
+    assert [n for n, _ in calls].count("cluster_detail") == 1
+    assert sent[2]["tools"] is None, "after a repeat the model has to answer"
+    assert sent[2]["messages"][-1]["content"] == agent.REPEAT_NOTE
+    assert out["answer"] == "The cluster consists of the members listed." and out["steps"] == 3
+
+
 def test_findings_for_the_dominant_taxa():
     fs = befunde.taxa_composition({"taxa_composition": TAXA, "dataset_summary": SUMMARY})
     texte = [f["text"] for f in fs]
