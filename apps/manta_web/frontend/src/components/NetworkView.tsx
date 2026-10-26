@@ -231,8 +231,21 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   const vis = useMemo(
     () => (net ? computeVisible(net, filters, keyIds) : null),
     [net, filters, keyIds]);
-  const visibleNodes = useMemo(() => vis?.nodes ?? [], [vis]);
-  const visibleEdges = useMemo(() => vis?.edges ?? [], [vis]);
+  // Draft G: explore from one ASV; each click on a point reveals its neighbours.
+  const [erkunden, setErkunden] = useState<Set<string> | null>(null);
+  const visibleNodes = useMemo(() => (vis?.nodes ?? [])
+    .filter((n) => erkunden == null || erkunden.has(n.id)), [vis, erkunden]);
+  const visibleEdges = useMemo(() => (vis?.edges ?? [])
+    .filter((e) => erkunden == null || (erkunden.has(e.source) && erkunden.has(e.target))), [vis, erkunden]);
+  const aufdecken = (id: string) => setErkunden((cur) => {
+    if (cur == null) return cur;
+    const neu = new Set(cur);
+    for (const e of vis?.edges ?? []) {
+      if (e.source === id) neu.add(e.target);
+      if (e.target === id) neu.add(e.source);
+    }
+    return neu;
+  });
   const visibleIds = useMemo(() => new Set(visibleNodes.map((n) => n.id)), [visibleNodes]);
 
   const [points, setPoints] = useState<"asvs" | "taxa">("asvs");
@@ -398,9 +411,10 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   const edgeWidth = useCallback((e: NetEdge): number => {
     const v = edgeStrength(e);
     if (v == null || ewMin == null || ewMax == null) return EDGE_W_MIN;
-    if (ewMax - ewMin < 1e-12) return (EDGE_W_MIN + EDGE_W_MAX) / 2;
-    const t = Math.max(0, Math.min(1, (v - ewMin) / (ewMax - ewMin)));
-    return EDGE_W_MIN + (EDGE_W_MAX - EDGE_W_MIN) * t;
+    if (ewMax - ewMin < 1e-12) return 3;
+    // Draft D: three clear steps (thirds of the range) instead of a continuous width.
+    const t = (v - ewMin) / (ewMax - ewMin);
+    return t >= 2 / 3 ? 6 : t >= 1 / 3 ? 3 : 1;
   }, [edgeStrength, ewMin, ewMax]);
 
   const LABEL_AUTO_MAX = 60;
@@ -649,6 +663,11 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
             cross,
           };
           const out: Record<string, unknown>[] = [];
+          // Draft C: the selected ASV's links carry their values.
+          const wert = !tl && incident ? [e.corr != null ? `r ${e.corr.toFixed(2)}` : null,
+            e.nmi_forward != null || e.nmi_backward != null
+              ? `NMI ${Math.max(e.nmi_forward ?? 0, e.nmi_backward ?? 0).toFixed(2)}` : null]
+            .filter(Boolean).join(" · ") : "";
           const gerade = tl != null || L.con || (L.ccm && hasCcm(e));
           if (gerade) out.push({
             ...common,
@@ -658,6 +677,8 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
             lineStyle: { ...base, opacity,
                          width: tl ? Math.min(EDGE_W_MAX, EDGE_W_MIN + (tl.n_links - 1) * 0.8)
                                    : edgeWidth(e) },
+            ...(wert ? { label: { show: true, formatter: wert, color: tok.text, fontSize: FONT.xs2,
+                                  backgroundColor: tok.overlay, padding: [1, 3], borderRadius: 3 } } : {}),
           });
           if (!tl && L.rejected && hasRejected(e)) out.push({
             ...common,
@@ -668,7 +689,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
           });
           return out;
         }),
-        edgeSymbolSize: 9,
+        edgeSymbolSize: 15,
         label: {
           show: showLabels,
           position: "right" as const,
@@ -987,6 +1008,20 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         )}
 
         <div className="absolute top-2 right-2 z-10 flex gap-1">
+          {erkunden == null ? (
+            <Button data-testid="explore-start" className="bg-raised"
+              disabled={sel?.kind !== "asv"} title="select an ASV first"
+              onClick={() => sel?.kind === "asv" && setErkunden(new Set([sel.id]))}>
+              explore from {sel?.kind === "asv" ? sel.id : "ASV"}</Button>
+          ) : (
+            <>
+              <span className="self-center text-xs text-fg-muted px-2" data-testid="explore-count">
+                {visibleNodes.length} of {vis?.nodes.length ?? 0} ASVs · click a point to show its neighbours
+              </span>
+              <Button data-testid="explore-end" className="bg-raised"
+                onClick={() => setErkunden(null)}>show all</Button>
+            </>
+          )}
           <Button data-testid="canvas-zoom-reset" onClick={resetZoom}
             title="reset zoom and centering" className="bg-raised">⛶ fit</Button>
           <Button data-testid="canvas-export" onClick={exportPng}
@@ -1062,7 +1097,8 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                     clearTimeout(focusTimer.current); focusTimer.current = null;
                   }
                   setSel({ kind: "asv", id: p.data.id, focus: Date.now() });
-                  onOpenAsv(p.data.id);
+                  if (erkunden != null) aufdecken(p.data.id);
+                  else onOpenAsv(p.data.id);
                 } else if (p.dataType === "edge" && p.data?.manta) {
                   onOpenEdge({ source: p.data.manta.source, target: p.data.manta.target, type: "con" });
                 }
