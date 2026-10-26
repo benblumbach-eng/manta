@@ -1,102 +1,480 @@
 {
-  "about": "Fixed question catalog for the chat assistant. 'answer' is the expected answer, written with values from the dataset's own tool results; 'facts' are the values from it that the answer must contain. 'kind' is the question kind the assistant should recognise, 'tools' the tools of which at least one must run. 'trap' questions ask for something the data do not hold: the answer must not invent numbers.",
-  "questions": [
-    {"id": "summary-1", "group": "planned", "question": "Give me an overview of this dataset.",
-     "kind": "dataset_summary", "tools": ["dataset_summary"], "facts": ["n_samples", "n_clusters"],
-     "answer": "{n_samples} samples, {n_in_network} of {n_asv} ASVs in the network, {n_clusters} clusters, {n_con_edges} CON and {n_ccm_edges} CCM links."},
-    {"id": "summary-2", "group": "planned", "question": "How many samples does this dataset have?",
-     "kind": "dataset_summary", "tools": ["dataset_summary"], "facts": ["n_samples"],
-     "answer": "{n_samples} samples."},
-    {"id": "summary-3", "group": "planned", "question": "How many of the ASVs are in the network?",
-     "kind": "dataset_summary", "tools": ["dataset_summary"], "facts": ["n_in_network", "n_asv"],
-     "answer": "{n_in_network} of {n_asv} ASVs."},
-    {"id": "summary-de", "group": "planned", "question": "Gib mir einen Überblick über diesen Datensatz.",
-     "kind": "dataset_summary", "tools": ["dataset_summary"], "facts": ["n_samples", "n_clusters"],
-     "answer": "{n_samples} Proben, {n_clusters} Cluster."},
-
-    {"id": "taxa-1", "group": "planned", "question": "Which genera dominate this dataset?",
-     "kind": "taxa_composition", "tools": ["taxa_composition"], "facts": ["top_genus", "top_genus_n"],
-     "answer": "{top_genus} has the most ASVs ({top_genus_n})."},
-    {"id": "taxa-2", "group": "planned", "question": "Which family has the most ASVs?",
-     "kind": "taxa_composition", "tools": ["taxa_composition"], "facts": ["top_family"],
-     "answer": "{top_family} ({top_family_n} ASVs)."},
-    {"id": "taxa-3", "group": "planned", "question": "What is the most common class here?",
-     "kind": "taxa_composition", "tools": ["taxa_composition"], "facts": ["top_class"],
-     "answer": "{top_class} ({top_class_n} ASVs)."},
-    {"id": "taxa-de", "group": "planned", "question": "Welche Gattungen dominieren hier?",
-     "kind": "taxa_composition", "tools": ["taxa_composition"], "facts": ["top_genus"],
-     "answer": "{top_genus} ({top_genus_n} ASVs)."},
-
-    {"id": "asvs-1", "group": "planned", "question": "Which are the biggest ASVs?",
-     "kind": "find_asv", "tools": ["find_asv"], "facts": ["top_asv"],
-     "answer": "{top_asv} is the largest, then {second_asv}."},
-    {"id": "asvs-2", "group": "planned", "question": "Show me the top ASVs by reads.",
-     "kind": "find_asv", "tools": ["find_asv"], "facts": ["top_asv"],
-     "answer": "{top_asv} is the largest."},
-    {"id": "asvs-de", "group": "planned", "question": "Welche sind die größten ASVs?",
-     "kind": "find_asv", "tools": ["find_asv"], "facts": ["top_asv"],
-     "answer": "{top_asv} ist die größte."},
-
-    {"id": "bridges-1", "group": "planned", "question": "How are the modules connected to each other?",
-     "kind": "cluster_bridges", "tools": ["cluster_bridges"], "facts": ["n_bridges"],
-     "answer": "{n_bridges} of the {n_con_edges} CON links run between different clusters."},
-    {"id": "bridges-2", "group": "planned", "question": "How many links run between different communities?",
-     "kind": "cluster_bridges", "tools": ["cluster_bridges"], "facts": ["n_bridges"],
-     "answer": "{n_bridges} links."},
-    {"id": "bridges-de", "group": "planned", "question": "Wie stark sind die Module untereinander verbunden?",
-     "kind": "cluster_bridges", "tools": ["cluster_bridges"], "facts": ["n_bridges"],
-     "answer": "{n_bridges} Links zwischen verschiedenen Clustern."},
-
-    {"id": "ccm-1", "group": "planned", "question": "Which module drives which other module?",
-     "kind": "cluster_network", "tools": ["cluster_network"], "facts": ["n_ccm_pairs"],
-     "answer": "{n_ccm_pairs} directed module pairs."},
-    {"id": "ccm-2", "group": "planned", "question": "Are there directed CCM links between the modules?",
-     "kind": "cluster_network", "tools": ["cluster_network"], "facts": ["n_ccm_pairs"],
-     "answer": "Yes, {n_ccm_pairs} directed module pairs."},
-
-    {"id": "sugg-env", "group": "suggested", "question_kind": "environment",
-     "tools": ["environment"], "facts": ["n_env_vars"],
-     "answer": "{n_env_vars} measured variables."},
-    {"id": "sugg-timeseries", "group": "suggested", "question_kind": "cluster_timeseries",
-     "tools": ["cluster_timeseries"], "facts": [],
-     "answer": "How each module's share runs across the samples."},
-    {"id": "sugg-asv", "group": "suggested", "question_kind": "asv_detail", "context": "asv",
-     "tools": ["asv_detail"], "facts": ["top_asv_genus"],
-     "answer": "{top_asv} is {top_asv_genus}, in cluster {top_asv_cluster}."},
-    {"id": "sugg-neighbors", "group": "suggested", "question_kind": "neighbors", "context": "asv",
-     "tools": ["neighbors"], "facts": ["top_asv_n_neighbors"],
-     "answer": "{top_asv} has {top_asv_n_neighbors} linked ASVs."},
-    {"id": "sugg-trend", "group": "suggested", "question_kind": "trend_test", "context": "asv",
-     "tools": ["trend_test"], "facts": [],
-     "answer": "Trend test result for {top_asv}."},
-    {"id": "sugg-cluster", "group": "suggested", "question_kind": "cluster_detail", "context": "cluster",
-     "tools": ["cluster_detail"], "facts": ["big_cluster_n"],
-     "answer": "Cluster {big_cluster} has {big_cluster_n} ASVs."},
-
-    {"id": "free-genus", "group": "free", "question": "Which genus does {top_asv} belong to?",
-     "kind": "andere", "tools": ["asv_detail", "find_asv"], "facts": ["top_asv_genus"],
-     "answer": "{top_asv_genus}."},
-    {"id": "free-module-of", "group": "free", "question": "In which module is {top_asv}?",
-     "kind": "andere", "tools": ["asv_detail", "find_asv"], "facts": ["top_asv_cluster"],
-     "answer": "Cluster {top_asv_cluster}."},
-    {"id": "free-neighbors", "group": "free", "question": "How many ASVs is {top_asv} linked to?",
-     "kind": "andere", "tools": ["neighbors", "asv_detail"], "facts": ["top_asv_n_neighbors"],
-     "answer": "{top_asv_n_neighbors}."},
-    {"id": "free-genus-count", "group": "free", "question": "How many ASVs belong to {top_genus}?",
-     "kind": "andere", "tools": ["summarize_by_taxon", "find_asv", "taxa_composition"], "facts": ["top_genus_n"],
-     "answer": "{top_genus_n}."},
-    {"id": "free-cluster-size", "group": "free", "question": "How many ASVs are in cluster {big_cluster}?",
-     "kind": "andere", "tools": ["cluster_detail", "find_asv", "dataset_summary"], "facts": ["big_cluster_n"],
-     "answer": "{big_cluster_n}."},
-    {"id": "free-env", "group": "free", "question": "Which variables were measured alongside the samples?",
-     "kind": "andere", "tools": ["environment"], "facts": ["n_env_vars"],
-     "answer": "{n_env_vars} variables: {env_vars}."},
-
-    {"id": "trap-future", "group": "trap", "question": "What will the water temperature be in January 2040?",
-     "kind": "andere", "tools": [], "facts": [],
-     "answer": "The data do not say; no number."},
-    {"id": "trap-whales", "group": "trap", "question": "How many whales were counted in this dataset?",
-     "kind": "andere", "tools": [], "facts": [],
-     "answer": "The data hold no whale counts; no number."}
-  ]
+ "about": "Fixed question catalog for the chat assistant. 'answer' is the expected answer, written with values from the dataset's own tool results; 'facts' are the values from it that the answer must contain. 'kind' is the question kind the assistant should recognise, 'tools' the tools of which at least one must run. 'trap' questions ask for something the data do not hold: the answer must not invent numbers. 'stats' questions need the statistical tools; 'gap' questions ask for things the tools may not cover, to find what is missing.",
+ "questions": [
+  {
+   "id": "summary-1",
+   "group": "planned",
+   "question": "Give me an overview of this dataset.",
+   "kind": "dataset_summary",
+   "tools": [
+    "dataset_summary"
+   ],
+   "facts": [
+    "n_samples",
+    "n_clusters"
+   ],
+   "answer": "{n_samples} samples, {n_in_network} of {n_asv} ASVs in the network, {n_clusters} clusters, {n_con_edges} CON and {n_ccm_edges} CCM links."
+  },
+  {
+   "id": "summary-2",
+   "group": "planned",
+   "question": "How many samples does this dataset have?",
+   "kind": "dataset_summary",
+   "tools": [
+    "dataset_summary"
+   ],
+   "facts": [
+    "n_samples"
+   ],
+   "answer": "{n_samples} samples."
+  },
+  {
+   "id": "summary-3",
+   "group": "planned",
+   "question": "How many of the ASVs are in the network?",
+   "kind": "dataset_summary",
+   "tools": [
+    "dataset_summary"
+   ],
+   "facts": [
+    "n_in_network",
+    "n_asv"
+   ],
+   "answer": "{n_in_network} of {n_asv} ASVs."
+  },
+  {
+   "id": "summary-de",
+   "group": "planned",
+   "question": "Gib mir einen Überblick über diesen Datensatz.",
+   "kind": "dataset_summary",
+   "tools": [
+    "dataset_summary"
+   ],
+   "facts": [
+    "n_samples",
+    "n_clusters"
+   ],
+   "answer": "{n_samples} Proben, {n_clusters} Cluster."
+  },
+  {
+   "id": "taxa-1",
+   "group": "planned",
+   "question": "Which genera dominate this dataset?",
+   "kind": "taxa_composition",
+   "tools": [
+    "taxa_composition"
+   ],
+   "facts": [
+    "top_genus",
+    "top_genus_n"
+   ],
+   "answer": "{top_genus} has the most ASVs ({top_genus_n})."
+  },
+  {
+   "id": "taxa-2",
+   "group": "planned",
+   "question": "Which family has the most ASVs?",
+   "kind": "taxa_composition",
+   "tools": [
+    "taxa_composition"
+   ],
+   "facts": [
+    "top_family"
+   ],
+   "answer": "{top_family} ({top_family_n} ASVs)."
+  },
+  {
+   "id": "taxa-3",
+   "group": "planned",
+   "question": "What is the most common class here?",
+   "kind": "taxa_composition",
+   "tools": [
+    "taxa_composition"
+   ],
+   "facts": [
+    "top_class"
+   ],
+   "answer": "{top_class} ({top_class_n} ASVs)."
+  },
+  {
+   "id": "taxa-de",
+   "group": "planned",
+   "question": "Welche Gattungen dominieren hier?",
+   "kind": "taxa_composition",
+   "tools": [
+    "taxa_composition"
+   ],
+   "facts": [
+    "top_genus"
+   ],
+   "answer": "{top_genus} ({top_genus_n} ASVs)."
+  },
+  {
+   "id": "asvs-1",
+   "group": "planned",
+   "question": "Which are the biggest ASVs?",
+   "kind": "find_asv",
+   "tools": [
+    "find_asv"
+   ],
+   "facts": [
+    "top_asv"
+   ],
+   "answer": "{top_asv} is the largest, then {second_asv}."
+  },
+  {
+   "id": "asvs-2",
+   "group": "planned",
+   "question": "Show me the top ASVs by reads.",
+   "kind": "find_asv",
+   "tools": [
+    "find_asv"
+   ],
+   "facts": [
+    "top_asv"
+   ],
+   "answer": "{top_asv} is the largest."
+  },
+  {
+   "id": "asvs-de",
+   "group": "planned",
+   "question": "Welche sind die größten ASVs?",
+   "kind": "find_asv",
+   "tools": [
+    "find_asv"
+   ],
+   "facts": [
+    "top_asv"
+   ],
+   "answer": "{top_asv} ist die größte."
+  },
+  {
+   "id": "bridges-1",
+   "group": "planned",
+   "question": "How are the modules connected to each other?",
+   "kind": "cluster_bridges",
+   "tools": [
+    "cluster_bridges"
+   ],
+   "facts": [
+    "n_bridges"
+   ],
+   "answer": "{n_bridges} of the {n_con_edges} CON links run between different clusters."
+  },
+  {
+   "id": "bridges-2",
+   "group": "planned",
+   "question": "How many links run between different communities?",
+   "kind": "cluster_bridges",
+   "tools": [
+    "cluster_bridges"
+   ],
+   "facts": [
+    "n_bridges"
+   ],
+   "answer": "{n_bridges} links."
+  },
+  {
+   "id": "bridges-de",
+   "group": "planned",
+   "question": "Wie stark sind die Module untereinander verbunden?",
+   "kind": "cluster_bridges",
+   "tools": [
+    "cluster_bridges"
+   ],
+   "facts": [
+    "n_bridges"
+   ],
+   "answer": "{n_bridges} Links zwischen verschiedenen Clustern."
+  },
+  {
+   "id": "ccm-1",
+   "group": "planned",
+   "question": "Which module drives which other module?",
+   "kind": "cluster_network",
+   "tools": [
+    "cluster_network"
+   ],
+   "facts": [
+    "n_ccm_pairs"
+   ],
+   "answer": "{n_ccm_pairs} directed module pairs."
+  },
+  {
+   "id": "ccm-2",
+   "group": "planned",
+   "question": "Are there directed CCM links between the modules?",
+   "kind": "cluster_network",
+   "tools": [
+    "cluster_network"
+   ],
+   "facts": [
+    "n_ccm_pairs"
+   ],
+   "answer": "Yes, {n_ccm_pairs} directed module pairs."
+  },
+  {
+   "id": "sugg-env",
+   "group": "suggested",
+   "question_kind": "environment",
+   "tools": [
+    "environment"
+   ],
+   "facts": [
+    "n_env_vars"
+   ],
+   "answer": "{n_env_vars} measured variables."
+  },
+  {
+   "id": "sugg-timeseries",
+   "group": "suggested",
+   "question_kind": "cluster_timeseries",
+   "tools": [
+    "cluster_timeseries"
+   ],
+   "facts": [],
+   "answer": "How each module's share runs across the samples."
+  },
+  {
+   "id": "sugg-asv",
+   "group": "suggested",
+   "question_kind": "asv_detail",
+   "context": "asv",
+   "tools": [
+    "asv_detail"
+   ],
+   "facts": [
+    "top_asv_genus"
+   ],
+   "answer": "{top_asv} is {top_asv_genus}, in cluster {top_asv_cluster}."
+  },
+  {
+   "id": "sugg-neighbors",
+   "group": "suggested",
+   "question_kind": "neighbors",
+   "context": "asv",
+   "tools": [
+    "neighbors"
+   ],
+   "facts": [
+    "top_asv_n_neighbors"
+   ],
+   "answer": "{top_asv} has {top_asv_n_neighbors} linked ASVs."
+  },
+  {
+   "id": "sugg-trend",
+   "group": "suggested",
+   "question_kind": "trend_test",
+   "context": "asv",
+   "tools": [
+    "trend_test"
+   ],
+   "facts": [],
+   "answer": "Trend test result for {top_asv}."
+  },
+  {
+   "id": "sugg-cluster",
+   "group": "suggested",
+   "question_kind": "cluster_detail",
+   "context": "cluster",
+   "tools": [
+    "cluster_detail"
+   ],
+   "facts": [
+    "big_cluster_n"
+   ],
+   "answer": "Cluster {big_cluster} has {big_cluster_n} ASVs."
+  },
+  {
+   "id": "free-genus",
+   "group": "free",
+   "question": "Which genus does {top_asv} belong to?",
+   "kind": "andere",
+   "tools": [
+    "asv_detail",
+    "find_asv"
+   ],
+   "facts": [
+    "top_asv_genus"
+   ],
+   "answer": "{top_asv_genus}."
+  },
+  {
+   "id": "free-module-of",
+   "group": "free",
+   "question": "In which module is {top_asv}?",
+   "kind": "andere",
+   "tools": [
+    "asv_detail",
+    "find_asv"
+   ],
+   "facts": [
+    "top_asv_cluster"
+   ],
+   "answer": "Cluster {top_asv_cluster}."
+  },
+  {
+   "id": "free-neighbors",
+   "group": "free",
+   "question": "How many ASVs is {top_asv} linked to?",
+   "kind": "andere",
+   "tools": [
+    "neighbors",
+    "asv_detail"
+   ],
+   "facts": [
+    "top_asv_n_neighbors"
+   ],
+   "answer": "{top_asv_n_neighbors}."
+  },
+  {
+   "id": "free-genus-count",
+   "group": "free",
+   "question": "How many ASVs belong to {top_genus}?",
+   "kind": "andere",
+   "tools": [
+    "summarize_by_taxon",
+    "find_asv",
+    "taxa_composition"
+   ],
+   "facts": [
+    "top_genus_n"
+   ],
+   "answer": "{top_genus_n}."
+  },
+  {
+   "id": "free-cluster-size",
+   "group": "free",
+   "question": "How many ASVs are in cluster {big_cluster}?",
+   "kind": "andere",
+   "tools": [
+    "cluster_detail",
+    "find_asv",
+    "dataset_summary"
+   ],
+   "facts": [
+    "big_cluster_n"
+   ],
+   "answer": "{big_cluster_n}."
+  },
+  {
+   "id": "free-env",
+   "group": "free",
+   "question": "Which variables were measured alongside the samples?",
+   "kind": "andere",
+   "tools": [
+    "environment"
+   ],
+   "facts": [
+    "n_env_vars"
+   ],
+   "answer": "{n_env_vars} variables: {env_vars}."
+  },
+  {
+   "id": "trap-future",
+   "group": "trap",
+   "question": "What will the water temperature be in January 2040?",
+   "kind": "andere",
+   "tools": [],
+   "facts": [],
+   "answer": "The data do not say; no number."
+  },
+  {
+   "id": "trap-whales",
+   "group": "trap",
+   "question": "How many whales were counted in this dataset?",
+   "kind": "andere",
+   "tools": [],
+   "facts": [],
+   "answer": "The data hold no whale counts; no number."
+  },
+  {
+   "id": "stat-season",
+   "group": "stats",
+   "question": "Does the calendar month make a difference for {top_asv}?",
+   "kind": "andere",
+   "tools": [
+    "seasonality_test",
+    "asv_seasonality"
+   ],
+   "facts": [],
+   "answer": "The result of a seasonality test for {top_asv} (test, p-value), with the caveat if the series is too short."
+  },
+  {
+   "id": "stat-trend",
+   "group": "stats",
+   "question": "Is {top_asv} rising or falling over time?",
+   "kind": "andere",
+   "tools": [
+    "trend_test"
+   ],
+   "facts": [],
+   "answer": "The result of a trend test for {top_asv} (direction, p-value)."
+  },
+  {
+   "id": "stat-env",
+   "group": "stats",
+   "question": "Does {top_asv} go together with {env_var1}?",
+   "kind": "andere",
+   "tools": [
+    "environment_correlation",
+    "asv_drivers"
+   ],
+   "facts": [],
+   "answer": "The correlation of {top_asv} with {env_var1} (coefficient, p-value, lag if any)."
+  },
+  {
+   "id": "stat-pair",
+   "group": "stats",
+   "question": "Do {top_asv} and {second_asv} rise and fall together?",
+   "kind": "andere",
+   "tools": [
+    "pair_proportionality",
+    "edge"
+   ],
+   "facts": [],
+   "answer": "Their proportionality (rho) and whether they share a link in the network."
+  },
+  {
+   "id": "stat-group",
+   "group": "stats",
+   "question": "Is cluster {big_cluster} more abundant in the first half of the series than in the second?",
+   "kind": "andere",
+   "tools": [
+    "group_comparison_test",
+    "cluster_timeseries"
+   ],
+   "facts": [],
+   "answer": "A comparison test between the two halves for cluster {big_cluster}, or a plain statement that it cannot be done."
+  },
+  {
+   "id": "gap-diversity",
+   "group": "gap",
+   "question": "How does the Shannon diversity change across the samples?",
+   "kind": "andere",
+   "tools": [],
+   "facts": [],
+   "answer": "No tool computes diversity; the answer should say so and not invent values."
+  },
+  {
+   "id": "gap-keystone",
+   "group": "gap",
+   "question": "Which ASVs are keystone ASVs in this network?",
+   "kind": "andere",
+   "tools": [],
+   "facts": [],
+   "answer": "The keystone ASVs by MANTA's two criteria, or a plain statement that the assistant has no tool for it."
+  },
+  {
+   "id": "gap-function",
+   "group": "gap",
+   "question": "What ecological function does cluster {big_cluster} have?",
+   "kind": "andere",
+   "tools": [
+    "cluster_detail"
+   ],
+   "facts": [],
+   "answer": "Who is in cluster {big_cluster}; known functions per taxon only as general knowledge, never as the cluster's function."
+  }
+ ]
 }
