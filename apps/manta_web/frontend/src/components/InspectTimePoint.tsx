@@ -10,7 +10,7 @@ const PAGE = 50;
 const pct = (v: number | null) => (v == null ? "—" : `${(100 * v).toFixed(v < 0.001 ? 3 : 2)} %`);
 
 export default function InspectTimePoint({ datasetId, samples, sample, onSample, env, onOpenAsv,
-                                           chosen, marked, full, onAdd }: {
+                                           chosen, marked, full, colours, onAdd }: {
   datasetId: string;
   samples: SampleList["samples"];
   sample: string | null;
@@ -20,6 +20,7 @@ export default function InspectTimePoint({ datasetId, samples, sample, onSample,
   chosen: Set<string>;
   marked: string | null;
   full: boolean;
+  colours: Map<string, string>;
   onAdd: (kind: "asv" | "cluster", id: string) => void;
 }) {
   const modules = useModules();
@@ -131,9 +132,11 @@ export default function InspectTimePoint({ datasetId, samples, sample, onSample,
               {data.modules.map((m) => {
                 const an = modul === m.cluster;
                 const mark = marked === `cluster:${m.cluster}`;
+                const kurve = colours.get(`cluster:${m.cluster}`);
                 return (
-                  <li key={m.cluster} data-marked={mark || undefined}
-                    className={`flex items-center gap-1 rounded ${mark ? "ring-1 ring-accent" : ""}`}>
+                  <li key={m.cluster} data-marked={mark || undefined} data-curve={kurve ? true : undefined}
+                    className={`flex items-center gap-1 rounded ${mark ? "ring-1 ring-accent" : ""}`}
+                    style={kurve ? { outline: `2px solid ${kurve}`, outlineOffset: "-1px" } : undefined}>
                     <button data-testid="tp-module" aria-pressed={an}
                       onClick={() => setModul(an ? null : m.cluster)}
                       className={`flex-1 min-w-0 grid grid-cols-[6rem_1fr_4.5rem] items-center gap-2 rounded px-1 py-1 text-left ${an
