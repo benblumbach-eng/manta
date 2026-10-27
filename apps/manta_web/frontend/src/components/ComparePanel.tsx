@@ -550,7 +550,7 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
                       onClick={() => onToNetwork(
                         curves.filter((c) => c.kind === "cluster").map((c) => Number(c.id)),
                         curves.filter((c) => c.kind === "asv").map((c) => c.id))}>
-                      show in network</Button>
+                      filter network</Button>
                   )}
                   <Chooser label="period"
                     summary={zeitraum === "total" ? "total" : zeitraum === "custom" ? "from … to" : zeitraum}
