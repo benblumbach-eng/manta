@@ -228,7 +228,7 @@ stay `unassigned`.
 cd ~/manta && bash assistant.sh on
 ```
 
-This downloads the language model `qwen2.5:7b` (4.7 GB). On a computer with 8 GB of memory, use
+This downloads the language model `qwen3:8b` (5.2 GB). On a computer with 8 GB of memory, use
 the smaller `bash assistant.sh on qwen2.5:1.5b` (1 GB). Any
 [Ollama model with tool support](https://ollama.com/search?c=tools) works.
 `bash assistant.sh status` shows what is running, and `bash assistant.sh off` switches the

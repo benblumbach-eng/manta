@@ -852,19 +852,6 @@ export type ToolHelp = {
 
 export const getAgentStatus = () => get<AgentStatus>("/agent/status");
 export const getAgentTools = () => get<{ n: number; tools: ToolHelp[] }>("/agent/tools");
-export type ToolRun = {
-  tool: string; arguments: Record<string, unknown>; result: Record<string, unknown>;
-  provenance: AgentEvidence["provenance"] | null; error: string | null;
-};
-export const runTool = (name: string, args: Record<string, unknown>) =>
-  F(`${BASE}/agent/tools/${encodeURIComponent(name)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ arguments: args }),
-  }).then(async (r) => {
-    if (!r.ok) return failFrom(r);
-    return r.json() as Promise<ToolRun>;
-  });
 export type ChatTurn = {
   role: "user" | "assistant"; content: string;
   tools?: { name: string; arguments: Record<string, unknown> }[];
