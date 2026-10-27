@@ -380,7 +380,7 @@ export default function ImportDialog({ onClose, onStarted }:
         {source !== "otterout" && (
           <label className="flex items-center gap-2 text-xs" data-testid="import-keep-otter">
             <input type="checkbox" checked={keepOtter} onChange={(e) => setKeepOtter(e.target.checked)} />
-            Keep a copy of OTTER&rsquo;s input and output in ~/otter_sicherung on the server
+            Save OTTER input and output to ~/otter_sicherung
           </label>
         )}
 
