@@ -154,6 +154,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
       setSel({ kind: "asv", id: openAsvId });
   }
   const focusTimer = useRef<number | null>(null);
+  const letzterKlick = useRef<{ id: string; t: number } | null>(null);
   const roam = useRef<{ zoom: number; center: [number, number] } | null>(null);
   useEffect(() => () => { if (focusTimer.current) clearTimeout(focusTimer.current); }, []);
   useEffect(() => {
@@ -428,11 +429,9 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   }, [net, widthKind]);
   const edgeWidth = useCallback((e: NetEdge): number => {
     const v = edgeStrength(e);
-    if (v == null || ewMin == null || ewMax == null) return EDGE_W_MIN;
-    if (ewMax - ewMin < 1e-12) return 3;
-    // Draft D: three clear steps (thirds of the range) instead of a continuous width.
-    const t = (v - ewMin) / (ewMax - ewMin);
-    return t >= 2 / 3 ? 6 : t >= 1 / 3 ? 3 : 1;
+    if (v == null) return EDGE_W_MIN;
+    // Three fixed steps instead of a continuous width (named in the legend).
+    return v >= 0.9 ? 6 : v >= 0.8 ? 3 : 1;
   }, [edgeStrength, ewMin, ewMax]);
 
   const LABEL_AUTO_MAX = 60;
@@ -611,7 +610,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
           + `<br/><span style="opacity:.75">${ccm}</span>`
           + (edgeStrength(e) != null && ewMin != null && ewMax != null
             ? `<br/><span style="opacity:.75">line width = ${widthKind === "rejected" ? "NMI of the rejected direction" : widthKind === "ccm" ? "largest NMI" : "corr"} `
-              + `${edgeStrength(e)!.toFixed(3)} (fixed scale ${ewMin.toFixed(2)}–${ewMax.toFixed(2)})</span>`
+              + `${edgeStrength(e)!.toFixed(3)} (steps ≥ 0.9 · 0.8–0.9 · < 0.8)</span>`
             : "")
           + (isCross(e) ? "<br/>crosses clusters" : "")
           + `<br/><span style="opacity:.65">click to open this link</span>`;
@@ -752,11 +751,8 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   const thr = net?.thresholds;
 
   const sizePresent: boolean | null = net ? net.nodes.some((n) => n.size != null) : null;
-  const widthText = (ewMin != null && ewMax != null && net?.edge_width_legend)
-    ? (widthKind === "rejected" ? net.edge_width_legend.rejected
-       : widthKind === "ccm" ? net.edge_width_legend.ccm : net.edge_width_legend.con)
-        .replace("{min}", ewMin.toFixed(2)).replace("{max}", ewMax.toFixed(2))
-    : null;
+  const widthText = widthKind == null ? null
+    : `${widthKind === "corr" ? "r" : "NMI"} ≥ 0.9 · 0.8–0.9 · < 0.8`;
   const legend = useMemo(() => legendRows({
     nModules: net?.partition?.n_clusters ?? clusters.length,
     nCross: drawnCounts.cross,
@@ -875,7 +871,11 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     const inst = chartRef.current?.getEchartsInstance();
     const zr = (inst as any)?.getZr?.();
     if (!zr) return;
+    // Double-click on a point opens its ASV page. The first click re-renders the chart, so
+    // ECharts' node dblclick never fires; the canvas dblclick plus the last clicked point does.
     const h = (e: { target?: unknown }) => {
+      const k = letzterKlick.current;
+      if (k && Date.now() - k.t < 600) { letzterKlick.current = null; setTimeout(() => onOpenAsv(k.id), 0); return; }
       if (!e.target) { onShowNet(); resetZoom(); }
     };
     const einfach = (e: { target?: unknown }) => { if (!e.target) setRevolver(null); };
@@ -884,7 +884,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     return () => {
       try { zr.off("dblclick", h); zr.off("click", einfach); } catch { }
     };
-  }, [net, onShowNet, resetZoom]);
+  }, [net, onShowNet, resetZoom, onOpenAsv]);
 
   const capOf = (key: string) => caps?.items.find((i) => i.key === key);
   const timeCap = capOf("time_axis");
@@ -1039,7 +1039,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
             <>
               <span className="self-center text-xs text-fg-muted px-2" data-testid="explore-count">
                 {erkunden.size === 0 ? "search an ASV to start"
-                  : `${visibleNodes.length} of ${vis?.nodes.length ?? 0} ASVs · click: show partners · double-click: open ASV`}
+                  : `${visibleNodes.length} of ${vis?.nodes.length ?? 0} ASVs · click: show partners`}
               </span>
               <Button data-testid="explore-end" className="bg-raised"
                 onClick={() => setErkunden(null)}>show all</Button>
@@ -1102,9 +1102,6 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                   if (revolver) setZoomTick((t) => t + 1);
                 }
               },
-              dblclick: (p: any) => {
-                if (erkunden != null && p.dataType === "node") onOpenAsv(p.data.id);
-              },
               click: (p: any) => {
                 if (p.dataType === "node" && taxaMode) {
                   const id: string = p.data.id;
@@ -1119,12 +1116,12 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                   }
                 }
                 if (p.dataType === "node") {
+                  letzterKlick.current = { id: p.data.id, t: Date.now() };
                   if (focusTimer.current) {
                     clearTimeout(focusTimer.current); focusTimer.current = null;
                   }
                   setSel({ kind: "asv", id: p.data.id, focus: Date.now() });
                   if (erkunden != null) aufdecken(p.data.id);
-                  else onOpenAsv(p.data.id);
                 } else if (p.dataType === "edge" && p.data?.manta) {
                   onOpenEdge({ source: p.data.manta.source, target: p.data.manta.target, type: "con" });
                 }
