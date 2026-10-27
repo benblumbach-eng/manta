@@ -1484,6 +1484,31 @@ def samples(dataset_id: str):
     return {"dataset_id": dataset_id, "time_axis": _time_axis(dataset_id), "samples": rows}
 
 
+@app.get("/datasets/{dataset_id}/occurrence", dependencies=[Depends(visible_dataset)])
+def occurrence(dataset_id: str):
+    samples = _q("MATCH (s:Sample {dataset_id:$d}) RETURN s.sample_id AS sample, "
+                 "toString(s.date) AS date "
+                 "ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id", d=dataset_id)
+    index = {r["sample"]: i for i, r in enumerate(samples)}
+    rows = _q(
+        """
+        MATCH (s:Sample {dataset_id:$d})
+        OPTIONAL MATCH (s)-[all:HAS_ABUNDANCE]->(:ASV {dataset_id:$d})
+        WITH s, coalesce(s.analysed_reads_total, sum(all.count)) AS tot
+        WHERE tot > 0
+        MATCH (s)-[h:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d})
+        WHERE a.louvain_label IS NOT NULL AND h.count > 0
+        RETURN a.id AS id, s.sample_id AS sample, toFloat(h.count) / tot AS share
+        """,
+        d=dataset_id,
+    )
+    asvs: dict[str, list] = {}
+    for r in rows:
+        asvs.setdefault(r["id"], []).append([index[r["sample"]], r["share"]])
+    return {"dataset_id": dataset_id, "time_axis": _time_axis(dataset_id),
+            "dates": [r["date"] for r in samples], "asvs": asvs}
+
+
 def _asv_rel_abundance(dataset_id: str) -> dict[str, float]:
     return {r["id"]: r["rel"] for r in _q(
         """

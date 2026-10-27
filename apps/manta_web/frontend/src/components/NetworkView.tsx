@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import OwnModelSettings from "./OwnModelSettings";
 import { createPortal } from "react-dom";
 import ReactECharts from "echarts-for-react";
-import { getCapabilities, getCriterion2, getNetwork,
+import { getOccurrence, getCapabilities, getCriterion2, getNetwork,
          type Capabilities, type Criterion2Summary, type Dataset, type NetEdge, type NetNode, type Network } from "../api";
 import type { EdgeRef } from "../App";
 import type { InspectMark } from "./ComparePanel";
 import ClusterPanel from "./ClusterPanel";
 import PanelFrame from "./PanelFrame";
 import LegendPanel from "./LegendPanel";
+import FilterWindow, { WINDOW_TITLE, type WindowKind } from "./FilterWindow";
 import NetworkSidebar, { type ViewItem } from "./NetworkSidebar";
 import type { ExtraView } from "../extraViews";
 import ThemeSwitch, { type Theme } from "./ThemeSwitch";
@@ -27,7 +28,8 @@ import ErrorNotice from "./ErrorNotice";
 import { esc, fmtP } from "../format";
 import { chainedCounts, clearKind, computeVisible, decodeFilters, emptyFilters, encodeFilters,
          hiddenBy, isActive, legendRows, thresholdLine, FILTER_KINDS,
-         type Filters, type FilterKind, type KeystoneParams, KEYSTONE_DEFAULTS, KEYSTONE_LABEL, loadKeystone, saveKeystone, layerLabel } from "../networkFilters";
+         type Filters, type FilterKind, type KeystoneParams, KEYSTONE_DEFAULTS, KEYSTONE_LABEL, loadKeystone, saveKeystone, layerLabel,
+         occurrenceLabel, rangeLabel, type OccPoint } from "../networkFilters";
 
 const COLLIDE_MARGIN = 1.5;
 const COLLIDE_ITERATIONS = 80;
@@ -230,9 +232,29 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   const keyIds = useMemo(() => (crit === 1 ? c1Ids : new Set(c2?.ids ?? [])), [c1Ids, c2, crit]);
   const keyLabel = KEYSTONE_LABEL[crit];
 
+  const [filterWin, setFilterWin] = useState<WindowKind | null>(null);
+  const [dates, setDates] = useState<string[]>([]);
+  const [occ, setOcc] = useState<Map<string, OccPoint[]> | null>(null);
+  const [occErr, setOccErr] = useState<unknown>(null);
+  useEffect(() => { setOcc(null); setDates([]); setOccErr(null); }, [net]);
+  const occWanted = !!net && (filterWin === "occurrence" || filters.occurrence != null);
+  useEffect(() => {
+    if (!occWanted || occ || occErr) return;
+    let aktiv = true;
+    getOccurrence(dataset.dataset_id).then((o) => {
+      if (!aktiv) return;
+      const ds = o.dates.map((d) => d ?? "");
+      setDates(ds.filter(Boolean));
+      setOcc(new Map(Object.entries(o.asvs).map(([id, pts]) =>
+        [id, pts.filter(([i]) => ds[i]).map(([i, share]) => ({ date: ds[i], share }))])));
+    }).catch((e) => { if (aktiv) setOccErr(e); });
+    return () => { aktiv = false; };
+  }, [occWanted, occ, occErr, dataset.dataset_id]);
+  const occLoading = filters.occurrence != null && occ == null;
+
   const vis = useMemo(
-    () => (net ? computeVisible(net, filters, keyIds) : null),
-    [net, filters, keyIds]);
+    () => (net ? computeVisible(net, filters, keyIds, occ) : null),
+    [net, filters, keyIds, occ]);
   // Draft G: explore from one ASV; each click on a point reveals its neighbours.
   const [erkunden, setErkunden] = useState<Set<string> | null>(null);
   const [exploreOn, setExploreOn] = useState(false);
@@ -382,8 +404,8 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     () => (filters.asvs?.ids ?? []).filter((id) => !allIds.has(id)),
     [filters.asvs, allIds]);
   const chipCounts = useMemo(
-    () => (net ? chainedCounts(net, filters, keyIds, order) : new Map<FilterKind, number>()),
-    [net, filters, keyIds, order]);
+    () => (net ? chainedCounts(net, filters, keyIds, order, occ) : new Map<FilterKind, number>()),
+    [net, filters, keyIds, order, occ]);
 
   const selMarked = useMemo(() => {
     if (!sel) return new Set<string>();
@@ -414,7 +436,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     if (!net || !sel || sel.kind !== "asv" || visibleIds.has(sel.id)) return null;
     const n = net.nodes.find((x) => x.id === sel.id);
     if (!n) return null;
-    const kinds = hiddenBy(net, filters, keyIds, n.id);
+    const kinds = hiddenBy(net, filters, keyIds, n.id, occ);
     if (!kinds.length) return null;
     const label = (k: FilterKind): string => {
       switch (k) {
@@ -423,10 +445,14 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         case "taxon": return filters.taxon ? `${filters.taxon.value} (${filters.taxon.rank})` : "taxon";
         case "asvs": return "ASV selection";
         case "presence": return `present in ≥ ${filters.presence ?? 1} samples`;
-        case "abundance": return `abundance ≥ ${filters.abundance ?? 0} %`;
+        case "abundance": return `abundance ${rangeLabel(filters.abundance, filters.abundanceMax, (v) => `${v} %`)}`;
         case "layer": return layerLabel(filters.layers);
         case "cross": return "crossing links only";
-        case "strength": return `r ≥ ${filters.strength?.toFixed(2) ?? ""}`;
+        case "strength": return [
+          filters.strength != null || filters.strengthMax != null
+            ? `r ${rangeLabel(filters.strength, filters.strengthMax, String)}` : null,
+          filters.nmi != null ? `NMI ≥ ${filters.nmi}` : null].filter(Boolean).join(" · ");
+        case "occurrence": return filters.occurrence ? occurrenceLabel(filters.occurrence) : "occurrence";
       }
     };
     return { labels: kinds.map(label), kinds };
@@ -809,8 +835,12 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         case "asvs": return `${(filters.asvs?.ids.length ?? 0) - unknownAsvIds.length} selected ASVs`
           + (filters.asvs?.neighbors ? " + neighbours" : "");
         case "presence": return `present in ≥ ${filters.presence ?? 1} of ${nSamples} samples`;
-        case "abundance": return `mean relative abundance ≥ ${filters.abundance ?? 0} %`;
-        case "strength": return `r ≥ ${filters.strength?.toFixed(2) ?? ""}`;
+        case "abundance": return `mean relative abundance ${rangeLabel(filters.abundance, filters.abundanceMax, (v) => `${v} %`)}`;
+        case "strength": return [
+          filters.strength != null || filters.strengthMax != null
+            ? `r ${rangeLabel(filters.strength, filters.strengthMax, String)}` : null,
+          filters.nmi != null ? `NMI ≥ ${filters.nmi}` : null].filter(Boolean).join(" · ");
+        case "occurrence": return filters.occurrence ? occurrenceLabel(filters.occurrence) : "occurrence";
       }
     }).join(" · ");
     return `Filters: ${txt} — ${visibleNodes.length} of ${net.nodes.length} ASVs shown`;
@@ -969,6 +999,8 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         onPickTaxon={(rank, value) => setSel({ kind: "taxon", rank, value })}
         onPickCluster={(label) => setSel({ kind: "cluster", label })}
         onOpenClusterPanel={(label) => setSelectedCluster(label)}
+        onOpenFilter={setFilterWin}
+        occurrenceReason={timeCap && !timeCap.available ? timeCap.detail : null}
       />
 
       <div className="flex-1 relative" data-testid="network-canvas" data-layout-hash={layoutHash}
@@ -982,7 +1014,13 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         {err != null && <ErrorNotice error={err} what="Could not load the network."
           onRetry={() => { setFrozen(null); setReloadKey((k) => k + 1); }} />}
 
-        {net && drawnCounts.nodes === 0 && erkunden == null && (
+        {occLoading && occErr == null && (
+          <div className="absolute inset-x-0 top-14 z-10 flex justify-center pointer-events-none">
+            <StateNotice state="loading" inline>loading occurrence …</StateNotice>
+          </div>
+        )}
+
+        {net && drawnCounts.nodes === 0 && !occLoading && erkunden == null && (
           <div className="absolute inset-x-0 top-14 z-10 flex justify-center pointer-events-none">
             <p data-testid="canvas-empty"
               className="pointer-events-auto rounded border border-line-strong bg-overlay px-3 py-2 text-xs text-fg">
@@ -1162,6 +1200,15 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
           err == null && <div className="h-full grid place-items-center"><StateNotice state="loading" inline>loading network …</StateNotice></div>
         )}
       </div>
+
+      {filterWin && net && (
+        <PanelFrame id="filter" title={WINDOW_TITLE[filterWin]} onClose={() => setFilterWin(null)}
+          defaultWidth={460}>
+          <FilterWindow key={filterWin} kind={filterWin} net={net} filters={filters}
+            onFilters={patchFilters} dates={dates} nSamples={nSamples}
+            datasetId={dataset.dataset_id} occError={occErr} />
+        </PanelFrame>
+      )}
 
       {legendeOffen && (
         <PanelFrame id="legend" title="Legend" onClose={() => setLegendeOffen(false)} defaultWidth={440}>
