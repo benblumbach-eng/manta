@@ -257,6 +257,31 @@ def dataset_summary(dataset_id: str) -> dict:
     return _envelope("dataset_summary", q, {"dataset_id": dataset_id}, out, len(rows))
 
 
+def keystone_asvs(dataset_id: str) -> dict:
+    _require_dataset(dataset_id)
+    c2 = semantics.criterion2(_q, dataset_id)
+    module = {a: v["module"] for a, v in c2["nodes"].items()}
+    c1 = sorted(a for a, v in c2["nodes"].items() if v["reason"] != "no_ccm_link")
+    beide = [a for a in c1 if a in set(c2["ids"])]
+    out = {
+        "criterion1": {"label": ("at least one significant CCM link "
+                                 f"(permutation p < {semantics.CRITERION2_CCM_ALPHA:g})"),
+                       "n": len(c1), "asvs": [{"asv_id": a, "module": module[a]} for a in c1]},
+        "criterion2": {"label": semantics.CRITERION2_LABEL, "n": len(c2["ids"]),
+                       "asvs": [{"asv_id": a, "module": module[a], "q": c2["nodes"][a]["q"]}
+                                for a in c2["ids"]],
+                       "statement": semantics.criterion2_statement(c2)},
+        "both": beide,
+        "n_network": c2["n_network"],
+        "criterion3": ("not available: presence in a stable state of the energy landscape is "
+                       "not computed in MANTA"),
+        "not_keystone": semantics.CRITERION2_NOT_KEYSTONE,
+        "source": semantics.CRITERION2_SOURCE,
+    }
+    return _envelope("keystone_asvs", "criterion2 (CCM directions + Louvain modules)",
+                     {"dataset_id": dataset_id}, out, len(c2["nodes"]))
+
+
 ORDERED_BY_READS = ("read_count_total: this ASV's reads summed over all samples of the dataset "
                     "(computed from the stored values, for network and non-network ASVs alike)")
 TRANSFORMED_NO_SUM = (
@@ -739,6 +764,8 @@ def cluster_detail(dataset_id: str, cluster: int) -> dict:
                      "'module' is justified."),
         },
         "connected_clusters": partners,
+        "connected_clusters_note": ("n_edges = co-occurrence (CON) links to that cluster: "
+                                    "undirected correlations, not CCM links."),
         "environment_profile": semantics.cluster_environment_profile(_q, dataset_id, cluster),
         "seasonal": semantics.frequency(
             _q, dataset_id, semantics.cluster_series(_q, dataset_id, cluster),

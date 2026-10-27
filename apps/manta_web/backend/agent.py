@@ -159,6 +159,9 @@ separate from noise? Is a value unusual against the others from the same call? S
 reading invites a wrong conclusion, say what it does NOT show. If nothing stands out, say that
 plainly; never manufacture significance.
 
+Answer exactly the question asked, in a few sentences: no headings, no bullet lists, no
+overview of everything a tool returned.
+
 Stop when the finding is stated.
 
 The difference, in one example:
@@ -956,7 +959,9 @@ def run(question: str, dataset_id: str | None = None, model: str | None = None,
                              and isinstance(z.get("content"), str)]
     korrigiert = False
     gerufen: set[str] = set()
-    ohne_werkzeuge = False
+    # a suggested question is answered from its own tool only (the run showed qwen3 drifting
+    # off to other tools and answering a different question)
+    ohne_werkzeuge = vorgegeben is not None
 
     for _step in range(MAX_STEPS):
         t0 = time.time()

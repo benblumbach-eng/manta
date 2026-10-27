@@ -61,7 +61,7 @@ const TOOL_GROUPS: { title: string; names: string[] }[] = [
                               "asv_abundance_series", "neighbors", "asv_drivers"] },
   { title: "Modules", names: ["cluster_detail", "cluster_timeseries",
                               "cluster_year_overview", "cluster_interannual_variability"] },
-  { title: "Links", names: ["edge", "cluster_bridges", "cluster_network"] },
+  { title: "Links", names: ["edge", "cluster_bridges", "cluster_network", "keystone_asvs"] },
   { title: "Environment", names: ["environment", "env_variable_links", "cluster_env_links",
                                   "environment_correlation"] },
   { title: "Statistics", names: ["seasonality_test", "trend_test", "pair_proportionality",
