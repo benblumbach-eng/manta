@@ -24,10 +24,14 @@ export function saveKeystone(ds: string, k: KeystoneParams) {
 }
 
 export type FilterKind = "modules" | "layer" | "cross" | "c2" | "taxon" | "asvs"
-  | "presence" | "abundance" | "strength";
+  | "presence" | "abundance" | "strength" | "occurrence";
 
 export type TaxonFilter = { rank: string; value: string };
 export type AsvFilter = { ids: string[]; neighbors: boolean };
+export type OccurrenceFilter = {
+  from: string | null; to: string | null; months: number[]; share: number; min: number;
+};
+export type OccPoint = { date: string; share: number };
 
 export type Filters = {
   hidden: Set<number>;
@@ -39,6 +43,10 @@ export type Filters = {
   presence: number | null;
   abundance: number | null;
   strength: number | null;
+  abundanceMax: number | null;
+  strengthMax: number | null;
+  nmi: number | null;
+  occurrence: OccurrenceFilter | null;
 };
 
 export const DEFAULT_LAYERS = { con: true, ccm: true, rejected: false } as const;
@@ -46,6 +54,7 @@ export const DEFAULT_LAYERS = { con: true, ccm: true, rejected: false } as const
 export const emptyFilters = (): Filters => ({
   hidden: new Set(), layers: { ...DEFAULT_LAYERS }, crossOnly: false, c2Only: false,
   taxon: null, asvs: null, presence: null, abundance: null, strength: null,
+  abundanceMax: null, strengthMax: null, nmi: null, occurrence: null,
 });
 
 export const layersDefault = (l: Filters["layers"]): boolean =>
@@ -65,7 +74,8 @@ export function layerLabel(l: Filters["layers"]): string {
 }
 
 export const FILTER_KINDS: FilterKind[] = ["modules", "layer", "cross", "c2", "taxon",
-                                           "asvs", "presence", "abundance", "strength"];
+                                           "asvs", "presence", "abundance", "strength",
+                                           "occurrence"];
 
 export const isActive = (f: Filters, k: FilterKind): boolean => {
   switch (k) {
@@ -76,8 +86,9 @@ export const isActive = (f: Filters, k: FilterKind): boolean => {
     case "taxon": return f.taxon != null;
     case "asvs": return (f.asvs?.ids.length ?? 0) > 0;
     case "presence": return f.presence != null;
-    case "abundance": return f.abundance != null;
-    case "strength": return f.strength != null;
+    case "abundance": return f.abundance != null || f.abundanceMax != null;
+    case "strength": return f.strength != null || f.strengthMax != null || f.nmi != null;
+    case "occurrence": return f.occurrence != null;
   }
 };
 
@@ -90,8 +101,10 @@ export const takeKind = (dst: Filters, src: Filters, k: FilterKind): Filters => 
     case "taxon": return { ...dst, taxon: src.taxon };
     case "asvs": return { ...dst, asvs: src.asvs };
     case "presence": return { ...dst, presence: src.presence };
-    case "abundance": return { ...dst, abundance: src.abundance };
-    case "strength": return { ...dst, strength: src.strength };
+    case "abundance": return { ...dst, abundance: src.abundance, abundanceMax: src.abundanceMax };
+    case "strength": return { ...dst, strength: src.strength, strengthMax: src.strengthMax,
+                                         nmi: src.nmi };
+    case "occurrence": return { ...dst, occurrence: src.occurrence };
   }
 };
 
@@ -108,7 +121,29 @@ const hasRejected = (e: NetEdge) => (e.rejected_dirs ?? 0) > 0;
 
 export const ABUNDANCE_STEPS = [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5];
 
-export function computeVisible(net: Network, f: Filters, c2Ids: Set<string>): Visible {
+export function occurrenceCount(pts: OccPoint[], o: OccurrenceFilter): number {
+  return pts.filter((p) => (o.from == null || p.date >= o.from) && (o.to == null || p.date <= o.to)
+    && (o.months.length === 0 || o.months.includes(Number(p.date.slice(5, 7))))
+    && p.share > 0 && p.share * 100 >= o.share).length;
+}
+
+const MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+export function rangeLabel(lo: number | null, hi: number | null, fmt: (v: number) => string): string {
+  if (lo != null && hi != null) return `${fmt(lo)} – ${fmt(hi)}`;
+  return lo != null ? `≥ ${fmt(lo)}` : `≤ ${fmt(hi ?? 0)}`;
+}
+
+export function occurrenceLabel(o: OccurrenceFilter): string {
+  const parts: string[] = [];
+  if (o.from || o.to) parts.push(`${o.from ?? "start"} – ${o.to ?? "end"}`);
+  if (o.months.length) parts.push(o.months.map((m) => MONTH_ABBR[m - 1]).join(","));
+  return `present ${parts.join(" · ") || "anytime"} · share ≥ ${o.share} %`
+    + (o.min > 1 ? ` · ≥ ${o.min} samples` : "");
+}
+
+export function computeVisible(net: Network, f: Filters, c2Ids: Set<string>,
+                               occ?: Map<string, OccPoint[]> | null): Visible {
   const asvSet = new Set(f.asvs?.ids ?? []);
   const neighborSet = new Set<string>();
   if (f.asvs?.neighbors && asvSet.size) {
@@ -127,6 +162,9 @@ export function computeVisible(net: Network, f: Filters, c2Ids: Set<string>): Vi
         && !(f.asvs!.neighbors && neighborSet.has(n.id))) return false;
     if (f.presence != null && (n.n_samples_present ?? 0) < f.presence) return false;
     if (f.abundance != null && (n.rel_abundance ?? 0) * 100 < f.abundance) return false;
+    if (f.abundanceMax != null && (n.rel_abundance ?? 0) * 100 > f.abundanceMax) return false;
+    if (f.occurrence && occ
+        && occurrenceCount(occ.get(n.id) ?? [], f.occurrence) < f.occurrence.min) return false;
     return true;
   };
   const nodes = net.nodes.filter(pass);
@@ -134,7 +172,10 @@ export function computeVisible(net: Network, f: Filters, c2Ids: Set<string>): Vi
   const clusterOf = new Map(net.nodes.map((n) => [n.id, n.cluster]));
   const isCross = (e: NetEdge) => clusterOf.get(e.source) !== clusterOf.get(e.target);
   const strengthPass = (e: NetEdge): boolean =>
-    f.strength == null || (e.corr != null && Math.abs(e.corr) >= f.strength);
+    (f.strength == null || (e.corr != null && Math.abs(e.corr) >= f.strength))
+    && (f.strengthMax == null || (e.corr != null && Math.abs(e.corr) <= f.strengthMax))
+    && (f.nmi == null || Math.max(e.ccm_forward ? e.nmi_forward ?? 0 : 0,
+                                  e.ccm_backward ? e.nmi_backward ?? 0 : 0) >= f.nmi);
   const edgesInView = net.edges.filter((e) => ids.has(e.source) && ids.has(e.target));
   const L = f.layers;
   const layerPass = (e: NetEdge): boolean =>
@@ -143,16 +184,17 @@ export function computeVisible(net: Network, f: Filters, c2Ids: Set<string>): Vi
     (e) => (!f.crossOnly || isCross(e)) && layerPass(e) && strengthPass(e));
   const layerRestricts = !L.con && (L.ccm || L.rejected);
   const edgeFilterActive = f.crossOnly || layerRestricts
-    || f.strength != null;
+    || f.strength != null || f.strengthMax != null || f.nmi != null;
   if (!edgeFilterActive) return { nodes, edges, edgesInView };
   const linked = new Set<string>();
   edges.forEach((e) => { linked.add(e.source); linked.add(e.target); });
   return { nodes: nodes.filter((n) => linked.has(n.id)), edges, edgesInView };
 }
 
-export function hiddenBy(net: Network, f: Filters, c2Ids: Set<string>, id: string): FilterKind[] {
+export function hiddenBy(net: Network, f: Filters, c2Ids: Set<string>, id: string,
+                         occ?: Map<string, OccPoint[]> | null): FilterKind[] {
   if (!net.nodes.some((n) => n.id === id)) return [];
-  const sichtbar = (g: Filters) => computeVisible(net, g, c2Ids).nodes.some((n) => n.id === id);
+  const sichtbar = (g: Filters) => computeVisible(net, g, c2Ids, occ).nodes.some((n) => n.id === id);
   if (sichtbar(f)) return [];
   const aktiv = FILTER_KINDS.filter((k) => isActive(f, k));
   const schuld = aktiv.filter((k) => !sichtbar(takeKind(emptyFilters(), f, k)));
@@ -167,12 +209,13 @@ export function hiddenBy(net: Network, f: Filters, c2Ids: Set<string>, id: strin
 }
 
 export function chainedCounts(net: Network, f: Filters, c2Ids: Set<string>,
-                              order: FilterKind[]): Map<FilterKind, number> {
+                              order: FilterKind[],
+                              occ?: Map<string, OccPoint[]> | null): Map<FilterKind, number> {
   const m = new Map<FilterKind, number>();
   let partial = emptyFilters();
   for (const k of order) {
     partial = takeKind(partial, f, k);
-    m.set(k, computeVisible(net, partial, c2Ids).nodes.length);
+    m.set(k, computeVisible(net, partial, c2Ids, occ).nodes.length);
   }
   return m;
 }
@@ -192,6 +235,13 @@ export function encodeFilters(f: Filters): string {
   if (f.presence != null) seg.push(`pr-${f.presence}`);
   if (f.abundance != null) seg.push(`ab-${f.abundance}`);
   if (f.strength != null) seg.push(`r-${f.strength}`);
+  if (f.abundanceMax != null) seg.push(`abx-${f.abundanceMax}`);
+  if (f.strengthMax != null) seg.push(`rx-${f.strengthMax}`);
+  if (f.nmi != null) seg.push(`nmi-${f.nmi}`);
+  if (f.occurrence) {
+    const o = f.occurrence;
+    seg.push("o-" + [o.from ?? "", o.to ?? "", o.months.join("."), o.share, o.min].join("_"));
+  }
   return seg.join(";");
 }
 
@@ -220,6 +270,22 @@ export function decodeFilters(s: string | null): Filters {
     } else if (/^ab-[\d.]+$/.test(seg)) {
       const v = Number(seg.slice(3));
       if (v > 0) f.abundance = v;
+    } else if (/^abx-[\d.]+$/.test(seg)) {
+      const v = Number(seg.slice(4));
+      if (v > 0) f.abundanceMax = v;
+    } else if (/^rx-[\d.]+$/.test(seg)) {
+      const v = Number(seg.slice(3));
+      if (v > 0 && v <= 1) f.strengthMax = v;
+    } else if (/^nmi-[\d.]+$/.test(seg)) {
+      const v = Number(seg.slice(4));
+      if (v >= 0 && v <= 1) f.nmi = v;
+    } else if (seg.startsWith("o-")) {
+      const [from, to, months, share, min] = seg.slice(2).split("_");
+      const sh = Number(share), mi = Number(min);
+      if (Number.isFinite(sh) && sh >= 0 && Number.isInteger(mi) && mi >= 1) {
+        f.occurrence = { from: from || null, to: to || null, share: sh, min: mi,
+          months: (months ?? "").split(".").map(Number).filter((m) => m >= 1 && m <= 12) };
+      }
     } else if (/^r-[\d.]+$/.test(seg)) {
       const v = Number(seg.slice(2));
       if (v > 0 && v <= 1) f.strength = v;

@@ -1484,6 +1484,31 @@ def samples(dataset_id: str):
     return {"dataset_id": dataset_id, "time_axis": _time_axis(dataset_id), "samples": rows}
 
 
+@app.get("/datasets/{dataset_id}/occurrence", dependencies=[Depends(visible_dataset)])
+def occurrence(dataset_id: str):
+    samples = _q("MATCH (s:Sample {dataset_id:$d}) RETURN s.sample_id AS sample, "
+                 "toString(s.date) AS date "
+                 "ORDER BY s.date, s.same_day_index, s.ordinal_index, s.sample_id", d=dataset_id)
+    index = {r["sample"]: i for i, r in enumerate(samples)}
+    rows = _q(
+        """
+        MATCH (s:Sample {dataset_id:$d})
+        OPTIONAL MATCH (s)-[all:HAS_ABUNDANCE]->(:ASV {dataset_id:$d})
+        WITH s, coalesce(s.analysed_reads_total, sum(all.count)) AS tot
+        WHERE tot > 0
+        MATCH (s)-[h:HAS_ABUNDANCE]->(a:ASV {dataset_id:$d})
+        WHERE a.louvain_label IS NOT NULL AND h.count > 0
+        RETURN a.id AS id, s.sample_id AS sample, toFloat(h.count) / tot AS share
+        """,
+        d=dataset_id,
+    )
+    asvs: dict[str, list] = {}
+    for r in rows:
+        asvs.setdefault(r["id"], []).append([index[r["sample"]], r["share"]])
+    return {"dataset_id": dataset_id, "time_axis": _time_axis(dataset_id),
+            "dates": [r["date"] for r in samples], "asvs": asvs}
+
+
 def _asv_rel_abundance(dataset_id: str) -> dict[str, float]:
     return {r["id"]: r["rel"] for r in _q(
         """
@@ -2690,7 +2715,7 @@ def asv_detail(dataset_id: str, asv_id: str):
             "quantity": _quantity(dataset_id),
             **seasonal,
         },
-        "neighbors": {"con": con_n, "ccm": ccm_n},
+        "neighbors": {"con": con_n, "ccm": ccm_n, "directions": _neighbour_directions(dataset_id, asv_id)},
         "criterion2": semantics.criterion2_asv(semantics.criterion2(_q, dataset_id), asv_id),
         "drivers": semantics.asv_drivers(_q, dataset_id, asv_id),
         "bild": None,
@@ -2845,6 +2870,23 @@ def cluster(dataset_id: str, louvain_label: int):
         "cohesion": cohesion,
         "bridge_partners": partners,
     }
+
+
+def _neighbour_directions(dataset_id: str, asv_id: str) -> dict:
+    """Per partner and direction the tested CCM result: NMI, p and kept/rejected."""
+    rows = _q("MATCH (a:ASV {id:$id, dataset_id:$d})-[r:INFLUENCES|CCM_REJECTED {dataset_id:$d}]-(b:ASV) "
+              "RETURN b.id AS id, type(r) AS rel, startNode(r) = a AS raus, r.nmi AS nmi, "
+              "r.p_value AS p_value", d=dataset_id, id=asv_id)
+    out: dict[str, dict] = {}
+    for r in rows:
+        seite = "out" if r["raus"] else "in"
+        neu = {"nmi": r["nmi"], "p_value": r["p_value"],
+               "decision": "kept" if r["rel"] == "INFLUENCES" else "rejected"}
+        alt = out.setdefault(r["id"], {}).get(seite)
+        rang = lambda x: (x["decision"] == "kept", x["nmi"] or 0.0)
+        if alt is None or rang(alt) < rang(neu):
+            out[r["id"]][seite] = neu
+    return out
 
 
 @app.get("/datasets/{dataset_id}/wheel", dependencies=[Depends(visible_dataset)])
