@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
-import { getAsv, getAsvList, getCluster, getEnvironment, getModules, getSamples,
-         type Environment, type ModuleLabel, type SampleList } from "../api";
+import { getAsv, getAsvList, getCluster, getEdge, getEnvironment, getModules, getSamples,
+         type EdgeDetail, type Environment, type ModuleLabel, type SampleList } from "../api";
 import { Chooser, ChooserRow, Segmented } from "./controls";
 import InfoTip from "./InfoTip";
+import { Button } from "./ui";
 import { PanelHeader } from "./PanelFrame";
 import ProvenanceFooter from "./ProvenanceFooter";
 import ErrorNotice from "./ErrorNotice";
@@ -14,6 +15,7 @@ import { chartTooltip, FONT, useTokens } from "../design/tokens";
 import { seriesColour } from "../design/dataColours";
 import { esc } from "../format";
 import { useNearestPointClick } from "../chartClick";
+import type { EdgeRef } from "../App";
 
 
 const MAX_CURVES = 6;
@@ -23,9 +25,10 @@ const MONATE = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 type Kind = "asv" | "cluster" | "env";
 export type InspectMark = { kind: "asv" | "cluster"; id: string };
 type Punkt = { t: number; date: string; value: number | null };
+type Partner = { id: string; corr?: number; nmi?: number; con: boolean; ccm: boolean };
 type Curve = {
   key: string; kind: Kind; id: string; label: string; sub: string | null;
-  unit: string | null;
+  unit: string | null; partners?: Partner[];
   points: Punkt[];
 };
 type Tab = "time" | "point";
@@ -40,13 +43,44 @@ const ausPunkten = (rohe: { date: string | null; value: number | null }[]): Punk
     .filter((p) => Number.isFinite(p.t))
     .sort((a, b) => a.t - b.t);
 
+const partnerVon = (n: { con: { id: string; corr?: number }[]; ccm: { id: string; nmi?: number }[] }) => {
+  const m = new Map<string, Partner>();
+  for (const x of n.con) m.set(x.id, { id: x.id, corr: x.corr, con: true, ccm: false });
+  for (const x of n.ccm) {
+    const v = m.get(x.id);
+    if (v) { v.ccm = true; v.nmi = x.nmi; } else m.set(x.id, { id: x.id, nmi: x.nmi, con: false, ccm: true });
+  }
+  return [...m.values()].sort((a, b) => (b.corr ?? b.nmi ?? 0) - (a.corr ?? a.nmi ?? 0));
+};
+
+// The series rebuilt from Fourier coefficients 1..fc-1 (the pattern the link's r compares),
+// plus the mean so it sits on the measured curve.
+const rhythmus = (vs: number[], fc: number) => {
+  const n = vs.length;
+  if (!n) return [];
+  const mean = vs.reduce((a, b) => a + b, 0) / n;
+  const ks = new Set<number>();
+  for (let k = 1; k < fc; k++) { ks.add(k % n); ks.add((n - k) % n); }
+  ks.delete(0);
+  const co = [...ks].map((k) => {
+    let re = 0, im = 0;
+    vs.forEach((v, t) => { re += v * Math.cos(2 * Math.PI * k * t / n); im -= v * Math.sin(2 * Math.PI * k * t / n); });
+    return [k, re, im] as const;
+  });
+  return vs.map((_, t) => mean + co.reduce((acc, [k, re, im]) =>
+    acc + re * Math.cos(2 * Math.PI * k * t / n) - im * Math.sin(2 * Math.PI * k * t / n), 0) / n);
+};
+
 export default function ComparePanel({ datasetId, initialAsvId, initialSample, mark, sampleTick,
-                                       onClose, onOpenAsv }: {
+                                       link, onOpenEdge, onToNetwork, onClose, onOpenAsv }: {
   datasetId: string;
   initialAsvId?: string;
   initialSample?: string;
   mark?: InspectMark;
   sampleTick?: number;
+  link?: EdgeRef;
+  onOpenEdge?: (e: EdgeRef) => void;
+  onToNetwork?: (modules: number[], asvs: string[]) => void;
   onClose: () => void;
   onOpenAsv: (id: string) => void;
 }) {
@@ -137,6 +171,7 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
     if (kind === "asv") {
       getAsv(datasetId, id).then((d) => anfuegen({
         key, kind, id, label: id, sub: d.lineage?.genus ?? null, unit: null,
+        partners: partnerVon(d.neighbors),
         points: ausPunkten(d.frequency.points.map((p) => ({ date: p.date, value: p.share }))),
       })).catch((e) => setErr(e));
     } else if (kind === "cluster") {
@@ -169,6 +204,45 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
     setMarkiert(`${mark.kind}:${mark.id}`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mark?.kind, mark?.id, sampleTick]);
+
+  // Every pair of ASV curves that is linked in the network gets its link values.
+  const paare = useMemo(() => {
+    const asvs = curves.filter((c) => c.kind === "asv");
+    const out: { a: string; b: string; type: "con" | "ccm" }[] = [];
+    asvs.forEach((c, i) => asvs.slice(i + 1).forEach((d) => {
+      const p = c.partners?.find((x) => x.id === d.id);
+      if (p) out.push({ a: c.id, b: d.id, type: p.con ? "con" : "ccm" });
+    }));
+    return out;
+  }, [curves]);
+  const paarKey = paare.map((x) => `${x.a}|${x.b}`).join(",");
+  const [links, setLinks] = useState<Record<string, EdgeDetail>>({});
+  useEffect(() => {
+    let live = true;
+    for (const x of paare) {
+      const k = `${x.a}|${x.b}`;
+      if (links[k]) continue;
+      getEdge(datasetId, x.a, x.b, x.type)
+        .then((d) => { if (live) setLinks((cur) => ({ ...cur, [k]: d })); }).catch(() => {});
+    }
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [datasetId, paarKey]);
+  const [zeigRhythmus, setZeigRhythmus] = useState(true);
+  const fc = Object.values(links)[0]?.pattern?.fft_coeffs ?? 14;
+  const imRhythmus = useMemo(() => new Set(paare.filter((x) => x.type === "con")
+    .flatMap((x) => [x.a, x.b])), [paare]);
+
+  useEffect(() => {
+    if (!link) return;
+    setTab("time");
+    Promise.all([link.source, link.target].map((id) => getAsv(datasetId, id).then((d): Curve => ({
+      key: `asv:${id}`, kind: "asv", id, label: id, sub: d.lineage?.genus ?? null, unit: null,
+      partners: partnerVon(d.neighbors), points: ausPunkten(d.frequency.points.map((p) => ({ date: p.date, value: p.share }))),
+    })))).then((zwei) => setCurves((cur) => [...cur.filter((c) => c.kind !== "asv"), ...zwei]))
+      .catch((e) => setErr(e));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [link?.source, link?.target, link?.type, sampleTick]);
 
   const jahre = useMemo(() => {
     const j = new Set<string>();
@@ -273,6 +347,19 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
             } : {}),
           };
         }),
+        ...(zeigRhythmus ? curves.map((c, i) => {
+          if (c.kind !== "asv" || !imRhythmus.has(c.id)) return null;
+          const voll = c.points.filter((p) => p.value != null);
+          const rh = rhythmus(voll.map((p) => p.value as number), fc);
+          const farbe = seriesColour(i, tok.light);
+          return {
+            name: `${c.label} rhythm`, type: "line" as const, showSymbol: false, silent: true,
+            tooltip: { show: false }, z: 1,
+            data: voll.map((p, k) => [p.t, genormt ? (spitze[i] > 0 ? rh[k] / spitze[i] : 0) : Math.max(0, rh[k])])
+              .filter(([t]) => t >= fenster[0] && t <= fenster[1]),
+            lineStyle: { color: farbe, width: 2, type: "dotted" as const, opacity: 0.9 },
+          };
+        }).filter((x): x is NonNullable<typeof x> => x != null) : []),
         { name: DOTS, type: "scatter" as const, data: zeitpunkte.map((z) => [z.t, 0]),
           symbolSize: 4, itemStyle: { color: tok.textMuted }, silent: true,
           tooltip: { show: false }, clip: false },
@@ -287,7 +374,7 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
           data: klammern.map((k) => [(k.von + k.bis) / 2, 0.75]) },
       ],
     };
-  }, [curves, fenster, zeitpunkte, klammern, punktDatum, tok]);
+  }, [curves, fenster, zeitpunkte, klammern, punktDatum, tok, zeigRhythmus, imRhythmus, fc]);
 
   const klickBereit = useNearestPointClick(zeitpunkte.map((z) => z.t),
     (i) => { const z = zeitpunkte[i]; if (z) zeige(z.sample); });
@@ -317,6 +404,12 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
             onAdd={(kind, id) => add(kind, id)} />
         ) : <>
         {err != null && <ErrorNotice error={err} inline what="Could not add this curve." />}
+        {paare.some((x) => links[`${x.a}|${x.b}`]) && (
+          <LinkBox rows={paare.flatMap((x) => links[`${x.a}|${x.b}`] ? [links[`${x.a}|${x.b}`]] : [])}
+            rhythm={paare.some((x) => x.type === "con") ? zeigRhythmus : undefined}
+            onRhythm={setZeigRhythmus}
+            onDetails={(d) => onOpenEdge?.({ source: d.source.id, target: d.target.id, type: d.type })} />
+        )}
 
         {!timeAxisIsDates ? (
           <p className="text-fg-muted" data-testid="compare-no-dates">
@@ -398,6 +491,27 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
               ))}
             </div>
 
+            {(() => {
+              const partner = new Map<string, { von: string; p: Partner }>();
+              for (const c of curves) for (const p of c.partners ?? []) {
+                if (!chosen.has(`asv:${p.id}`) && !partner.has(p.id)) partner.set(p.id, { von: c.id, p });
+              }
+              return partner.size > 0 && (
+                <select data-testid="compare-pick-linked" value="" aria-label="add linked ASV"
+                  disabled={curves.length >= MAX_CURVES}
+                  onChange={(e) => e.target.value && add("asv", e.target.value)}
+                  className="w-full px-1 py-1 rounded bg-control border border-line-strong text-fg">
+                  <option value="">+ linked ASV …</option>
+                  {[...partner.values()].map(({ von, p }) => (
+                    <option key={p.id} value={p.id}>
+                      {p.id} · linked to {von}{p.corr != null ? ` · r ${p.corr.toFixed(2)}` : ""}
+                      {p.nmi != null ? ` · NMI ${p.nmi.toFixed(2)}` : ""}
+                    </option>
+                  ))}
+                </select>
+              );
+            })()}
+
             {curves.length > 0 && (
               <div className="flex flex-wrap gap-2" data-testid="compare-legend">
                 {curves.map((s, i) => (
@@ -431,6 +545,13 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
             {curves.length > 0 && (
               <>
                 <div className="flex flex-wrap items-center gap-2" data-testid="compare-controls">
+                  {onToNetwork && curves.some((c) => c.kind !== "env") && (
+                    <Button data-testid="compare-to-network" className="order-last ml-auto"
+                      onClick={() => onToNetwork(
+                        curves.filter((c) => c.kind === "cluster").map((c) => Number(c.id)),
+                        curves.filter((c) => c.kind === "asv").map((c) => c.id))}>
+                      filter network</Button>
+                  )}
                   <Chooser label="period"
                     summary={zeitraum === "total" ? "total" : zeitraum === "custom" ? "from … to" : zeitraum}
                     closeOnPick testid="compare-period">
@@ -468,6 +589,48 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
         </>}
         <ProvenanceFooter datasetId={datasetId} />
       </div>
+    </div>
+  );
+}
+
+// Draft: every link between the ASV curves shown, with its values.
+function LinkBox({ rows, onDetails, rhythm, onRhythm }: {
+  rows: EdgeDetail[]; onDetails: (d: EdgeDetail) => void; rhythm?: boolean; onRhythm: (v: boolean) => void;
+}) {
+  const nmi = (x: { nmi: number; decision?: string } | null | undefined) => x
+    ? <span className={x.decision === "rejected" ? "text-warn" : ""}>{x.nmi.toFixed(2)}
+        {x.decision === "rejected" ? " rejected" : ""}</span>
+    : <span className="text-fg-muted">—</span>;
+  return (
+    <div className="rounded-md border border-line bg-raised px-3 py-2" data-testid="inspect-link">
+      <table className="w-full tabular-nums">
+        <thead><tr className="text-fg-muted text-left">
+          <th className="font-normal">Link</th><th className="font-normal">r</th>
+          <th className="font-normal">NMI →</th><th className="font-normal">NMI ←</th>
+          <th className="font-normal">together</th><th /></tr></thead>
+        <tbody>
+          {rows.map((d) => (
+            <tr key={`${d.source.id}|${d.target.id}`} className="border-t border-line">
+              <td className="py-1 font-mono">
+                <span className="text-accent">{d.source.id}</span> → <span className="text-accent">{d.target.id}</span>
+              </td>
+              <td className="text-sm">{d.edge.corr != null ? d.edge.corr.toFixed(2) : "—"}</td>
+              <td>{nmi(d.directions?.forward)}</td>
+              <td>{nmi(d.directions?.backward)}</td>
+              <td className="text-fg-muted">{d.co_detected_in} of {d.n_samples}</td>
+              <td className="text-right">
+                <button onClick={() => onDetails(d)} className="text-accent hover:underline">details</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {rhythm != null && (
+        <label className="mt-1 flex items-center gap-1 text-fg-muted cursor-pointer">
+          <input type="checkbox" checked={rhythm} onChange={(e) => onRhythm(e.target.checked)} />
+          shared rhythm (dotted)
+        </label>
+      )}
     </div>
   );
 }

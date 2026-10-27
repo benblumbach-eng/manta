@@ -2715,7 +2715,7 @@ def asv_detail(dataset_id: str, asv_id: str):
             "quantity": _quantity(dataset_id),
             **seasonal,
         },
-        "neighbors": {"con": con_n, "ccm": ccm_n},
+        "neighbors": {"con": con_n, "ccm": ccm_n, "directions": _neighbour_directions(dataset_id, asv_id)},
         "criterion2": semantics.criterion2_asv(semantics.criterion2(_q, dataset_id), asv_id),
         "drivers": semantics.asv_drivers(_q, dataset_id, asv_id),
         "bild": None,
@@ -2870,6 +2870,23 @@ def cluster(dataset_id: str, louvain_label: int):
         "cohesion": cohesion,
         "bridge_partners": partners,
     }
+
+
+def _neighbour_directions(dataset_id: str, asv_id: str) -> dict:
+    """Per partner and direction the tested CCM result: NMI, p and kept/rejected."""
+    rows = _q("MATCH (a:ASV {id:$id, dataset_id:$d})-[r:INFLUENCES|CCM_REJECTED {dataset_id:$d}]-(b:ASV) "
+              "RETURN b.id AS id, type(r) AS rel, startNode(r) = a AS raus, r.nmi AS nmi, "
+              "r.p_value AS p_value", d=dataset_id, id=asv_id)
+    out: dict[str, dict] = {}
+    for r in rows:
+        seite = "out" if r["raus"] else "in"
+        neu = {"nmi": r["nmi"], "p_value": r["p_value"],
+               "decision": "kept" if r["rel"] == "INFLUENCES" else "rejected"}
+        alt = out.setdefault(r["id"], {}).get(seite)
+        rang = lambda x: (x["decision"] == "kept", x["nmi"] or 0.0)
+        if alt is None or rang(alt) < rang(neu):
+            out[r["id"]][seite] = neu
+    return out
 
 
 @app.get("/datasets/{dataset_id}/wheel", dependencies=[Depends(visible_dataset)])

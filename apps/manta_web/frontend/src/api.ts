@@ -646,7 +646,8 @@ export type AsvDetail = {
   starred: boolean;
   environment_profile: EnvironmentProfile;
   criterion2?: Criterion2Asv;
-  neighbors: { con: Neighbor[]; ccm: Neighbor[] };
+  neighbors: { con: Neighbor[]; ccm: Neighbor[];
+               directions?: Record<string, { out?: EdgeDirection; in?: EdgeDirection }> };
   bild: string | null;
 };
 
