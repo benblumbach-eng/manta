@@ -130,6 +130,8 @@ export default function App() {
     url.searchParams.delete("request");
     window.history.replaceState({}, "", url.pathname + url.search + url.hash);
   }, [focusRequest]);
+  const [vonInspect, setVonInspect] =
+    useState<{ modules: number[]; asvs: string[]; tick: number } | null>(null);
   const [starredCluster, setStarredCluster] =
     useState<{ label: number; tick: number; ds?: string } | null>(null);
   const wishCluster = (l: number) =>
@@ -317,7 +319,7 @@ export default function App() {
             settingsOpen={settingsOpen} onCloseSettings={() => setSettingsOpen(false)}
             theme={theme} onTheme={setTheme}
             onOpenStarred={() => { setStarredCluster(null); setRight({ kind: "starred" }); }}
-            clusterVonAussen={starredCluster}
+            clusterVonAussen={starredCluster} vonInspect={vonInspect}
             starredOpen={istOffen("starred")}
             onOpenWheel={() => setRight({ kind: "wheel" })}
             wheelOpen={istOffen("wheel")}
@@ -385,6 +387,7 @@ export default function App() {
               initialSample={finde("compare")!.sample} mark={finde("compare")!.mark}
               sampleTick={finde("compare")!.tick} link={finde("compare")!.link}
               onOpenEdge={openEdgeDetails}
+              onToNetwork={(modules, asvs) => setVonInspect({ modules, asvs, tick: Date.now() })}
               onClose={() => schliesse("compare")} onOpenAsv={openAsv} />
           </ErrorBoundary></PanelFrame>
         )}

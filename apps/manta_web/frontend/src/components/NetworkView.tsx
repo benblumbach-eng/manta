@@ -70,7 +70,7 @@ type Sel =
   | { kind: "cluster"; label: number };
 
 export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
-                                      onOpenStarred, starredOpen, clusterVonAussen,
+                                      onOpenStarred, starredOpen, clusterVonAussen, vonInspect,
                                       onOpenWheel, wheelOpen,
                                       extraViews,
                                       onOpenCompare, compareOpen, onInspectAt,
@@ -94,6 +94,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   onOpenStarred: () => void;
   starredOpen: boolean;
   clusterVonAussen: { label: number; tick: number; ds?: string } | null;
+  vonInspect?: { modules: number[]; asvs: string[]; tick: number } | null;
   onOpenWheel: () => void;
   wheelOpen: boolean;
   extraViews: { view: ExtraView; kind: string; open: boolean; onOpen: () => void }[];
@@ -237,15 +238,32 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     .filter((n) => erkunden == null || erkunden.has(n.id)), [vis, erkunden]);
   const visibleEdges = useMemo(() => (vis?.edges ?? [])
     .filter((e) => erkunden == null || (erkunden.has(e.source) && erkunden.has(e.target))), [vis, erkunden]);
-  const aufdecken = (id: string) => setErkunden((cur) => {
-    if (cur == null) return cur;
-    const neu = new Set(cur);
+  const mitPartnern = (basis: Set<string>, id: string) => {
+    const neu = new Set(basis);
+    neu.add(id);
     for (const e of vis?.edges ?? []) {
       if (e.source === id) neu.add(e.target);
       if (e.target === id) neu.add(e.source);
     }
     return neu;
-  });
+  };
+  const aufdecken = (id: string) => setErkunden((cur) => (cur == null ? cur : mitPartnern(cur, id)));
+
+  // Draft: Inspect -> network. Modules become the module filter; single ASVs stay
+  // highlighted as long as the filters stay exactly as set here.
+  const [heraus, setHeraus] = useState<{ asvs: Set<string>; key: string } | null>(null);
+  useEffect(() => {
+    if (!vonInspect || !net) return;
+    const alle = [...new Set(net.nodes.map((n) => n.cluster))];
+    const neu: Filters = { ...filters,
+      hidden: vonInspect.modules.length ? new Set(alle.filter((c) => !vonInspect.modules.includes(c)))
+                                        : new Set<number>() };
+    setErkunden(null);
+    setFilters(neu);
+    setHeraus(vonInspect.asvs.length ? { asvs: new Set(vonInspect.asvs), key: encodeFilters(neu) } : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vonInspect?.tick, net]);
+  const herausAktiv = heraus != null && heraus.key === encodeFilters(filters) ? heraus.asvs : null;
   const visibleIds = useMemo(() => new Set(visibleNodes.map((n) => n.id)), [visibleNodes]);
 
   const [points, setPoints] = useState<"asvs" | "taxa">("asvs");
@@ -615,7 +633,8 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
           const isOpen = openAsvId != null && (n.id === openAsvId || n.id === gezeichnet(openAsvId));
           const isSelAsv = sel?.kind === "asv" && (n.id === sel.id || n.id === gezeichnet(sel.id));
           const marked = sel != null && sel.kind !== "asv" && markedDrawn.has(n.id);
-          const dimmed = sel != null && !isSelAsv && !marked && !isOpen;
+          const dimmed = erkunden == null && sel != null && !isSelAsv && !marked && !isOpen;
+          const hervor = herausAktiv?.has(n.id) ?? false;
           const tp = taxaById.get(n.id);
           return {
             id: n.id, name: n.id, value: n.genus ?? "", genus: n.genus ?? "", c2: glows,
@@ -626,7 +645,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
             present: tp ? null : n.n_samples_present,
             x: xy[0], y: xy[1],
             symbolSize: scale(n.size ?? 0),
-            ...(isSelAsv && sel?.label ? { label: { show: true } } : {}),
+            ...((isSelAsv && sel?.label) || hervor ? { label: { show: true, formatter: hervor ? n.id : undefined } } : {}),
             itemStyle: {
               color: colorOfNode(n),
               opacity: dimmed ? DIM_NODE : 1,
@@ -638,9 +657,11 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                 : glows ? glowColours.ring
                 : nodeOutline,
               ...(marked && !isOpen && !isSelAsv ? { borderType: "dashed" as const } : {}),
+              ...(hervor ? { borderColor: tok.accent, borderWidth: 4, shadowBlur: 18 } : {}),
               shadowColor: dimmed ? "transparent"
                 : isOpen ? tok.accent
                 : isSelAsv ? selRing
+                : hervor ? tok.accent
                 : glows ? glowColours.glow
                 : "transparent",
             },
@@ -706,7 +727,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
        c2, keyIds, seedXY, sel, selMarked, markedDrawn, gezeichnet, markColor, edgeWidth, openAsvId, dense,
        scale, edgeStrength, ewMin, ewMax, filters.layers, light, nodeOutline, selRing,
        labelColor, labelBorder, glowColours, tok, modules,
-       linkLen, nSamples]);
+       linkLen, nSamples, erkunden, herausAktiv]);
 
   const optionRef = useRef(option);
   optionRef.current = option;
@@ -894,7 +915,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
       <NetworkSidebar
         dataset={dataset} net={net} c2={c2}
         kp={kp} onKp={patchKp} nCrit1={c1Ids.size} nKey={keyIds.size}
-        visibleNodes={visibleNodes} nSamples={nSamples}
+        visibleNodes={erkunden != null ? (vis?.nodes ?? []) : visibleNodes} nSamples={nSamples}
         clusters={clusters} clusterColor={clusterColor} countByCluster={countByCluster}
         filters={filters} onFilters={patchFilters}
         onClearKind={(k) => setFilters((f) => clearKind(f, k))}
@@ -908,7 +929,10 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         views={{ anyViewOpen: anyViewOpen || selectedCluster != null || openAsvId != null,
                  onShowNet: () => { onShowNet(); setSelectedCluster(null); setLegendeOffen(false); },
                  items: viewItems }}
-        onPickAsv={(id) => setSel({ kind: "asv", id, focus: Date.now(), label: true })}
+        onPickAsv={(id) => {
+          if (erkunden != null) setErkunden(mitPartnern(new Set(), id));
+          setSel({ kind: "asv", id, focus: Date.now(), label: true });
+        }}
         onOpenAsv={onOpenAsv}
         onPickTaxon={(rank, value) => setSel({ kind: "taxon", rank, value })}
         onPickCluster={(label) => setSel({ kind: "cluster", label })}
@@ -926,7 +950,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         {err != null && <ErrorNotice error={err} what="Could not load the network."
           onRetry={() => { setFrozen(null); setReloadKey((k) => k + 1); }} />}
 
-        {net && drawnCounts.nodes === 0 && (
+        {net && drawnCounts.nodes === 0 && erkunden == null && (
           <div className="absolute inset-x-0 top-14 z-10 flex justify-center pointer-events-none">
             <p data-testid="canvas-empty"
               className="pointer-events-auto rounded border border-line-strong bg-overlay px-3 py-2 text-xs text-fg">
@@ -1010,13 +1034,12 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         <div className="absolute top-2 right-2 z-10 flex gap-1">
           {erkunden == null ? (
             <Button data-testid="explore-start" className="bg-raised"
-              disabled={sel?.kind !== "asv"} title="select an ASV first"
-              onClick={() => sel?.kind === "asv" && setErkunden(new Set([sel.id]))}>
-              explore from {sel?.kind === "asv" ? sel.id : "ASV"}</Button>
+              onClick={() => { setSel(null); setErkunden(new Set()); }}>explore</Button>
           ) : (
             <>
               <span className="self-center text-xs text-fg-muted px-2" data-testid="explore-count">
-                {visibleNodes.length} of {vis?.nodes.length ?? 0} ASVs · click a point to show its neighbours
+                {erkunden.size === 0 ? "search an ASV to start"
+                  : `${visibleNodes.length} of ${vis?.nodes.length ?? 0} ASVs · click: show partners · double-click: open ASV`}
               </span>
               <Button data-testid="explore-end" className="bg-raised"
                 onClick={() => setErkunden(null)}>show all</Button>
@@ -1078,6 +1101,9 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                   roam.current = { zoom: serie.zoom, center: serie.center as [number, number] };
                   if (revolver) setZoomTick((t) => t + 1);
                 }
+              },
+              dblclick: (p: any) => {
+                if (erkunden != null && p.dataType === "node") onOpenAsv(p.data.id);
               },
               click: (p: any) => {
                 if (p.dataType === "node" && taxaMode) {

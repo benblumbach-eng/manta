@@ -4,6 +4,7 @@ import { getAsv, getAsvList, getCluster, getEdge, getEnvironment, getModules, ge
          type EdgeDetail, type Environment, type ModuleLabel, type SampleList } from "../api";
 import { Chooser, ChooserRow, Segmented } from "./controls";
 import InfoTip from "./InfoTip";
+import { Button } from "./ui";
 import { PanelHeader } from "./PanelFrame";
 import ProvenanceFooter from "./ProvenanceFooter";
 import ErrorNotice from "./ErrorNotice";
@@ -71,7 +72,7 @@ const rhythmus = (vs: number[], fc: number) => {
 };
 
 export default function ComparePanel({ datasetId, initialAsvId, initialSample, mark, sampleTick,
-                                       link, onOpenEdge, onClose, onOpenAsv }: {
+                                       link, onOpenEdge, onToNetwork, onClose, onOpenAsv }: {
   datasetId: string;
   initialAsvId?: string;
   initialSample?: string;
@@ -79,6 +80,7 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
   sampleTick?: number;
   link?: EdgeRef;
   onOpenEdge?: (e: EdgeRef) => void;
+  onToNetwork?: (modules: number[], asvs: string[]) => void;
   onClose: () => void;
   onOpenAsv: (id: string) => void;
 }) {
@@ -543,6 +545,13 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
             {curves.length > 0 && (
               <>
                 <div className="flex flex-wrap items-center gap-2" data-testid="compare-controls">
+                  {onToNetwork && curves.some((c) => c.kind !== "env") && (
+                    <Button data-testid="compare-to-network" className="order-last ml-auto"
+                      onClick={() => onToNetwork(
+                        curves.filter((c) => c.kind === "cluster").map((c) => Number(c.id)),
+                        curves.filter((c) => c.kind === "asv").map((c) => c.id))}>
+                      show in network</Button>
+                  )}
                   <Chooser label="period"
                     summary={zeitraum === "total" ? "total" : zeitraum === "custom" ? "from … to" : zeitraum}
                     closeOnPick testid="compare-period">
