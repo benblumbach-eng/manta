@@ -866,6 +866,14 @@ def _suggested_args(name: str, dataset_id: str | None, asv_id: str | None,
     return args
 
 
+def _given_args(name: str, given: dict, dataset_id: str | None) -> dict:
+    erlaubt = _tool_params(name)
+    args = {k: v for k, v in given.items() if k in erlaubt and k != "dataset_id"}
+    if dataset_id and "dataset_id" in erlaubt:
+        args["dataset_id"] = dataset_id
+    return args
+
+
 GROUNDING_ACTIONS = ("not checked", "clean", "correction requested", "marked", "refused",
                      "cited", "listed")
 
@@ -874,14 +882,16 @@ def run(question: str, dataset_id: str | None = None, model: str | None = None,
         asv_id: str | None = None, cluster: int | None = None,
         provider: SessionProvider | None = None,
         history: list[dict] | None = None, concept: str | None = None,
-        trace: list[dict] | None = None, question_kind: str | None = None) -> dict:
+        trace: list[dict] | None = None, question_kind: str | None = None,
+        question_args: dict | None = None) -> dict:
     def notiere(kind: str, **felder) -> None:
         if trace is not None:
             trace.append({"kind": kind, "at": time.time(), **felder})
 
     model = provider.model if provider is not None else (model or default_model())
 
-    art = question_kind if question_kind in registry.QUESTIONS else None
+    mit_args = isinstance(question_args, dict) and question_kind in _TOOL_NAMES
+    art = question_kind if question_kind in registry.QUESTIONS or mit_args else None
     art = art or frage_arten.aus_vorschlag(question)
     schritte = 0
     if art is None and dataset_id and not concept:
@@ -900,7 +910,7 @@ def run(question: str, dataset_id: str | None = None, model: str | None = None,
         art = formular.frage_art
         rang = None if formular.rang == verstehen.KEIN_RANG else formular.rang
     else:
-        rang = None
+        rang = (question_args or {}).get("rank") if mit_args else None
         if art:
             notiere("understanding", step=0, question_kind=art, rank=None,
                     source="suggested question")
@@ -918,10 +928,14 @@ def run(question: str, dataset_id: str | None = None, model: str | None = None,
             "grounding": grounding.mode(), "corrected": False, "own_key": provider is not None,
             "question_kind": art, "findings": [], "check": "none"}
     vorgegeben = None
-    if art in registry.QUESTIONS:
+    if mit_args:
+        args = _given_args(art, question_args, dataset_id)
+    elif art in registry.QUESTIONS:
         args = _suggested_args(art, dataset_id, asv_id, cluster)
-        if args is not None:
-            vorgegeben = [_synthetic_call(art, args, provider is not None or is_remote(model), 0)]
+    else:
+        args = None
+    if args is not None:
+        vorgegeben = [_synthetic_call(art, args, provider is not None or is_remote(model), 0)]
     bestaende = _known_datasets()
     faehigkeiten = _capabilities_block(dataset_id)
     system = (SYSTEM_PROMPT + meaning_block() + bestaende

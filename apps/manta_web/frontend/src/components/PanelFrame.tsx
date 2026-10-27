@@ -25,6 +25,7 @@ function heben(id: string) {
 }
 const abonnieren = (f: () => void) => { abos.add(f); return () => { abos.delete(f); }; };
 const lesen = () => stapel;
+export const usePanelStack = () => useSyncExternalStore(abonnieren, lesen);
 
 function escapeKette(e: KeyboardEvent) {
   if (e.key !== "Escape" || e.defaultPrevented) return;

@@ -137,6 +137,24 @@ def test_other_suggested_questions_call_their_tool_first(calls, monkeypatch):
     assert out["evidence"][0]["tool"] == "asv_seasonality"
 
 
+def test_suggestion_from_a_view_calls_its_tool_with_the_given_arguments(calls, monkeypatch):
+    model_says(monkeypatch, "The link is kept in one direction.")
+    out = agent.run("How strong is the link between euk_asv_001 and euk_asv_002?", DS,
+                    model="m", question_kind="edge",
+                    question_args={"source": "euk_asv_001", "target": "euk_asv_002",
+                                   "dataset_id": "other", "limit": 3})
+    assert ("edge", {"dataset_id": DS, "source": "euk_asv_001",
+                     "target": "euk_asv_002"}) in calls
+    assert out["evidence"][0]["tool"] == "edge"
+
+
+def test_suggestion_for_a_rank_runs_the_fixed_plan_with_that_rank(calls, monkeypatch):
+    model_says(monkeypatch, "Gyrodinium is the genus with the most ASVs here (12 ASVs) [F1].")
+    agent.run("Which species dominate this dataset?", DS, model="m",
+              question_kind="taxa_composition", question_args={"rank": "species"})
+    assert calls[0][1] == {"dataset_id": DS, "rank": "species", "limit": 15}
+
+
 def test_question_about_one_asv_skips_the_plans(calls, monkeypatch):
     sent = model_says(monkeypatch, {"content": "", "tool_calls": [
         {"function": {"name": "asv_detail", "arguments": {"asv_id": "euk_asv_001"}}}]},

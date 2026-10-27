@@ -14,6 +14,7 @@ import NetworkSidebar, { type ViewItem } from "./NetworkSidebar";
 import type { ExtraView } from "../extraViews";
 import ThemeSwitch, { type Theme } from "./ThemeSwitch";
 import { useModules } from "../modules";
+import { NETWORK, usePublishView } from "../viewContext";
 import { NO_MODULE_COLOUR } from "../clusterPalette";
 import { chartTooltip, FONT, useTokens } from "../design/tokens";
 import { glowRing, markerRings } from "../design/dataColours";
@@ -318,11 +319,18 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
 
   const [points, setPoints] = useState<"asvs" | "taxa">("asvs");
   const [taxonRank, setTaxonRank] = useState<TaxonRank>("genus");
+  usePublishView(NETWORK, { view: "network", points, rank: taxonRank,
+    selected: sel?.kind === "asv" ? { kind: "asv", id: sel.id, label: sel.id }
+      : sel?.kind === "cluster" ? { kind: "cluster", n: sel.label, label: modules.label(sel.label) }
+      : null,
+    taxon: sel?.kind === "taxon" ? { rank: sel.rank, name: sel.value } : null });
   const taxaMode = points === "taxa";
   const [legendeOffen, setLegendeOffen] = useState(false);
   const [revolver, setRevolver] =
     useState<{ id: string; x: number; y: number } | null>(null);
   const [linkLen, setLinkLen] = useState(LINK_LENGTH_DEFAULT);
+  usePublishView("cluster", selectedCluster != null ? { view: "cluster", module:
+    { kind: "cluster", n: selectedCluster, label: modules.label(selectedCluster) } } : null);
   const [zoomTick, setZoomTick] = useState(0);
   useEffect(() => { setRevolver(null); }, [points, taxonRank, filters, linkLen]);
 
