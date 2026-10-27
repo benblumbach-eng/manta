@@ -140,10 +140,8 @@ export function suggestionsFor(c: ViewContext): SuggestionGroup[] {
       const ringModule = c.view === "wheel"
         ? c.subjects.filter((s): s is Subject & { kind: "cluster" } => s.kind === "cluster") : [];
       if (ringModule.length) {
-        gruppen.push({ title: "Modules", questions: ringModule.flatMap((s) => {
-          const j = c.year != null ? jahrFrage(s, c.year, c.years) : null;
-          return [...modulFragen(s, ["seasonality_test"]), ...(j ? [j] : [])];
-        }) });
+        gruppen.push({ title: "Modules",
+                       questions: ringModule.flatMap((s) => modulFragen(s, ["seasonality_test"])) });
       }
       for (const s of c.subjects) {
         if (c.view === "wheel" && s.kind === "cluster") continue;

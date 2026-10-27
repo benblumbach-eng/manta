@@ -55,6 +55,8 @@ def _lesen(text: str) -> Formular | None:
 # chat(messages, schema) returns the model's text. Two tries; after that the question counts as
 # 'andere', because a wrong kind would answer a different question.
 def verstehe(frage: str, chat: Callable[[list[dict], dict], str]) -> tuple[Formular, list[str]]:
+    if frage_arten.nie_geplant(frage):
+        return Formular(frage_art=frage_arten.ANDERE), []
     messages = [{"role": "system", "content": prompt()}, {"role": "user", "content": frage}]
     antworten: list[str] = []
     for _ in range(2):
@@ -62,7 +64,8 @@ def verstehe(frage: str, chat: Callable[[list[dict], dict], str]) -> tuple[Formu
         antworten.append(text)
         f = _lesen(text)
         if f is not None:
-            return f, antworten
+            rang = frage_arten.rang_im_text(frage)
+            return (f.model_copy(update={"rang": rang}) if rang else f), antworten
         messages = messages + [{"role": "assistant", "content": text},
                                {"role": "user", "content": "That was not valid. Reply with the "
                                                            "JSON object only."}]

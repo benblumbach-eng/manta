@@ -646,7 +646,8 @@ export type AsvDetail = {
   starred: boolean;
   environment_profile: EnvironmentProfile;
   criterion2?: Criterion2Asv;
-  neighbors: { con: Neighbor[]; ccm: Neighbor[] };
+  neighbors: { con: Neighbor[]; ccm: Neighbor[];
+               directions?: Record<string, { out?: EdgeDirection; in?: EdgeDirection }> };
   bild: string | null;
 };
 
@@ -851,19 +852,6 @@ export type ToolHelp = {
 
 export const getAgentStatus = () => get<AgentStatus>("/agent/status");
 export const getAgentTools = () => get<{ n: number; tools: ToolHelp[] }>("/agent/tools");
-export type ToolRun = {
-  tool: string; arguments: Record<string, unknown>; result: Record<string, unknown>;
-  provenance: AgentEvidence["provenance"] | null; error: string | null;
-};
-export const runTool = (name: string, args: Record<string, unknown>) =>
-  F(`${BASE}/agent/tools/${encodeURIComponent(name)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ arguments: args }),
-  }).then(async (r) => {
-    if (!r.ok) return failFrom(r);
-    return r.json() as Promise<ToolRun>;
-  });
 export type ChatTurn = {
   role: "user" | "assistant"; content: string;
   tools?: { name: string; arguments: Record<string, unknown> }[];
@@ -1237,6 +1225,12 @@ export const getClusterAtSample = (ds: string, label: number, sample: string) =>
 export const getAsvList = (ds: string) =>
   get<{ asvs: { id: string; cluster: number | null; label: string; share: number }[] }>(`/datasets/${ds}/asvs`);
 export const getSamples = (ds: string) => get<SampleList>(`/datasets/${ds}/samples`);
+export type Occurrence = {
+  dataset_id: string; time_axis: "dates" | "ordinal";
+  dates: (string | null)[];
+  asvs: Record<string, [number, number][]>;
+};
+export const getOccurrence = (ds: string) => get<Occurrence>(`/datasets/${ds}/occurrence`);
 export const getSample = (ds: string, sample: string) =>
   get<SampleDetail>(`/datasets/${ds}/sample/${encodeURIComponent(sample)}`);
 
