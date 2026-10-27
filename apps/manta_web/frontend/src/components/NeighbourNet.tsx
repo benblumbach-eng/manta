@@ -1,5 +1,5 @@
 import type { EdgeRef } from "../App";
-import type { Neighbor } from "../api";
+import type { EdgeDirection, Neighbor } from "../api";
 import { useModules } from "../modules";
 import { pfeilPunkte } from "./netzpfeil";
 
@@ -14,7 +14,8 @@ const MAX_GEZEIGT = 16;
 export default function NeighbourNet({ asvId, cluster, neighbors, onOpenAsv, onOpenEdge }: {
   asvId: string;
   cluster: number | null;
-  neighbors: { con: Neighbor[]; ccm: Neighbor[] };
+  neighbors: { con: Neighbor[]; ccm: Neighbor[];
+               directions?: Record<string, { out?: EdgeDirection; in?: EdgeDirection }> };
   onOpenAsv: (id: string) => void;
   onOpenEdge: (e: EdgeRef) => void;
 }) {
@@ -110,7 +111,8 @@ export default function NeighbourNet({ asvId, cluster, neighbors, onOpenAsv, onO
       <table className="w-full text-xs mt-1" data-testid="neighbour-list">
         <thead><tr className="text-fg-muted text-left">
           <th className="font-normal py-0.5">linked ASV</th><th className="font-normal">r</th>
-          <th className="font-normal">direction (CCM)</th><th /></tr></thead>
+          <th className="font-normal" title={`NMI of ${asvId} → linked ASV`}>NMI →</th>
+          <th className="font-normal" title={`NMI of linked ASV → ${asvId}`}>NMI ←</th><th /></tr></thead>
         <tbody>
           {alle.map((p) => (
             <tr key={p.id} className="border-t border-line hover:bg-control cursor-pointer"
@@ -122,14 +124,24 @@ export default function NeighbourNet({ asvId, cluster, neighbors, onOpenAsv, onO
                 {p.genus && <span className="text-fg-muted"> {p.genus}</span>}
               </td>
               <td className="tabular-nums">{p.corr != null ? p.corr.toFixed(2) : "—"}</td>
-              <td className="font-mono">{p.direction === "out" ? `${asvId} → ${p.id}`
-                : p.direction === "in" ? `${p.id} → ${asvId}`
-                : p.direction === "both" ? "both ways" : "—"}</td>
+              <td><Nmi d={neighbors.directions?.[p.id]?.out} /></td>
+              <td><Nmi d={neighbors.directions?.[p.id]?.in} /></td>
               <td className="text-right text-accent">Inspect ↗</td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
+  );
+}
+
+// Green: direction kept by the permutation test; red: tested and rejected; — not tested.
+function Nmi({ d }: { d?: EdgeDirection }) {
+  if (!d) return <span className="text-fg-muted">—</span>;
+  return (
+    <span className={`tabular-nums ${d.decision === "rejected" ? "text-danger" : "text-ok"}`}
+          title={`${d.decision === "rejected" ? "rejected" : "kept"} · p ${d.p_value ?? "—"}`}>
+      {d.nmi.toFixed(2)}
+    </span>
   );
 }
