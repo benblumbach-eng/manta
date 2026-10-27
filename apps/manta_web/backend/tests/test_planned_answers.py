@@ -192,3 +192,25 @@ def test_cited_check_rejects_numbers_and_names_from_elsewhere():
                         'no finding cited: "Nothing cited here."']
     # 220 is a real value, but of F4, not of the finding the sentence cites
     assert grounding.check_cited("Gyrodinium has 220 ASVs [F1].", fs) == ["220 is not in F1"]
+
+
+def test_local_model_is_asked_not_to_think(monkeypatch):
+    gesendet = {}
+
+    class Antwort:
+        status_code = 200
+
+        def json(self):
+            return {"message": {"role": "assistant", "content": "ok"}}
+
+    def post(url, json, timeout):
+        gesendet.update(json)
+        return Antwort()
+
+    monkeypatch.setattr(agent.httpx, "post", post)
+    agent._chat([{"role": "user", "content": "hi"}], model="qwen3:8b")
+    assert gesendet["think"] is False
+    monkeypatch.setattr(agent, "OLLAMA_THINK", "")
+    gesendet.clear()
+    agent._chat([{"role": "user", "content": "hi"}], model="qwen3:8b")
+    assert "think" not in gesendet

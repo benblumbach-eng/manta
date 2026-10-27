@@ -130,6 +130,10 @@ OLLAMA_TEMPERATURE = os.environ.get("OLLAMA_TEMPERATURE") or None
 
 OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "16384"))
 
+# Thinking models (qwen3) reason before every answer unless told not to; that made answers take
+# minutes on esclabor. "true" turns it back on, empty leaves the model's default.
+OLLAMA_THINK = os.environ.get("OLLAMA_THINK", "false").strip().lower()
+
 MAX_STEPS = 6
 MAX_RESULT_ROWS = 40
 MAX_RESULT_CHARS = 12000
@@ -310,6 +314,8 @@ def _chat(messages: list[dict], tools: list[dict] | None = None, timeout: float 
     elif OLLAMA_TEMPERATURE is not None:
         options["temperature"] = float(OLLAMA_TEMPERATURE)
     payload = {"model": model, "messages": messages, "stream": False, "options": options}
+    if OLLAMA_THINK:
+        payload["think"] = OLLAMA_THINK == "true"
     if tools:
         payload["tools"] = tools
     if fmt:
