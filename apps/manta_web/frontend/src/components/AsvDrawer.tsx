@@ -1,14 +1,12 @@
 import { Button, StateNotice } from "./ui";
 import { useEffect, useRef, useState } from "react";
-import { getAsv, getEnvironment, getTaxon, setAsvNote, setAsvStar,
-         type AsvDetail, type Environment } from "../api";
+import { getAsv, getTaxon, setAsvStar,
+         type AsvDetail } from "../api";
 import type { EdgeRef } from "../App";
 import { useModules } from "../modules";
-import ProvenanceFooter from "./ProvenanceFooter";
 import FrequencyPanel from "./FrequencyPanel";
-import EnvironmentBars from "./EnvironmentBars";
 import NeighbourNet from "./NeighbourNet";
-import NoteBox from "./NoteBox";
+import { NotesLink } from "./NotesPanel";
 import ErrorNotice from "./ErrorNotice";
 import { findCap } from "./DataAvailability";
 import StarButton from "./StarButton";
@@ -23,13 +21,14 @@ const PLACEHOLDERS = new Set(["unassigned", "NA", "", "Environment_Condition", "
 const named = (v: string | null | undefined) => (v && !PLACEHOLDERS.has(v) ? v : null);
 
 export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpenEdge,
-                                    onCompare, onOpenTaxon, onOpenCluster, signedIn = true }: {
+                                    onCompare, onInspectAt, onOpenTaxon, onOpenCluster, signedIn = true }: {
   datasetId: string;
   asvId: string;
   onClose: () => void;
   onOpenAsv: (id: string) => void;
   onOpenEdge: (e: EdgeRef) => void;
   onCompare?: (id: string) => void;
+  onInspectAt?: (sample: string) => void;
   onOpenTaxon?: (id: string) => void;
   onOpenCluster?: (label: number) => void;
   signedIn?: boolean;
@@ -40,7 +39,6 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
   const sternSchreib = useRef<{ asv: string; t: number; wert: boolean } | null>(null);
   const [err, setErr] = useState<unknown>(null);
   const [nochmal, setNochmal] = useState(0);
-  const [env, setEnv] = useState<Environment | null>(null);
   const [showSeq, setShowSeq] = useState(false);
   const [hubInfo, setHubInfo] = useState(false);
   useEffect(() => { setHubInfo(false); }, [asvId]);
@@ -63,8 +61,6 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
   }, [datasetId, asvId, nochmal]);
 
   useEffect(() => {
-    setEnv(null);
-    getEnvironment(datasetId).then(setEnv).catch(() => setEnv(null));
   }, [datasetId]);
 
   const blastUrl = d?.sequence
@@ -202,60 +198,21 @@ export default function AsvDrawer({ datasetId, asvId, onClose, onOpenAsv, onOpen
               )}
               {onCompare && (
                 <Button data-testid="asv-compare" onClick={() => onCompare(asvId)} className="ml-auto">
-                  Compare ↗
+                  Inspect ↗
                 </Button>
               )}
             </h3>
-            <FrequencyPanel freq={d.frequency} env={env} testid="asv-frequency" />
+            <FrequencyPanel freq={d.frequency} testid="asv-frequency" onPointClick={onInspectAt} />
           </section>
-
-          {findCap(caps, "environment")?.available && (
-          <section data-testid="asv-env-section">
-            <h3 className="text-fg font-medium mb-1">Environment where it was found</h3>
-            {d.environment_profile.items.length === 0 ? (
-              <p className="text-xs text-fg-muted" data-testid="asv-env-missing">
-                No measured conditions for the samples where this ASV was found.
-              </p>
-            ) : (
-              <EnvironmentBars profile={d.environment_profile} />
-            )}
-          </section>
-          )}
 
           <section>
             <h3 className="text-fg font-medium mb-1 flex items-center">Neighbours</h3>
-            <p className="text-2xs text-fg-muted mb-1" data-testid="neighbours-declaration">
-              CON = co-occurrence (correlation, not an interaction) · CCM = predictive value without a convergence test — no evidence of causation
-            </p>
             <NeighbourNet asvId={asvId} cluster={d.cluster} neighbors={d.neighbors}
                           onOpenAsv={onOpenAsv} onOpenEdge={onOpenEdge} />
           </section>
 
-          <NoteBox key={`${datasetId}/${asvId}`} testid="asv-note" value={d.note} savedAt={d.note_at}
-            readOnly={!signedIn} draftKey={`${datasetId}/asv/${asvId}`}
-            onSave={(t, o) => setAsvNote(datasetId, asvId, t, o)
-              .then((r) => setD((cur) => (cur ? { ...cur, note: r.note, note_at: r.note_at } : cur)))} />
+          {signedIn && <NotesLink datasetId={datasetId} kind="asv" id={asvId} n={d.n_notes} />}
 
-          <section data-testid="function-section" data-annotated={d.trait?.annotated ? "1" : "0"}>
-            {d.trait?.annotated && (
-              <div className="mb-1" data-testid="function-literature">
-                <div className="text-xs font-semibold text-fg-muted">annotated function (literature)</div>
-                <ul className="text-xs mt-1">
-                  {d.trait.functions.map((f, i) => (
-                    <li key={`${f}|${d.trait!.sources[i]}`} data-testid="function-entry" data-function={f}
-                      className="flex items-baseline gap-2">
-                      <span className="text-fg">{f}</span>
-                      <span className="text-fg-muted">— {d.trait!.sources[i]}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            <div className="text-xs text-fg-muted italic">
-              Ecological function — not derivable from amplicon data (a gene fragment, not an activity)
-            </div>
-          </section>
-          <ProvenanceFooter datasetId={datasetId} />
         </div>
       )}
     </div>

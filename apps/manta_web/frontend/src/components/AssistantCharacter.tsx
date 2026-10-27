@@ -1,5 +1,4 @@
 import { MANTA_FIGURE as F } from "../design/dataColours";
-import { Z } from "../design/layers";
 
 export default function AssistantCharacter({ onClick }: { onClick: () => void }) {
   return (
@@ -9,8 +8,7 @@ export default function AssistantCharacter({ onClick }: { onClick: () => void })
       aria-label="Open the assistant"
       title="Ask the assistant"
       onClick={onClick}
-      style={{ right: 16, zIndex: Z.figure }}
-      className="absolute bottom-4 group flex flex-col items-center focus:outline-none
+      className="group flex flex-col items-center focus:outline-none
                  focus-visible:ring-2 focus-visible:ring-accent rounded-full"
     >
       <span className="mb-1 px-2 py-1 rounded-full border border-line-strong bg-overlay

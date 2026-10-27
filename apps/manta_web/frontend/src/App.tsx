@@ -4,20 +4,21 @@ import { getDatasets, getMe, logout, watchSession, SESSION_EVENT,
          type Dataset, type Me, type SessionChange } from "./api";
 import LoginScreen from "./components/LoginScreen";
 import AdminPanel from "./components/AdminPanel";
+import OwnModelSettings from "./components/OwnModelSettings";
 import MapView from "./components/MapView";
 import ImportTray from "./components/ImportTray";
 import NetworkView from "./components/NetworkView";
 import AsvDrawer from "./components/AsvDrawer";
 import EdgeDrawer from "./components/EdgeDrawer";
-import EnvironmentPanel from "./components/EnvironmentPanel";
 import StarredPanel from "./components/StarredPanel";
 import WheelPanel from "./components/WheelPanel";
-import ComparePanel from "./components/ComparePanel";
+import ComparePanel, { type InspectMark } from "./components/ComparePanel";
 import { EXTRA_VIEWS, extraKind } from "./extraViews";
 import TaxonPanel from "./components/TaxonPanel";
 import AgentChat from "./components/AgentChat";
 import { ASK_EVENT, type AskAssistant } from "./components/InfoTip";
 import AssistantCharacter from "./components/AssistantCharacter";
+import NotesPanel, { NOTES_EVENT, NotesBar, type NoteTarget } from "./components/NotesPanel";
 import ErrorBoundary from "./components/ErrorBoundary";
 import ErrorNotice from "./components/ErrorNotice";
 import { ModulesProvider } from "./modules";
@@ -31,14 +32,14 @@ export type EdgeRef = { source: string; target: string; type: "con" | "ccm" };
 type RightPanel =
   | { kind: "asv"; id: string }
   | { kind: "edge"; edge: EdgeRef }
-  | { kind: "environment"; focus?: string }
   | { kind: "starred" }
+  | { kind: "notes"; target: NoteTarget; tick: number }
   | { kind: "taxon"; asvId: string }
   | { kind: "wheel" }
   | { kind: `view:${string}` }
-  | { kind: "compare"; seed?: string };
+  | { kind: "compare"; seed?: string; sample?: string; mark?: InspectMark; link?: EdgeRef; tick?: number };
 
-const PANEL_WIDTH: Record<string, number> = { asv: 560, edge: 560, environment: 480, starred: 480, wheel: 520, compare: 560, taxon: 520, agent: 460 };
+const PANEL_WIDTH: Record<string, number> = { asv: 560, edge: 560, starred: 480, notes: 480, wheel: 520, compare: 560, taxon: 520, agent: 460 };
 
 export default function App() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
@@ -49,6 +50,8 @@ export default function App() {
     const ohne = cur.filter((x) => x.kind !== p.kind);
     return [...ohne, p];
   });
+  const inspectAt = (sample: string, mark?: InspectMark) =>
+    setRight({ kind: "compare", sample, mark, tick: Date.now() });
   const schliesse = (kind: RightPanel["kind"]) =>
     setOffen((cur) => cur.filter((x) => x.kind !== kind));
   const istOffen = (kind: RightPanel["kind"]) => offen.some((x) => x.kind === kind);
@@ -66,6 +69,20 @@ export default function App() {
     };
     window.addEventListener(ASK_EVENT, auf);
     return () => window.removeEventListener(ASK_EVENT, auf);
+  }, []);
+  const notizHier = (): NoteTarget => {
+    const asv = finde("asv"), inspect = finde("compare");
+    return asv ? { kind: "asv", key: asv.id }
+      : inspect?.sample ? { kind: "sample", key: inspect.sample } : { kind: "dataset", key: "" };
+  };
+  const openNotes = (target?: NoteTarget) =>
+    setRight({ kind: "notes", target: target ?? notizHier(), tick: Date.now() });
+  const openNotesRef = useRef(openNotes);
+  openNotesRef.current = openNotes;
+  useEffect(() => {
+    const auf = (e: Event) => openNotesRef.current((e as CustomEvent<NoteTarget | undefined>).detail);
+    window.addEventListener(NOTES_EVENT, auf);
+    return () => window.removeEventListener(NOTES_EVENT, auf);
   }, []);
   const [me, setMe] = useState<Me | null>(null);
   const [theme, setTheme] = useState<Theme>(() => {
@@ -113,12 +130,15 @@ export default function App() {
     url.searchParams.delete("request");
     window.history.replaceState({}, "", url.pathname + url.search + url.hash);
   }, [focusRequest]);
+  const [vonInspect, setVonInspect] =
+    useState<{ modules: number[]; asvs: string[]; tick: number } | null>(null);
   const [starredCluster, setStarredCluster] =
     useState<{ label: number; tick: number; ds?: string } | null>(null);
   const wishCluster = (l: number) =>
     setStarredCluster((p) => ({ label: l, tick: (p?.tick ?? 0) + 1, ds: selected?.dataset_id }));
   const openAsv = (id: string) => setRight({ kind: "asv", id });
-  const openEdge = (edge: EdgeRef) => setRight({ kind: "edge", edge });
+  const openEdge = (edge: EdgeRef) => setRight({ kind: "compare", link: edge, tick: Date.now() });
+  const openEdgeDetails = (edge: EdgeRef) => setRight({ kind: "edge", edge });
   const closeRight = () => setRight(null);
 
   const selectDataset = (d: Dataset | null) => {
@@ -283,6 +303,7 @@ export default function App() {
             className="fixed right-2 top-12 w-80 rounded-md border border-line bg-overlay p-3 shadow-xl space-y-2">
             <h2 className="text-xs font-semibold text-fg-muted">Display</h2>
             <ThemeSwitch theme={theme} onTheme={setTheme} />
+            {me.username && <OwnModelSettings />}
           </div>, document.body)}
         {!selected ? (
           <ErrorBoundary key="map" label="the dataset map"><MapView datasets={datasets} light={theme === "light"} onSelect={selectDataset} onRefresh={refresh}
@@ -298,16 +319,15 @@ export default function App() {
             settingsOpen={settingsOpen} onCloseSettings={() => setSettingsOpen(false)}
             theme={theme} onTheme={setTheme}
             onOpenStarred={() => { setStarredCluster(null); setRight({ kind: "starred" }); }}
-            clusterVonAussen={starredCluster}
+            clusterVonAussen={starredCluster} vonInspect={vonInspect}
             starredOpen={istOffen("starred")}
-            onOpenEnvironment={() => setRight({ kind: "environment" })}
-            environmentOpen={istOffen("environment")}
             onOpenWheel={() => setRight({ kind: "wheel" })}
             wheelOpen={istOffen("wheel")}
             extraViews={EXTRA_VIEWS.map((view) => ({ view, kind: extraKind(view.key),
               open: istOffen(extraKind(view.key)),
               onOpen: () => setRight({ kind: extraKind(view.key) }) }))}
             onOpenCompare={() => setRight({ kind: "compare" })}
+            onInspectAt={inspectAt}
             compareOpen={istOffen("compare")}
             onRefresh={refresh}
             onOpenDataset={(id) => getDatasets().then((r) => {
@@ -318,7 +338,11 @@ export default function App() {
         )}
 
         {me.username && !chatOpen && (
-          <AssistantCharacter onClick={() => setChatOpen(true)} />
+          <div className="absolute bottom-4 flex flex-col items-center gap-1"
+            style={{ right: 16, zIndex: Z.figure }}>
+            <AssistantCharacter onClick={() => setChatOpen(true)} />
+            {selected && <NotesBar onOpen={() => openNotes()} />}
+          </div>
         )}
 
         <PanelFrame id="agent" title="MANTA assistant" onClose={() => setChatOpen(false)}
@@ -338,6 +362,7 @@ export default function App() {
             onOpenTaxon={(id) => setRight({ kind: "taxon", asvId: id })}
             onOpenCluster={wishCluster}
             onCompare={(id) => setRight({ kind: "compare", seed: id })}
+            onInspectAt={(sample) => inspectAt(sample, { kind: "asv", id: finde("asv")!.id })}
             signedIn={!!me.username} /></ErrorBoundary></PanelFrame>
         )}
         {selected && finde("edge") && (
@@ -345,12 +370,9 @@ export default function App() {
             target={finde("edge")!.edge.target} type={finde("edge")!.edge.type} onClose={() => schliesse("edge")}
             onOpenAsv={openAsv} /></ErrorBoundary></PanelFrame>
         )}
-        {selected && istOffen("environment") && (
-          <PanelFrame id="environment" title="Environment over time" onClose={() => schliesse("environment")} defaultWidth={PANEL_WIDTH.environment}><ErrorBoundary label="the environment panel"><EnvironmentPanel datasetId={selected.dataset_id} focus={finde("environment")?.focus} onClose={() => schliesse("environment")} /></ErrorBoundary></PanelFrame>
-        )}
         {selected && istOffen("wheel") && (
           <PanelFrame id="wheel" title="The year wheel" onClose={() => schliesse("wheel")} defaultWidth={PANEL_WIDTH.wheel}><ErrorBoundary label="the year wheel">
-            <WheelPanel onOpenEnvironment={(key) => setRight({ kind: "environment", focus: key })} datasetId={selected.dataset_id} onClose={() => schliesse("wheel")}
+            <WheelPanel datasetId={selected.dataset_id} onClose={() => schliesse("wheel")}
               onOpenCluster={wishCluster} />
           </ErrorBoundary></PanelFrame>
         )}
@@ -360,8 +382,12 @@ export default function App() {
           </ErrorBoundary></PanelFrame>
         ))}
         {selected && finde("compare") && (
-          <PanelFrame id="compare" title="Comparison" onClose={() => schliesse("compare")} defaultWidth={PANEL_WIDTH.compare}><ErrorBoundary label="the seasonal comparison">
+          <PanelFrame id="compare" title="Inspect" onClose={() => schliesse("compare")} defaultWidth={PANEL_WIDTH.compare}><ErrorBoundary label="the seasonal comparison">
             <ComparePanel datasetId={selected.dataset_id} initialAsvId={finde("compare")!.seed}
+              initialSample={finde("compare")!.sample} mark={finde("compare")!.mark}
+              sampleTick={finde("compare")!.tick} link={finde("compare")!.link}
+              onOpenEdge={openEdgeDetails}
+              onToNetwork={(modules, asvs) => setVonInspect({ modules, asvs, tick: Date.now() })}
               onClose={() => schliesse("compare")} onOpenAsv={openAsv} />
           </ErrorBoundary></PanelFrame>
         )}
@@ -375,6 +401,14 @@ export default function App() {
           <PanelFrame id="starred" title="Starred" onClose={() => schliesse("starred")} defaultWidth={PANEL_WIDTH.starred}><ErrorBoundary label="the starred panel">
             <StarredPanel datasetId={selected.dataset_id} onClose={() => schliesse("starred")}
               onOpenAsv={openAsv} onOpenCluster={(l) => { wishCluster(l); schliesse("starred"); }} />
+          </ErrorBoundary></PanelFrame>
+        )}
+        {selected && finde("notes") && (
+          <PanelFrame id="notes" title="Notes" onClose={() => schliesse("notes")} defaultWidth={PANEL_WIDTH.notes}><ErrorBoundary label="the notes">
+            <NotesPanel key={selected.dataset_id} datasetId={selected.dataset_id}
+              target={finde("notes")!.target} tick={finde("notes")!.tick}
+              onClose={() => schliesse("notes")} onOpenAsv={openAsv} onOpenCluster={wishCluster}
+              onOpenSample={(s) => inspectAt(s)} />
           </ErrorBoundary></PanelFrame>
         )}
         <ImportTray isAdmin={me.role === "admin"} onJobDone={refresh} />

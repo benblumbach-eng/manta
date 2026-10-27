@@ -5,11 +5,7 @@ import os
 import re
 
 def mode() -> str:
-    try:
-        import settings
-        return (settings.get("grounding") or "mark").strip().lower()
-    except Exception:
-        return (os.environ.get("MANTA_GROUNDING") or "mark").strip().lower()
+    return (os.environ.get("MANTA_GROUNDING") or "mark").strip().lower()
 MARK = " [no evidence]"
 
 EPS = 1e-9

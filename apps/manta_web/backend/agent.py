@@ -55,7 +55,7 @@ def ollama_url() -> str:
     return _wert("OLLAMA_URL", "http://localhost:11434")
 
 
-DEFAULT_OLLAMA_MODEL = "qwen2.5:7b"
+DEFAULT_OLLAMA_MODEL = "qwen3:8b"
 
 
 def ollama_model() -> str:
@@ -179,7 +179,8 @@ The difference, in one example:
 6. {registry.RULE_NO_INVENTED_UNITS}
 7. {registry.RULE_NO_DIVERSITY}
 8. Interpretation must FOLLOW from what the tools returned: no comparison value of your own, and
-   no cause, mechanism or ecological role. Rules 4 and 5 outrank the answer form above.
+   no cause and no mechanism; a function only as rule 5 allows. Rules 4 and 5 outrank the
+   answer form above.
 9. Before you explain or interpret a metric by name, call describe_metric(key) and use the
    definition as returned. What the open dataset cannot do is already listed at the end of this
    prompt — that list IS the result of dataset_capabilities, so do not call it for that dataset;
@@ -816,6 +817,9 @@ def _run_planned(question: str, art: str, formular: dict, model: str,
             "check": check}
 
 
+REPEAT_NOTE = ("You already called this tool with these arguments; its result is above. Do not "
+               "call it again. Answer the question now from the results you have.")
+
 _TEXT_CALL = re.compile(r"\{.*\}", re.S)
 _TOOL_NAMES = {spec["name"] for spec in registry.TOOL_SPECS}
 
@@ -945,16 +949,19 @@ def run(question: str, dataset_id: str | None = None, model: str | None = None,
                              if isinstance(z, dict) and z.get("role") == "assistant"
                              and isinstance(z.get("content"), str)]
     korrigiert = False
+    gerufen: set[str] = set()
+    ohne_werkzeuge = False
 
     for _step in range(MAX_STEPS):
         t0 = time.time()
         if vorgegeben is not None:
             msg, calls, vorgegeben = {"role": "assistant", "content": ""}, vorgegeben, None
         else:
-            data = _chat(messages, tools=registry.openai_tools(), model=model, provider=provider)
+            data = _chat(messages, tools=None if ohne_werkzeuge else registry.openai_tools(),
+                         model=model, provider=provider)
             msg = data.get("message", {}) or {}
-            calls = msg.get("tool_calls") or []
-            if not calls:
+            calls = [] if ohne_werkzeuge else msg.get("tool_calls") or []
+            if not calls and not ohne_werkzeuge:
                 aus_text = _call_from_text(msg.get("content") or "")
                 if aus_text is not None:
                     calls = [_synthetic_call(aus_text["name"], aus_text["arguments"],
@@ -1017,6 +1024,7 @@ def run(question: str, dataset_id: str | None = None, model: str | None = None,
 
         messages.append({"role": "assistant", "content": msg.get("content", ""), "tool_calls": calls})
 
+        neu = False
         for call in calls:
             fn = call.get("function", {}) or {}
             name = fn.get("name", "")
@@ -1031,6 +1039,19 @@ def run(question: str, dataset_id: str | None = None, model: str | None = None,
                     and "dataset_id" in _tool_params(name)):
                 args["dataset_id"] = dataset_id
                 ergaenzt = True
+
+            # The same call again brings nothing new; a small model otherwise loops on it until
+            # the step limit. It gets the note instead, and the next turn has no tools.
+            schluessel = json.dumps([name, args], sort_keys=True, default=str)
+            if schluessel in gerufen:
+                notiere("tool_repeat", step=_step + 1, name=name, arguments=args)
+                tool_msg = {"role": "tool", "name": name, "content": REPEAT_NOTE}
+                if call.get("id"):
+                    tool_msg["tool_call_id"] = call["id"]
+                messages.append(tool_msg)
+                continue
+            gerufen.add(schluessel)
+            neu = True
 
             t1 = time.time()
             result = registry.call(name, args)
@@ -1051,6 +1072,8 @@ def run(question: str, dataset_id: str | None = None, model: str | None = None,
             if call.get("id"):
                 tool_msg["tool_call_id"] = call["id"]
             messages.append(tool_msg)
+        if not neu:
+            ohne_werkzeuge = True
 
     notiere("step_limit", steps=MAX_STEPS)
     return {

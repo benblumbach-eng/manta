@@ -134,3 +134,41 @@ export function ChooserRow({ checked, onToggle, label, hint, colour, testid, rad
     </button>
   );
 }
+
+export function SliderNumber({ value, fallback, min, max, step = 1, steps, onChange, testid, label,
+                              prefix, suffix }: {
+  value: number | null; fallback: number; min: number; max: number; step?: number; steps?: number[];
+  onChange: (v: number) => void; testid: string; label: string; prefix?: string; suffix?: string;
+}) {
+  const [text, setText] = useState(value != null ? String(value) : "");
+  useEffect(() => {
+    if (Number(text.replace(",", ".")) !== value) setText(value != null ? String(value) : "");
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  const v = value ?? fallback;
+  const i = steps ? Math.max(0, steps.reduce((best, s, k) => (s <= v ? k : best), -1)) : 0;
+  return (
+    <div className="flex items-center gap-2 text-xs text-fg">
+      {steps ? (
+        <input data-testid={testid} type="range" min={0} max={steps.length - 1} step={1}
+          aria-label={label} value={i}
+          onChange={(e) => onChange(steps[Number(e.target.value)])}
+          className="flex-1 accent-accent-fill" />
+      ) : (
+        <input data-testid={testid} type="range" min={min} max={max} step={step}
+          aria-label={label} value={v}
+          onChange={(e) => onChange(Number(e.target.value))}
+          className="flex-1 accent-accent-fill" />
+      )}
+      {prefix && <span>{prefix}</span>}
+      <input data-testid={`${testid}-value`} type="text" inputMode="decimal" value={text}
+        placeholder="off" aria-label={label}
+        onChange={(e) => {
+          setText(e.target.value);
+          const n = Number(e.target.value.replace(",", "."));
+          if (e.target.value.trim() !== "" && Number.isFinite(n) && n >= min && n <= max) onChange(n);
+        }}
+        className="w-14 px-1 py-0.5 rounded-md bg-control border border-line-strong text-fg tabular-nums text-right" />
+      {suffix && <span>{suffix}</span>}
+    </div>
+  );
+}

@@ -180,21 +180,22 @@ _KENNZAHLEN = [
       for k, v in semantics.CENTRALITY_MEASURES.items()],
     _b("criterion2", semantics.CRITERION2_LABEL, "kennzahl", semantics.CRITERION2_METHOD,
        formula=semantics.CRITERION2_FORMULA, unit="met / not met / not testable",
-       inputs=("CO_OCCURS_WITH", "MEMBER_OF", "closeness"),
+       inputs=("INFLUENCES",),
        caveats=("criterion2_not_keystone", "criterion2_selection"),
        source=semantics.CRITERION2_SOURCE,
        note=(f'The paper\'s words: "{semantics.CRITERION2_PAPER_WORDING}" '
              f'({semantics.CRITERION2_SOURCE_LOCATION}). Not testable, with the reason stated: '
              + "; ".join(semantics.CRITERION2_REASONS[k] for k in
-                         ("module_too_small", "module_disconnected", "zero_variance")) + "."),
+                         ("no_ccm_link", "outside_main_part", "graph_too_small",
+                          "zero_variance")) + "."),
        tools_=("dataset_summary", "asv_detail", "cluster_detail")),
-    _b("closeness", "Closeness within the module (criterion 2)", "kennzahl",
-       "How close one ASV lies to all other members of its module, counted in links within the "
-       "module subgraph (all members, all links with both ends in the module, unweighted). The "
-       "quantity criterion 2 tests; computed by MANTA, not taken from the values stored with "
-       "the run.",
-       formula="(n - 1) / sum of shortest-path lengths to the other n - 1 members",
-       unit="inverse mean path length, in (0, 1]", inputs=("CO_OCCURS_WITH", "MEMBER_OF"),
+    _b("closeness", "Closeness in the network of significant CCM links (criterion 2)", "kennzahl",
+       "How close one ASV lies to all other ASVs of the largest part of the network of "
+       "significant CCM links (p < 0.05), along paths in either direction, each link counted "
+       "as 1 − NMI. The quantity criterion 2 tests; computed by MANTA as in the authors' "
+       "code, not taken from the values stored with the run.",
+       formula="(n - 1) / sum of shortest-path lengths (1 − NMI) to the other n - 1 ASVs",
+       unit="inverse mean path length", inputs=("INFLUENCES",),
        source=semantics.CRITERION2_SOURCE, tools_=("asv_detail",)),
     _b("hub", "Hub", "kennzahl",
        "Not a measure of its own. Wherever MANTA marks ASVs as central — the glow in the "
@@ -203,7 +204,7 @@ _KENNZAHLEN = [
        "(`criterion2`), one computation for all of them. The word has no single published "
        "definition.",
        formula=semantics.CRITERION2_FORMULA,
-       inputs=("CO_OCCURS_WITH", "MEMBER_OF", "closeness"),
+       inputs=("INFLUENCES",),
        caveats=("criterion2_not_keystone", "criterion2_selection"),
        source=semantics.CRITERION2_SOURCE,
        note=f"See `criterion2` for the declared computation: {semantics.CRITERION2_LABEL}.",
@@ -376,11 +377,6 @@ _KENNZAHLEN = [
        "Local maxima per calendar year of the reconstruction from OTTER's Fourier slice.",
        unit="peaks", inputs=("oscillation",), source=semantics.OSCILLATION_REFERENCE,
        tools_=("asv_seasonality",)),
-    _b("coverage", "Annotation coverage", "kennzahl",
-       "How many ASVs of this dataset the literature lookup could annotate, out of those that "
-       "carry a lineage at all. A property of the NAMES, not of the sequences.",
-       unit="fraction", note=semantics.TRAIT_LITERATURE_NOTE,
-       tools_=("asv_function", "cluster_functions")),
     _b("cohesion", "Edges inside vs. outside a module", "kennzahl",
        "How many co-occurrence edges of a module stay inside it and how many leave. Louvain "
        "minimises the leaving ones, so a module with none is a disconnected part of the "

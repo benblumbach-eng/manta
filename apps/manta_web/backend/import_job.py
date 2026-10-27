@@ -141,18 +141,15 @@ def tool_status() -> dict:
         entries[entry] = {"ok": not missing, "missing": missing}
     return {"tools": have, "entries": entries}
 
-POST_STAGE = "annotate"
+POST_STAGE = "env_links"
 STAGES = ("convert", "otter", "ingest", POST_STAGE)
 STAGES_FASTQ = ("dada2",) + STAGES
 STAGES_TABLES = ("otter", "ingest", POST_STAGE)
 STAGES_INGEST = ("ingest", POST_STAGE)
-TRAITS_SCRIPT = REPO / "tools" / "traits" / "annotate.py"
 ENV_LINKS_SCRIPT = REPO / "tools" / "env_links" / "compute.py"
 POST_STAGE_AT = 0.98
 NOTE_NO_READ_TRACKING = ("Read tracking not provided: the per-sample read-retention check "
                          "was skipped.")
-NOTE_TRAITS_MISSING = ("No function annotation: run bash tools/traits/fetch_sources.sh — "
-                       "imports after that are annotated.")
 DADA2_SCRIPT = CONVERT_DIR / "run_dada2.R"
 OTTER_BACKUP = Path.home() / "otter_sicherung"
 
@@ -463,13 +460,7 @@ def _tail(e: Exception, limit: int = 160) -> str:
 
 def _post_stage(job_id: str, dataset_id: str) -> list[str]:
     notes: list[str] = []
-    _set(job_id, stage=POST_STAGE, progress=POST_STAGE_AT, stage_detail="function annotation")
-    try:
-        _run_sub("traits", [str(INGEST_DIR / ".venv/bin/python"), str(TRAITS_SCRIPT), dataset_id])
-    except Exception as e:
-        notes.append(NOTE_TRAITS_MISSING if "fetch_sources.sh" in str(e)
-                     else f"Function annotation failed: {_tail(e)}")
-    _set(job_id, stage_detail="environment links")
+    _set(job_id, stage=POST_STAGE, progress=POST_STAGE_AT, stage_detail="environment links")
     try:
         _run_sub("envlinks", [sys.executable, str(ENV_LINKS_SCRIPT), dataset_id])
     except Exception as e:

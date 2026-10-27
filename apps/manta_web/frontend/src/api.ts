@@ -249,11 +249,7 @@ export type MailSettingsView = {
   values: {
     smtp_host: string; smtp_port: string; smtp_tls: string; smtp_user: string;
     mail_from: string; request_mailto: string; public_url: string;
-    ollama_model: string; grounding: string; openai_base_url: string;
-    openai_models: string; openai_timeout: string;
-    provider_hosts?: string;
-    admins_read_transcripts?: string;
-    smtp_password_set: boolean; openai_api_key_set: boolean;
+    smtp_password_set: boolean;
   };
   source: Record<string, "panel" | "env" | "unset">;
   updated_at: number | null;
@@ -263,17 +259,6 @@ export type MailSettingsView = {
 export type MailSettingsPatch = Partial<Record<
   "smtp_host" | "smtp_port" | "smtp_tls" | "smtp_user" | "smtp_password" |
   "mail_from" | "request_mailto" | "public_url", string>>;
-
-export type AgentSettingsPatch = Partial<Record<
-  "ollama_model" | "grounding" | "openai_base_url" | "openai_api_key" |
-  "openai_models" | "openai_timeout" | "provider_hosts" | "admins_read_transcripts", string>>;
-
-export const agentSettings = (): Promise<MailSettingsView> =>
-  F(`${BASE}/admin/settings/agent`).then(okJson<MailSettingsView>);
-export const saveAgentSettings = (patch: AgentSettingsPatch) =>
-  adminSend("/admin/settings/agent", "PUT", patch) as Promise<MailSettingsView>;
-export const resetAgentSettings = (keys: string[]) =>
-  adminSend("/admin/settings/agent/reset", "POST", { keys }) as Promise<MailSettingsView>;
 
 export const mailSettings = (): Promise<MailSettingsView> =>
   F(`${BASE}/admin/settings/mail`).then(okJson<MailSettingsView>);
@@ -383,11 +368,10 @@ export type NetNode = {
   cluster: number;
   color: string;
   size: number | null;
+  rel_abundance?: number | null;
   n_samples_present: number;
   peak_month: number | null;
   starred?: boolean;
-  trait_group?: string | null;
-  trait_rank?: string | null;
   criterion2?: Criterion2Node | null;
 };
 
@@ -410,22 +394,22 @@ export type Criterion2Texts = {
 };
 
 export type Criterion2Summary = Criterion2Texts & {
-  alpha: number; n_network: number; n_modules: number; n_testable: number; n_pass: number;
-  n_not_testable: number;
-  not_testable: { reason: string; reason_text: string; n_asv: number; n_modules: number;
-                  modules: number[] }[];
+  alpha: number; n_network: number; n_modules: number; n_graph: number; n_testable: number;
+  n_pass: number; n_not_testable: number;
+  mean_closeness: number | null; sd_closeness: number | null;
+  not_testable: { reason: string; reason_text: string; n_asv: number }[];
   ids: string[];
   statement: string;
 };
 
 export type Criterion2Asv = Criterion2Node & Criterion2Texts & {
   verdict: string;
-  module_mean_closeness?: number | null;
+  mean_closeness?: number | null;
 };
 
 export type Criterion2Module = Criterion2Texts & {
   module: number; module_size: number; testable: boolean; reason: string | null;
-  reason_text: string | null; mean_closeness: number | null; sd_closeness: number | null;
+  reason_text: string | null;
   n_pass: number; verdict: string;
   members_meeting: { asv_id: string; closeness: number | null; p: number | null;
                      q: number | null }[];
@@ -438,6 +422,7 @@ export type NetEdge = {
   nmi_forward?: number | null; nmi_backward?: number | null;
   rejected_forward?: boolean; rejected_backward?: boolean; rejected_dirs?: number;
   nmi_rejected_forward?: number | null; nmi_rejected_backward?: number | null;
+  p_forward?: number | null; p_backward?: number | null;
 };
 
 export type Layers = {
@@ -464,7 +449,6 @@ export type Network = {
   n_samples?: number;
   partition: Partition;
   marker: string | null;
-  traits?: TraitRun;
   edge: "con" | "ccm";
   directed: boolean;
   thresholds: Thresholds;
@@ -494,6 +478,18 @@ export type ClusterAtSample = {
   caveat?: string | null;
   members: { id: string; genus: string | null; count: number;
              share_of_sample: number | null; share_of_cluster: number | null }[];
+};
+
+export type SampleList = {
+  dataset_id: string; time_axis: "dates" | "ordinal";
+  samples: { sample: string; date: string | null }[];
+};
+
+export type SampleDetail = {
+  sample: string; date: string | null; sample_total: number; quantity: Quantity;
+  asvs: { id: string; cluster: number | null; count: number; share: number | null;
+          rank: number; label: string; taxa: string[] }[];
+  modules: { cluster: number; count: number; n_asv: number; share: number | null }[];
 };
 
 export type Starred = {
@@ -618,42 +614,6 @@ export type NetworkScope = {
   note: string;
 };
 
-export type TraitAnnotation = {
-  annotated: boolean;
-  functions: string[];
-  sources: string[];
-  rank: string | null;
-  group: string;
-  run_id: string | null;
-  note: string;
-};
-
-export type TraitRun = {
-  available: boolean;
-  run_id: string | null;
-  computed_by?: string;
-  method?: string;
-  marker?: string | null;
-  sources: string[];
-  source_citations?: string[];
-  coverage: number | null;
-  n_annotated: number;
-  n_with_lineage: number;
-  n_asv: number;
-  n_by_rank?: Record<string, number>;
-  absent_reason?: string | null;
-  statement: string | null;
-  note: string;
-  mdb_categories?: Record<string, string>;
-};
-
-export type FunctionBreakdown = {
-  n_members: number;
-  n_annotated: number;
-  functions: { label: string; n_asv: number; share: number | null }[];
-  note: string;
-};
-
 export type Spectrum = {
   available: boolean;
   absent_reason?: string;
@@ -679,18 +639,15 @@ export type AsvDetail = {
   cluster: number;
   color: string;
   centralities: Record<string, number | null>;
-  note: string | null;
-  note_at: string | null;
+  n_notes: number;
   sequence: string | null;
   seq_length: number | null;
   seq_hash: string | null;
   starred: boolean;
   environment_profile: EnvironmentProfile;
   criterion2?: Criterion2Asv;
-  neighbors: { con: Neighbor[]; ccm: Neighbor[] };
-  funktion: string;
-  trait?: TraitAnnotation | null;
-  trait_run?: TraitRun;
+  neighbors: { con: Neighbor[]; ccm: Neighbor[];
+               directions?: Record<string, { out?: EdgeDirection; in?: EdgeDirection }> };
   bild: string | null;
 };
 
@@ -749,14 +706,12 @@ export type ClusterDetail = {
                   other_genus: string | null; other_cluster: number; corr: number }[];
   activity: { axis: string; window: string[]; peak: string | null; n_min: number;
               statement: string | null };
-  note: { n: string | null; t: string | null };
+  n_notes: number;
   criterion2?: Criterion2Module;
   members: { id: string; genus: string | null; family: string | null;
              read_count_total: number | null; n_samples_present: number;
              peak_month: number | null; criterion2?: Criterion2Node | null }[];
   taxa_breakdown: { genus: Record<string, number>; family: Record<string, number> };
-  function_breakdown?: FunctionBreakdown;
-  trait_run?: TraitRun;
   source_publication: SourcePublication;
   starred: boolean;
 };
@@ -882,7 +837,11 @@ export type AgentAnswer = {
   check?: "cited" | "listed" | "numbers" | "off" | "failed" | "none";
 };
 
-export type OwnProvider = { base_url: string; model: string; key: string };
+export type OwnModel = { set: boolean; base_url?: string; model?: string };
+export const getOwnModel = () => get<OwnModel>("/me/own-model");
+export const saveOwnModel = (base_url: string, model: string, key?: string) =>
+  adminSend("/me/own-model", "PUT", { base_url, model, key: key || undefined }) as Promise<OwnModel>;
+export const removeOwnModel = () => adminSend("/me/own-model", "DELETE") as Promise<OwnModel>;
 
 export type ToolHelp = {
   name: string; usage: string; summary: string;
@@ -893,19 +852,6 @@ export type ToolHelp = {
 
 export const getAgentStatus = () => get<AgentStatus>("/agent/status");
 export const getAgentTools = () => get<{ n: number; tools: ToolHelp[] }>("/agent/tools");
-export type ToolRun = {
-  tool: string; arguments: Record<string, unknown>; result: Record<string, unknown>;
-  provenance: AgentEvidence["provenance"] | null; error: string | null;
-};
-export const runTool = (name: string, args: Record<string, unknown>) =>
-  F(`${BASE}/agent/tools/${encodeURIComponent(name)}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ arguments: args }),
-  }).then(async (r) => {
-    if (!r.ok) return failFrom(r);
-    return r.json() as Promise<ToolRun>;
-  });
 export type ChatTurn = {
   role: "user" | "assistant"; content: string;
   tools?: { name: string; arguments: Record<string, unknown> }[];
@@ -923,13 +869,12 @@ export class AgentAskError extends ApiError {
 }
 
 export const askAgent = (question: string, ctx: AgentContext, model?: string,
-                         own?: OwnProvider, history?: ChatTurn[], conversationId?: string | null) =>
+                         own?: boolean, history?: ChatTurn[], conversationId?: string | null) =>
   F(`${BASE}/agent/ask`, {
     method: "POST",
-    headers: { "Content-Type": "application/json",
-               ...(own ? { "X-MANTA-Provider-Key": own.key } : {}) },
-    body: JSON.stringify({ question, model: own ? own.model : model,
-                           provider_url: own ? own.base_url : undefined,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question, model: own ? undefined : model,
+                           own_model: own || undefined,
                            dataset_id: ctx.dataset_id,
                            asv_id: ctx.asv_id, cluster: ctx.cluster ?? null,
                            concept: ctx.concept, question_kind: ctx.question_kind,
@@ -1057,6 +1002,8 @@ export const renameDataset = (id: string, region: string) =>
   });
 export const getNetwork = (ds: string, edge: "con" | "ccm", marker?: string | null) =>
   get<Network>(`/datasets/${ds}/network?edge=${edge}${marker ? `&marker=${marker}` : ""}`);
+export const getCriterion2 = (ds: string, q: number) =>
+  get<Criterion2Summary>(`/datasets/${ds}/criterion2?q=${q}`);
 export const getAsv = (ds: string, id: string) => get<AsvDetail>(`/datasets/${ds}/asv/${id}`);
 export const getSpectrum = (ds: string, id: string) =>
   get<{ dataset_id: string; asv_id: string; spectrum: Spectrum }>(
@@ -1105,24 +1052,6 @@ export const getCluster = (ds: string, label: number) => get<ClusterDetail>(`/da
 export const getCapabilities = (ds: string) => get<Capabilities>(`/datasets/${ds}/capabilities`);
 export const getEnvironment = (ds: string) => get<Environment>(`/datasets/${ds}/environment`);
 
-export type LightBand = {
-  kind: "polar_night" | "polar_day";
-  start: string; end: string;
-  clipped_start: boolean; clipped_end: boolean;
-};
-export type Light = {
-  available: boolean;
-  absent_reason: string | null;
-  station: { station_id: string; lat: number; lon: number } | null;
-  from: string | null; to: string | null;
-  bands: LightBand[];
-  legend: string; method: string; reference: string; caveat: string;
-  per_sample: { sample: string; date: string; day_length_h: number; polar_night: boolean;
-                polar_day: boolean }[];
-  year: LightYear | null;
-};
-export const getLight = (ds: string) => get<Light>(`/datasets/${ds}/light`);
-
 export type Concept = {
   key: string; label: string; kind: "klasse" | "beziehung" | "kennzahl" | "umweltgroesse";
   definition: string; source: string | null; caveats: string[];
@@ -1164,30 +1093,23 @@ export type ProvenanceChain = {
 export const getProvenanceChain = (ds: string) =>
   get<ProvenanceChain>(`/datasets/${ds}/provenance-chain`);
 
+export type WheelMonth = { month: number; mean: number; n: number };
 export type WheelCluster = {
   louvain_label: number;
   n_members: number;
-  window: string[];
-  window_months: number[];
-  peak: string | null;
-  peak_month: number | null;
-  by_month?: { month: number; mean: number; n: number }[];
-  n_min: number;
-  statement: string | null;
+  share_total: number | null;
+  by_month: WheelMonth[];
 };
+export type WheelAsv = { id: string; share_total: number | null; by_month: WheelMonth[] };
 export type WheelEnvMonth = { month: number; mean: number | null; n: number };
-export type WheelPair = {
-  ca: number; cb: number; n_con: number; n_with_ccm: number; n_ccm_directions: number;
-  mean_nmi: number | null;
-};
 export type Wheel = {
   dataset_id: string;
   time_axis: "dates" | "ordinal";
   months: string[];
   clusters: WheelCluster[];
-  pairs: WheelPair[];
+  asvs?: WheelAsv[];
   environment: {
-    variables: { key: string; label: string; unit: string; unit_note: string | null }[];
+    variables: { key: string; label: string; unit: string; unit_note: string | null; mean: number }[];
     monthly: Record<string, WheelEnvMonth[]>;
     units_note: string;
   } | null;
@@ -1197,24 +1119,12 @@ export type Wheel = {
   year?: WheelYear | null;
 };
 export type WheelYear = { year: string; n: number; months_covered: number; note: string | null };
-export type LightYear = {
-  available: boolean; absent_reason?: string; lat: number | null; reference_year?: number;
-  bands: { kind: "polar_night" | "polar_day"; start_doy: number; end_doy: number }[];
-  shortest_day_doy: number | null; sun_return_doy?: number | null; legend?: string;
-  day_length_doy?: number[];
-  solar_marks?: SeasonMark[];
-};
 
-export type SeasonMark = { doy: number; label: string };
-export type Seasons = {
-  dataset_id: string; available: boolean; absent_reason: string | null;
-  astronomical: SeasonMark[]; light: SeasonMark[]; water: SeasonMark[];
-  water_note: string; method: string; caveat: string;
+export const getWheel = (ds: string, year: string | null, asvs: string[]) => {
+  const q = [year ? `year=${encodeURIComponent(year)}` : "",
+             asvs.length ? `asvs=${asvs.map(encodeURIComponent).join(",")}` : ""].filter(Boolean);
+  return get<Wheel>(`/datasets/${ds}/wheel${q.length ? `?${q.join("&")}` : ""}`);
 };
-export const getSeasons = (ds: string) => get<Seasons>(`/datasets/${ds}/seasons`);
-
-export const getWheel = (ds: string, year?: string | null) =>
-  get<Wheel>(`/datasets/${ds}/wheel${year ? `?year=${encodeURIComponent(year)}` : ""}`);
 
 
 export type Params = {
@@ -1251,17 +1161,20 @@ export const recompute = (ds: string, t: ThresholdInput) =>
     return r.json() as Promise<RecomputeAck>;
   });
 
-export const setAsvNote = (ds: string, id: string, note: string, opts?: { keepalive?: boolean }) =>
-  F(`${BASE}/datasets/${ds}/asv/${id}/note`, {
-    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note }),
-    keepalive: opts?.keepalive,
-  }).then(okJson<{ note: string; note_at: string }>);
-export const setClusterNote = (ds: string, label: number, note: string,
-                               opts?: { keepalive?: boolean }) =>
-  F(`${BASE}/datasets/${ds}/cluster/${label}/note`, {
-    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ note }),
-    keepalive: opts?.keepalive,
-  }).then(okJson<{ note: string; note_at: string }>);
+export type NoteKind = "dataset" | "asv" | "cluster" | "sample" | "env";
+export type NoteTarget = { kind: NoteKind; key: string };
+export type Note = { id: string; targets: NoteTarget[]; text: string; at: string };
+export const getNotes = (ds: string) =>
+  F(`${BASE}/datasets/${ds}/notes`).then(okJson<{ notes: Note[]; note: string | null }>);
+type NoteBody = { targets: NoteTarget[]; text: string };
+const noteBody = (n: NoteBody) => ({
+  headers: { "Content-Type": "application/json" }, body: JSON.stringify(n) });
+export const addNote = (ds: string, n: NoteBody) =>
+  F(`${BASE}/datasets/${ds}/notes`, { method: "POST", ...noteBody(n) }).then(okJson<Note>);
+export const editNote = (ds: string, id: string, n: NoteBody) =>
+  F(`${BASE}/datasets/${ds}/notes/${id}`, { method: "PUT", ...noteBody(n) }).then(okJson<Note>);
+export const deleteNote = (ds: string, id: string) =>
+  F(`${BASE}/datasets/${ds}/notes/${id}`, { method: "DELETE" }).then(okJson<{ deleted: string }>);
 
 export type FastqPreflight = {
   ok: boolean; rscript: boolean; cutadapt: boolean; dada2: boolean;
@@ -1310,6 +1223,18 @@ export const getClusterAtSample = (ds: string, label: number, sample: string) =>
   F(`${BASE}/datasets/${ds}/cluster/${label}/at/${encodeURIComponent(sample)}`)
     .then(okJson<ClusterAtSample>);
 
+export const getAsvList = (ds: string) =>
+  get<{ asvs: { id: string; cluster: number | null; label: string; share: number }[] }>(`/datasets/${ds}/asvs`);
+export const getSamples = (ds: string) => get<SampleList>(`/datasets/${ds}/samples`);
+export type Occurrence = {
+  dataset_id: string; time_axis: "dates" | "ordinal";
+  dates: (string | null)[];
+  asvs: Record<string, [number, number][]>;
+};
+export const getOccurrence = (ds: string) => get<Occurrence>(`/datasets/${ds}/occurrence`);
+export const getSample = (ds: string, sample: string) =>
+  get<SampleDetail>(`/datasets/${ds}/sample/${encodeURIComponent(sample)}`);
+
 export const getStarred = (ds: string) =>
   F(`${BASE}/datasets/${ds}/starred`).then(okJson<Starred>);
 
@@ -1327,7 +1252,7 @@ export const setClusterStar = (ds: string, label: number, starred: boolean) =>
 
 export type SearchHit = {
   id: string; label: string; genus: string | null; cluster: number | null;
-  n_samples_present: number;
+  n_samples_present: number; share: number;
   id_match: boolean; matched_ranks: string[];
 };
 export type SearchTaxon = { rank: string; value: string; n_asv: number; asvs: SearchHit[] };

@@ -6,7 +6,7 @@ import json
 from ingest import RUN_SCOPED_ASV_PROPS, connect, ensure_constraints
 
 COPIED_LABELS = {"Dataset": None, "Sample": "sample_id", "ASV": "id", "Dada2Run": None,
-                 "TraitRun": None, "EnvLinkRun": None, "EnvVariable": "name"}
+                 "EnvLinkRun": None, "EnvVariable": "name"}
 NOT_COPIED_LABELS = {
     "Run": "the old network run; the new dataset gets its own",
     "Cluster": "modules of the old network; names, colours and notes stay with the original",
@@ -16,7 +16,7 @@ NOT_COPIED_LABELS = {
 COPIED_RELS = ("IN_DATASET", "OF_DATASET", "AT_STATION", "HAS_ABUNDANCE", "COVARIES_WITH")
 NOT_COPIED_RELS = {"CO_OCCURS_WITH", "INFLUENCES", "CCM_REJECTED", "MEMBER_OF",
                    "RECOMPUTED_FROM"}
-SINGLE_RUNS = ("Dada2Run", "TraitRun", "EnvLinkRun")
+SINGLE_RUNS = ("Dada2Run", "EnvLinkRun")
 HAS_ABUNDANCE_BATCH = 5000
 
 

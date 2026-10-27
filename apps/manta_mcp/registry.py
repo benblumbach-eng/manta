@@ -16,11 +16,17 @@ RULE_CAVEATS = (
     "is a correlation, not an observed interaction; CCM measures directed predictive skill "
     "WITHOUT a convergence test. Never claim causality and never claim absolute growth.")
 RULE_NOT_IN_DATA = (
-    "Some things are not in these data at all: ecological function, metabolism, role in the "
-    "food web, pathogenicity, and any mechanism. When asked for one, write a plain sentence "
-    "saying it cannot be derived from amplicon data, and stop there — do not answer with a "
-    "single word, and do not infer it from the taxonomy. The same applies when a question is "
-    "phrased as \"causes\", \"drives\" or \"leads to\".")
+    "Ecological function, metabolism, food-web role and pathogenicity are not measured in "
+    "these data. You may name a function that is well known for a taxon (e.g. Syndiniales: "
+    "parasites), but only when its name clearly determines it, and mark it every time as "
+    "\"general knowledge, not a result of this dataset\". Give it per taxon, never as a "
+    "property of the module or the community. If the name does not clearly determine it "
+    "(placeholder, \"uncultured\", a genus whose species differ), say it is unknown. In a "
+    "module: list the assignable taxa with their number of ASVs and say how many members have "
+    "no assignment. Never conclude the module's function from them, and never derive a cause "
+    "or mechanism from a function. When a question touches function, offer the assignment. "
+    "Causes and mechanisms are not in these data either, also when a question is phrased as "
+    "\"causes\", \"drives\" or \"leads to\".")
 RULE_NO_DIVERSITY = (
     "Diversity indices (richness, Shannon, Simpson and the like) are NOT computed by this "
     "platform: the otter framework's chain does not produce them here, and MANTA does not "
@@ -149,7 +155,7 @@ TOOL_SPECS: list[dict] = [
         "description": (
             "Everything about ONE ASV: full taxonomy (kingdom to species), Louvain cluster and "
             "module name, size (reads summed over all samples), and criterion2 — whether it "
-            "meets criterion 2 of Oldenburg et al. 2024 (high closeness within its module; "
+            "meets criterion 2 of Oldenburg et al. 2024 (high closeness in the network of significant CCM links; "
             "one criterion, not a keystone; links between modules: "
             "cluster_bridges). Needs an exact asv_id from find_asv. Raw centrality numbers are "
             "deliberately not returned."
@@ -186,23 +192,6 @@ TOOL_SPECS: list[dict] = [
             "constant offset excluded) — exactly what CON correlates. For 'what rhythm does this "
             "ASV have', 'do these two ASVs share a spectrum'. NOT a seasonality test "
             "(asv_seasonality, seasonality_test)."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {"dataset_id": {"type": "string"}, "asv_id": {"type": "string"}},
-            "required": ["dataset_id", "asv_id"],
-        },
-    },
-    {
-        "name": "asv_function",
-        "requires": ['traits'],
-        "description": (
-            "The LITERATURE-ANNOTATED function of one ASV, looked up by its taxon name in pinned "
-            "tables (18S: Mixoplankton Database via PR2, Trophic Mode Database; 16S: FAPROTAX) — "
-            "with source and rank (species/genus/family) per entry, or 'not annotated'. A property "
-            "of the NAME, not a result of this dataset; metabolism itself is still not derivable "
-            "from amplicon data. For 'is this ASV a mixotroph / heterotroph', 'what is known about "
-            "this genus'."
         ),
         "parameters": {
             "type": "object",
@@ -347,21 +336,6 @@ TOOL_SPECS: list[dict] = [
                 "dataset_id": {"type": "string"},
                 "cluster": {"type": "integer", "description": "Louvain cluster number"},
             },
-            "required": ["dataset_id", "cluster"],
-        },
-    },
-    {
-        "name": "cluster_functions",
-        "requires": ['traits'],
-        "description": (
-            "Members of ONE cluster by literature-annotated function: share of the cluster per "
-            "function label, and the share 'not annotated' (never dropped). Same lookup as "
-            "asv_function, aggregated. For 'is cluster 3 mostly heterotrophs', 'how much of this "
-            "module has any annotation at all'. Not for taxa (cluster_detail)."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {"dataset_id": {"type": "string"}, "cluster": {"type": "integer"}},
             "required": ["dataset_id", "cluster"],
         },
     },
@@ -646,11 +620,9 @@ _DISPATCH: dict[str, Callable[..., Any]] = {
     "asv_seasonality": tools.asv_seasonality,
     "asv_abundance_series": tools.asv_abundance_series,
     "asv_spectrum": tools.asv_spectrum,
-    "asv_function": tools.asv_function,
     "neighbors": tools.neighbors,
     "edge": tools.edge,
     "cluster_detail": tools.cluster_detail,
-    "cluster_functions": tools.cluster_functions,
     "cluster_timeseries": tools.cluster_timeseries,
     "cluster_bridges": tools.cluster_bridges,
     "cluster_network": tools.cluster_network,
@@ -728,17 +700,15 @@ QUESTIONS: dict[str, tuple[str, str]] = {
     "cluster_network": ("dataset", "Which module predicts which, and how strongly?"),
     "cluster_year_overview": ("dataset", "When in the year is each module active, and does that repeat?"),
     "cluster_interannual_variability": ("dataset", "In which months do the years differ most?"),
-    "asv_detail": ("asv", "What is this ASV — taxonomy, module, size, is it central in its module?"),
+    "asv_detail": ("asv", "What is this ASV — taxonomy, module, size, is it central in the CCM network?"),
     "asv_seasonality": ("asv", "When is this ASV present, and does it come back every year?"),
     "asv_spectrum": ("asv", "Which rhythms does this ASV carry — a year, half a year, longer?"),
-    "asv_function": ("asv", "What does the literature say about this ASV's function?"),
     "asv_drivers": ("asv", "Which measured variables does this ASV move with, and with what lag?"),
     "asv_abundance_series": ("asv", "How does this ASV's value run, sample by sample?"),
     "neighbors": ("asv", "Who is this ASV linked to in the network?"),
     "seasonality_test": ("asv", "Does the calendar month make a difference for this ASV?"),
     "trend_test": ("asv", "Is this ASV rising or falling over the years?"),
     "cluster_detail": ("cluster", "What does this module consist of, and who dominates it?"),
-    "cluster_functions": ("cluster", "What is known about the functions in this module?"),
     "cluster_env_links": ("cluster", "Which measured variables is this module linked to?"),
 }
 

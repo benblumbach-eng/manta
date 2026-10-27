@@ -210,7 +210,7 @@ export default function PanelFrame({ id, title, onClose, defaultWidth = 520, tes
     try { localStorage.setItem(schluessel(id), JSON.stringify(b)); } catch { }
   };
 
-  const zug = useRef<{ art: "move" | "w" | "h" | "wh"; x: number; y: number; b: PanelBox;
+  const zug = useRef<{ art: "move" | "w" | "wl" | "h" | "wh"; x: number; y: number; b: PanelBox;
                        hJetzt: number } | null>(null);
   const zuletzt = useRef<PanelBox | null>(null);
   useEffect(() => {
@@ -222,6 +222,10 @@ export default function PanelFrame({ id, title, onClose, defaultWidth = 520, tes
       let n: PanelBox;
       if (s.art === "move") {
         n = klemmen({ ...s.b, x: s.b.x + dx, y: s.b.y + dy }, f);
+      } else if (s.art === "wl") {
+        const rechts = s.b.x + s.b.w;
+        const w = Math.min(Math.max(MIN_W, s.b.w - dx), rechts);
+        n = { ...s.b, x: rechts - w, w };
       } else {
         const w = s.art === "h" ? s.b.w
           : Math.min(Math.max(MIN_W, s.b.w + dx), Math.max(MIN_W, f.width - s.b.x));
@@ -246,7 +250,7 @@ export default function PanelFrame({ id, title, onClose, defaultWidth = 520, tes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const start = (art: "move" | "w" | "h" | "wh") => (e: React.PointerEvent) => {
+  const start = (art: "move" | "w" | "wl" | "h" | "wh") => (e: React.PointerEvent) => {
     const b = jetzt.current.shown;
     if (!b || e.button !== 0) return;
     if (art === "move" && (e.target as Element).closest?.(NICHT_ZIEHEN)) return;
@@ -316,8 +320,10 @@ export default function PanelFrame({ id, title, onClose, defaultWidth = 520, tes
           {children}
         </div>
       </Ctx.Provider>
-      <div onPointerDown={start("w")} data-testid="panel-resize-w"
-        className="absolute top-0 right-0 w-1.5 h-full cursor-ew-resize" />
+      <div onPointerDown={start("wl")} data-testid="panel-resize-wl" title="drag to resize"
+        className="absolute top-0 left-0 w-1.5 h-full cursor-ew-resize hover:bg-accent/40" />
+      <div onPointerDown={start("w")} data-testid="panel-resize-w" title="drag to resize"
+        className="absolute top-0 right-0 w-1.5 h-full cursor-ew-resize hover:bg-accent/40" />
       <div onPointerDown={start("h")} data-testid="panel-resize-h"
         className="absolute bottom-0 left-0 h-1.5 w-full cursor-ns-resize" />
       <div onPointerDown={start("wh")}
