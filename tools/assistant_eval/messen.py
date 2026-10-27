@@ -127,6 +127,19 @@ def belege(api: Api, r: dict) -> str:
     return "\n".join(teile)
 
 
+def pruefungen(api: Api, r: dict) -> list[dict]:
+    """The check rounds that did not pass: the model's draft and what the check objected to."""
+    if not r.get("turn_id"):
+        return []
+    try:
+        zug = api.call("GET", f"/agent/turns/{r['turn_id']}")
+    except RuntimeError:
+        return []
+    return [{"action": e.get("action"), "problems": e.get("numbers"), "draft": e.get("draft")}
+            for e in (zug.get("record") or {}).get("events") or []
+            if e.get("kind") == "grounding" and e.get("draft")]
+
+
 URTEIL = {"type": "object", "required": ["correct", "complete", "tools_enough", "missing"],
           "properties": {"correct": {"type": "integer", "minimum": 1, "maximum": 5},
                          "complete": {"type": "integer", "minimum": 1, "maximum": 5},
@@ -257,7 +270,8 @@ def laufen(a) -> None:
                            "expected": erwartet, "answer": r.get("answer"),
                            "error": r.get("error"), "question_kind": r.get("question_kind"),
                            "check": r.get("check"), "ungrounded": r.get("ungrounded"),
-                           "steps": r.get("steps"), "seconds": sek, **b})
+                           "steps": r.get("steps"), "seconds": sek,
+                           "check_rounds": [] if r.get("error") else pruefungen(api, r), **b})
         print(f"[{i:2}/{len(katalog)}] {f['id']:<18} {b['score']:.2f}  {sek:6.1f}s  "
               + " ".join(f"{k}={v:.2f}" for k, v in b["parts"].items()) + (f"  {r['error']}" if r.get("error") else ""))
 
