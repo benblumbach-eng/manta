@@ -235,6 +235,28 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
     [net, filters, keyIds]);
   // Draft G: explore from one ASV; each click on a point reveals its neighbours.
   const [erkunden, setErkunden] = useState<Set<string> | null>(null);
+  const [exploreOn, setExploreOn] = useState(false);
+
+  // Undo: every change of filters or of the explored set is one step back.
+  const verlauf = useRef<{ filters: Filters; erkunden: Set<string> | null }[]>([]);
+  const vorher = useRef({ filters, erkunden });
+  const rueckgaengig = useRef(false);
+  const [nUndo, setNUndo] = useState(0);
+  useEffect(() => {
+    if (vorher.current.filters === filters && vorher.current.erkunden === erkunden) return;
+    if (rueckgaengig.current) rueckgaengig.current = false;
+    else verlauf.current.push(vorher.current);
+    vorher.current = { filters, erkunden };
+    setNUndo(verlauf.current.length);
+  }, [filters, erkunden]);
+  const undo = () => {
+    const s = verlauf.current.pop();
+    if (!s) return;
+    rueckgaengig.current = true;
+    setFilters(s.filters); setErkunden(s.erkunden);
+  };
+  useEffect(() => { verlauf.current = []; setNUndo(0); setErkunden(null); setExploreOn(false); },
+    [dataset.dataset_id]);
   const visibleNodes = useMemo(() => (vis?.nodes ?? [])
     .filter((n) => erkunden == null || erkunden.has(n.id)), [vis, erkunden]);
   const visibleEdges = useMemo(() => (vis?.edges ?? [])
@@ -255,10 +277,15 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   const [heraus, setHeraus] = useState<{ asvs: Set<string>; key: string } | null>(null);
   useEffect(() => {
     if (!vonInspect || !net) return;
+    // Only ASVs in Inspect: the network shows just these ASVs.
+    if (!vonInspect.modules.length) {
+      setHeraus(null);
+      setErkunden(new Set(vonInspect.asvs));
+      return;
+    }
     const alle = [...new Set(net.nodes.map((n) => n.cluster))];
     const neu: Filters = { ...filters,
-      hidden: vonInspect.modules.length ? new Set(alle.filter((c) => !vonInspect.modules.includes(c)))
-                                        : new Set<number>() };
+      hidden: new Set(alle.filter((c) => !vonInspect.modules.includes(c))) };
     setErkunden(null);
     setFilters(neu);
     setHeraus(vonInspect.asvs.length ? { asvs: new Set(vonInspect.asvs), key: encodeFilters(neu) } : null);
@@ -923,6 +950,11 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         order={order} chipCounts={chipCounts} unknownAsvIds={unknownAsvIds}
         taxaMode={taxaMode} points={points} onPoints={setPoints}
         taxonRank={taxonRank} onTaxonRank={setTaxonRank} taxaLayers={taxaLayers}
+        explore={exploreOn}
+        onExplore={(on) => {
+          setExploreOn(on);
+          if (on && erkunden == null) { setSel(null); setErkunden(new Set()); }
+        }}
         linkLength={linkLen} linkLengthDefault={LINK_LENGTH_DEFAULT}
         onLinkLength={(v) => { roam.current = null; setLinkLen(v); }}
         sizeAbsent={sizePresent === false}
@@ -930,7 +962,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                  onShowNet: () => { onShowNet(); setSelectedCluster(null); setLegendeOffen(false); },
                  items: viewItems }}
         onPickAsv={(id) => {
-          if (erkunden != null) setErkunden(mitPartnern(new Set(), id));
+          if (exploreOn) setErkunden((cur) => mitPartnern(cur ?? new Set(), id));
           setSel({ kind: "asv", id, focus: Date.now(), label: true });
         }}
         onOpenAsv={onOpenAsv}
@@ -1032,19 +1064,18 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         )}
 
         <div className="absolute top-2 right-2 z-10 flex gap-1">
-          {erkunden == null ? (
-            <Button data-testid="explore-start" className="bg-raised"
-              onClick={() => { setSel(null); setErkunden(new Set()); }}>explore</Button>
-          ) : (
+          {erkunden != null && (
             <>
               <span className="self-center text-xs text-fg-muted px-2" data-testid="explore-count">
                 {erkunden.size === 0 ? "search an ASV to start"
-                  : `${visibleNodes.length} of ${vis?.nodes.length ?? 0} ASVs · click: show partners`}
+                  : `${visibleNodes.length} of ${vis?.nodes.length ?? 0} ASVs`}
               </span>
               <Button data-testid="explore-end" className="bg-raised"
                 onClick={() => setErkunden(null)}>show all</Button>
             </>
           )}
+          <Button data-testid="canvas-undo" onClick={undo} disabled={nUndo === 0}
+            title="undo the last change of the network" className="bg-raised">↶ undo</Button>
           <Button data-testid="canvas-zoom-reset" onClick={resetZoom}
             title="reset zoom and centering" className="bg-raised">⛶ fit</Button>
           <Button data-testid="canvas-export" onClick={exportPng}
@@ -1121,7 +1152,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                     clearTimeout(focusTimer.current); focusTimer.current = null;
                   }
                   setSel({ kind: "asv", id: p.data.id, focus: Date.now() });
-                  if (erkunden != null) aufdecken(p.data.id);
+                  if (exploreOn) aufdecken(p.data.id);
                 } else if (p.dataType === "edge" && p.data?.manta) {
                   onOpenEdge({ source: p.data.manta.source, target: p.data.manta.target, type: "con" });
                 }

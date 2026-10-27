@@ -57,6 +57,8 @@ export type SidebarProps = {
   onPoints: (v: "asvs" | "taxa") => void;
   taxonRank: "genus" | "species";
   onTaxonRank: (v: "genus" | "species") => void;
+  explore: boolean;
+  onExplore: (on: boolean) => void;
   linkLength: number;
   linkLengthDefault: number;
   onLinkLength: (v: number) => void;
@@ -469,6 +471,15 @@ export default function NetworkSidebar(p: SidebarProps) {
                 className="rounded-md px-1 text-xs text-fg-muted hover:text-fg hover:bg-control disabled:text-fg-disabled disabled:hover:bg-transparent">↺</button>
             </div>
           </div>
+
+          {!p.taxaMode && (
+            <div className="mb-2 flex items-center gap-2" data-testid="explore-control">
+              <ToggleButton data-testid="explore-toggle" pressed={p.explore}
+                onClick={() => p.onExplore(!p.explore)}>explore</ToggleButton>
+              <span className="text-2xs text-fg-muted leading-snug">
+                {p.explore ? "click a point: show its partners" : "start from one ASV"}</span>
+            </div>
+          )}
 
           {!p.taxaMode && (
             <div className="border-t border-line-subtle pt-2" data-testid="keystone-control">
