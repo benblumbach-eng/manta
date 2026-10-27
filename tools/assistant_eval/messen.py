@@ -5,7 +5,7 @@ The expected values come from the dataset itself: before asking, the script runs
 directly (POST /api/agent/tools/<name>) and fills the catalog's facts from their results. So the
 catalog works on any dataset, and a score compares models or code changes on the same data.
 
-Each answer is also graded by a judge model (--judge) against the expected answer and the tool
+Each answer is also graded by a larger judge model (--judge) against the expected answer and the tool
 results the assistant had, and every missed value is traced: did the tools deliver it
 (model_missed) or not (tool_missing)?
 
@@ -325,7 +325,7 @@ def main() -> None:
     p.add_argument("--user", help="MANTA account; the password is asked for, or taken from MANTA_PASSWORD")
     p.add_argument("--dataset", help="dataset id")
     p.add_argument("--model", help="model name as installed in Ollama, e.g. qwen3:8b")
-    p.add_argument("--judge", default="qwen3:8b",
+    p.add_argument("--judge", default="qwen3.6:35b",
                    help="Ollama model that grades each answer for quality (default: %(default)s; "
                         "'none' to skip)")
     p.add_argument("--ollama", default="http://127.0.0.1:11434",
