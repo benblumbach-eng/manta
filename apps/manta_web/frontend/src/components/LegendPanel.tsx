@@ -143,8 +143,9 @@ export default function LegendPanel({ thr, c2, keyLabel, labelMax,
         { term: "grey", sample: lineS(LINE), desc: "link within one module" },
         { term: "amber", sample: lineS(AMBER), desc: "link between two different modules", testid: "legend-cross-row" }] },
       { name: "Width", current: 0, values: [{ term: "strength", testid: "legend-width-row",
-        sample: <Svg><line x1={3} y1={MY - 3} x2={W - 3} y2={MY - 3} stroke={LINE} strokeWidth={1} />
-                     <line x1={3} y1={MY + 3} x2={W - 3} y2={MY + 3} stroke={LINE} strokeWidth={3.5} /></Svg>,
+        sample: <Svg><line x1={3} y1={MY - 6} x2={W - 3} y2={MY - 6} stroke={LINE} strokeWidth={6} />
+                     <line x1={3} y1={MY + 1} x2={W - 3} y2={MY + 1} stroke={LINE} strokeWidth={3} />
+                     <line x1={3} y1={MY + 6} x2={W - 3} y2={MY + 6} stroke={LINE} strokeWidth={1} /></Svg>,
         desc: widthText ?? `on a fixed scale, the same in every filter: r from ${t?.con_tr ?? "the threshold"}${t?.recorded ? "" : " (default)"} to 1; with Links off, the larger NMI from 0 to 1` }] },
       { name: "Direction", current: dirs.indexOf(l.dir), values: [
         { term: "none", sample: lineS(LINE), desc: "no CCM direction drawn" },

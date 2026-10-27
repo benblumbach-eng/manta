@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getAsvList, getStarred, type Criterion2Summary, type Dataset,
+import { getAsvList, type Criterion2Summary, type Dataset,
          type Network, type NetNode } from "../api";
 import { useModules } from "../modules";
-import { isActive, type Filters, type FilterKind, type KeystoneParams, KEYSTONE_DEFAULTS, KEYSTONE_LABEL, layerLabel, layersDefault } from "../networkFilters";
+import { occurrenceLabel, rangeLabel, type Filters, type FilterKind, type KeystoneParams, KEYSTONE_DEFAULTS, KEYSTONE_LABEL, layerLabel, layersDefault } from "../networkFilters";
 import { useDatasetSearch } from "../datasetSearch";
 import { fmtShare } from "../format";
 import ErrorNotice from "./ErrorNotice";
 import DatasetFacts from "./DatasetFacts";
 import { Button, SectionHeading, TextButton, ToggleButton } from "./ui";
 import { Segmented, SliderNumber } from "./controls";
-import { ABUNDANCE_STEPS } from "../networkFilters";
+import type { WindowKind } from "./FilterWindow";
 
+const WINDOWED: FilterKind[] = ["asvs", "abundance", "strength", "occurrence", "taxon", "presence"];
 const BOX = "rounded-md border border-line bg-raised px-2 py-2 mb-2";
 
 const checkCls = (_on: boolean, enabled = true) =>
@@ -57,6 +58,8 @@ export type SidebarProps = {
   onPoints: (v: "asvs" | "taxa") => void;
   taxonRank: "genus" | "species";
   onTaxonRank: (v: "genus" | "species") => void;
+  explore: boolean;
+  onExplore: (on: boolean) => void;
   linkLength: number;
   linkLengthDefault: number;
   onLinkLength: (v: number) => void;
@@ -70,10 +73,11 @@ export type SidebarProps = {
   onPickTaxon: (rank: string, value: string) => void;
   onPickCluster: (label: number) => void;
   onOpenClusterPanel: (label: number) => void;
+  onOpenFilter: (k: WindowKind) => void;
+  occurrenceReason: string | null;
   nSamples: number;
 };
 
-const PRESENCE_START = 5;
 
 export default function NetworkSidebar(p: SidebarProps) {
   const { dataset, net, c2, visibleNodes, filters } = p;
@@ -152,28 +156,6 @@ export default function NetworkSidebar(p: SidebarProps) {
       document.removeEventListener("mousedown", daneben);
     };
   }, [addOpen]);
-  const [taxonOpen, setTaxonOpen] = useState(isActive(filters, "taxon"));
-  const [asvOpen, setAsvOpen] = useState(isActive(filters, "asvs"));
-  const [abundanceOpen, setAbundanceOpen] = useState(isActive(filters, "abundance"));
-  const [presenceOpen, setPresenceOpen] = useState(isActive(filters, "presence"));
-  const [strengthOpen, setStrengthOpen] = useState(isActive(filters, "strength"));
-  const rRange = useMemo((): [number, number] => {
-    const rs = (net?.edges ?? []).flatMap((e) => (e.corr != null ? [Math.abs(e.corr)] : []));
-    if (!rs.length) return [0, 1];
-    return [Math.floor(Math.min(...rs) * 100) / 100, Math.ceil(Math.max(...rs) * 100) / 100];
-  }, [net]);
-  const [taxRank, setTaxRank] = useState("genus");
-  const [taxValue, setTaxValue] = useState("");
-  const [asvText, setAsvText] = useState(filters.asvs?.ids.join("\n") ?? "");
-  const [starredNote, setStarredNote] = useState<string | null>(null);
-  useEffect(() => {
-    if (isActive(filters, "taxon")) setTaxonOpen(true);
-    if (isActive(filters, "asvs")) setAsvOpen(true);
-    if (isActive(filters, "abundance")) setAbundanceOpen(true);
-    if (isActive(filters, "presence")) setPresenceOpen(true);
-    if (isActive(filters, "strength")) setStrengthOpen(true);
-  }, [filters]);
-
   const anyActive = p.order.length > 0;
   const visibleClusters = p.clusters.filter((c) => !filters.hidden.has(c));
 
@@ -213,27 +195,14 @@ export default function NetworkSidebar(p: SidebarProps) {
         return `ASVs: ${valid}${filters.asvs?.neighbors ? " +neighbours" : ""}`;
       }
       case "presence": return `present in ≥ ${filters.presence ?? 1} samples`;
-      case "abundance": return `abundance ≥ ${filters.abundance ?? 0} %`;
-      case "strength": return `r ≥ ${filters.strength?.toFixed(2) ?? ""}`;
+      case "abundance": return `abundance ${rangeLabel(filters.abundance, filters.abundanceMax, (v) => `${v} %`)}`;
+      case "strength": return [
+          filters.strength != null || filters.strengthMax != null
+            ? `r ${rangeLabel(filters.strength, filters.strengthMax, String)}` : null,
+          filters.nmi != null ? `NMI ≥ ${filters.nmi}` : null].filter(Boolean).join(" · ");
+      case "occurrence": return filters.occurrence ? occurrenceLabel(filters.occurrence) : "occurrence";
     }
   };
-
-  const applyAsvText = (text: string, neighbors?: boolean) => {
-    const ids = [...new Set(text.split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean))];
-    p.onFilters({ asvs: ids.length
-      ? { ids, neighbors: neighbors ?? filters.asvs?.neighbors ?? false }
-      : null });
-  };
-
-  const taxValues = useMemo(() => {
-    if (!net) return [] as string[];
-    const s = new Set<string>();
-    for (const n of net.nodes) {
-      const v = (n as unknown as Record<string, unknown>)[taxRank];
-      if (typeof v === "string" && v && v !== "unassigned") s.add(v);
-    }
-    return [...s].sort();
-  }, [net, taxRank]);
 
   return (
     <aside data-testid="network-sidebar"
@@ -471,6 +440,15 @@ export default function NetworkSidebar(p: SidebarProps) {
           </div>
 
           {!p.taxaMode && (
+            <div className="mb-2 flex items-center gap-2" data-testid="explore-control">
+              <ToggleButton data-testid="explore-toggle" pressed={p.explore}
+                onClick={() => p.onExplore(!p.explore)}>explore</ToggleButton>
+              <span className="text-2xs text-fg-muted leading-snug">
+                {p.explore ? "click a point: show its partners" : "start from one ASV"}</span>
+            </div>
+          )}
+
+          {!p.taxaMode && (
             <div className="border-t border-line-subtle pt-2" data-testid="keystone-control">
               <SectionHeading aside={<span className="text-xs text-mark tabular-nums"
                 data-testid="keystone-n">✦ {p.nKey}</span>}>Keystone</SectionHeading>
@@ -531,7 +509,9 @@ export default function NetworkSidebar(p: SidebarProps) {
             {p.order.map((k) => (
               <span key={k} data-testid={`filter-chip-${k}`}
                 className="inline-flex items-center gap-1 text-xs rounded-full border border-accent/60 bg-accent-soft px-2 py-1 text-accent">
-                {chipLabel(k)}
+                {WINDOWED.includes(k)
+                  ? <button onClick={() => p.onOpenFilter(k as WindowKind)} className="hover:underline">{chipLabel(k)}</button>
+                  : chipLabel(k)}
                 <span className="tabular-nums text-accent"
                   data-testid={`filter-chip-${k}-n`}>{p.chipCounts.get(k) ?? "…"}</span>
                 <button data-testid={`filter-chip-${k}-remove`} onClick={() => p.onClearKind(k)}
@@ -652,107 +632,6 @@ export default function NetworkSidebar(p: SidebarProps) {
           )}
         </div>
 
-        {taxonOpen && (
-          <div className={BOX} data-testid="filter-taxon-section">
-            <SectionHeading className="mb-1">Taxon filter</SectionHeading>
-            <div className="flex gap-1">
-              <select data-testid="filter-tax-rank" value={taxRank}
-                onChange={(e) => setTaxRank(e.target.value)}
-                className="px-1 py-1 rounded bg-control border border-line-strong text-xs text-fg">
-                {TAX_RANKS.map((r) => <option key={r} value={r}>{r}</option>)}
-              </select>
-              <input data-testid="filter-tax-value" list="manta-tax-values" value={taxValue}
-                onChange={(e) => {
-                  setTaxValue(e.target.value);
-                  if (taxValues.includes(e.target.value))
-                    p.onFilters({ taxon: { rank: taxRank, value: e.target.value } });
-                }}
-                placeholder="value …"
-                className="flex-1 min-w-0 px-1 py-1 rounded bg-control border border-line-strong text-xs text-fg" />
-              <datalist id="manta-tax-values">
-                {taxValues.map((v) => <option key={v} value={v} />)}
-              </datalist>
-            </div>
-          </div>
-        )}
-
-        {asvOpen && (
-          <div className={BOX} data-testid="filter-asv-section">
-            <SectionHeading className="mb-1">ASV selection</SectionHeading>
-            <textarea data-testid="filter-asv-input" value={asvText}
-              onChange={(e) => setAsvText(e.target.value)}
-              placeholder={"one identifier per line\nor comma-separated"}
-              rows={3}
-              className="w-full px-2 py-1 rounded bg-control border border-line-strong text-xs text-fg font-mono" />
-            <div className="flex flex-wrap gap-1 mt-1">
-              <Button data-testid="filter-asv-apply" onClick={() => applyAsvText(asvText)}>
-                apply
-              </Button>
-              <Button data-testid="filter-asv-starred"
-                onClick={() => getStarred(dataset.dataset_id).then((d) => {
-                  const ids = d.asvs.map((a) => a.id);
-                  setStarredNote(ids.length ? null
-                    : d.note ?? "nothing starred by this account in this dataset");
-                  setAsvText(ids.join("\n"));
-                  applyAsvText(ids.join("\n"));
-                }).catch(() => setStarredNote("could not load the starred list"))}>
-                ★ my starred
-              </Button>
-              <Button data-testid="filter-asv-from-search"
-                onClick={() => {
-                  const ids = results.map((n) => n.id);
-                  setAsvText(ids.join("\n"));
-                  applyAsvText(ids.join("\n"));
-                }}
-                disabled={results.length === 0} reason="no search hits to take">
-                take search hits
-              </Button>
-            </div>
-            <label className="flex items-center gap-2 mt-1 text-xs text-fg cursor-pointer">
-              <input type="checkbox" data-testid="filter-asv-neighbors"
-                checked={filters.asvs?.neighbors ?? false}
-                onChange={(e) => filters.asvs
-                  && p.onFilters({ asvs: { ...filters.asvs, neighbors: e.target.checked } })} />
-              + neighbours
-            </label>
-            {starredNote && <p className="mt-1 text-2xs text-fg-muted">{starredNote}</p>}
-            {p.unknownAsvIds.length > 0 && (
-              <p data-testid="filter-asv-unknown" className="mt-1 text-xs text-warn break-all">
-                not in this network, ignored: {p.unknownAsvIds.join(", ")}
-              </p>
-            )}
-          </div>
-        )}
-
-        {presenceOpen && (
-          <div className={BOX} data-testid="filter-presence-section">
-            <SectionHeading className="mb-1">Present in at least … samples</SectionHeading>
-            <SliderNumber testid="filter-presence-n" label="minimum number of samples"
-              min={1} max={Math.max(1, p.nSamples)} value={filters.presence}
-              fallback={Math.min(PRESENCE_START, Math.max(1, p.nSamples))}
-              onChange={(v) => p.onFilters({ presence: Math.round(v) })}
-              prefix="≥" suffix={`of ${p.nSamples}`} />
-          </div>
-        )}
-
-        {abundanceOpen && (
-          <div className={BOX} data-testid="filter-abundance-section">
-            <SectionHeading className="mb-1">Mean relative abundance</SectionHeading>
-            <SliderNumber testid="filter-abundance" label="minimum mean relative abundance"
-              min={0} max={100} steps={ABUNDANCE_STEPS} value={filters.abundance} fallback={0.1}
-              onChange={(v) => p.onFilters({ abundance: v })} prefix="≥" suffix="%" />
-          </div>
-        )}
-
-        {strengthOpen && (
-          <div className={BOX} data-testid="filter-strength-section">
-            <SectionHeading className="mb-1">Link strength (r)</SectionHeading>
-            <SliderNumber testid="filter-strength" label="minimum r"
-              min={rRange[0]} max={rRange[1]} step={0.01} value={filters.strength}
-              fallback={rRange[0]} onChange={(v) => p.onFilters({ strength: v })} prefix="≥" />
-          </div>
-        )}
-
         <div className="relative" ref={addRef}>
           <Button data-testid="filter-add" aria-expanded={addOpen} onClick={() => setAddOpen((v) => !v)}>
             + add filter
@@ -760,10 +639,30 @@ export default function NetworkSidebar(p: SidebarProps) {
           {addOpen && (
             <div data-testid="filter-add-menu" data-popup=""
               className="absolute z-20 mt-1 w-56 rounded-md border border-line bg-overlay shadow-xl py-1 text-sm">
-              <button data-testid="filter-add-cross"
-                onClick={() => { p.onFilters({ crossOnly: !filters.crossOnly }); setAddOpen(false); }}
+              <div className="px-2 pt-2 pb-1 text-2xs font-semibold text-fg-muted">ASVs</div>
+              <button data-testid="filter-add-asvs"
+                onClick={() => { p.onOpenFilter("asvs"); setAddOpen(false); }}
                 className="w-full text-left px-2 py-1 hover:bg-control text-fg">
-                {filters.crossOnly ? "✓ " : ""}only module-crossing links
+                ASV selection …
+              </button>
+              <button data-testid="filter-add-taxon"
+                onClick={() => { p.onOpenFilter("taxon"); setAddOpen(false); }}
+                className="w-full text-left px-2 py-1 hover:bg-control text-fg">
+                taxon …
+              </button>
+              <button data-testid="filter-add-abundance" disabled={p.sizeAbsent}
+                title={p.sizeAbsent
+                  ? "not applicable: this dataset carries no read counts (transformed values)"
+                  : undefined}
+                onClick={() => { p.onOpenFilter("abundance"); setAddOpen(false); }}
+                className="w-full text-left px-2 py-1 hover:bg-control text-fg disabled:text-fg-disabled disabled:hover:bg-transparent">
+                abundance …
+              </button>
+              <button data-testid="filter-add-occurrence" disabled={p.occurrenceReason != null}
+                title={p.occurrenceReason ?? undefined}
+                onClick={() => { p.onOpenFilter("occurrence"); setAddOpen(false); }}
+                className="w-full text-left px-2 py-1 hover:bg-control text-fg disabled:text-fg-disabled disabled:hover:bg-transparent">
+                occurrence …
               </button>
               <button data-testid="filter-add-c2"
                 onClick={() => { p.onFilters({ c2Only: !filters.c2Only }); setAddOpen(false); }}
@@ -771,33 +670,16 @@ export default function NetworkSidebar(p: SidebarProps) {
                 {filters.c2Only ? "✓ " : ""}only ✦
                 <span className="text-fg-muted"> ({p.nKey})</span>
               </button>
-              <button data-testid="filter-add-taxon"
-                onClick={() => { setTaxonOpen(true); setAddOpen(false); }}
-                className="w-full text-left px-2 py-1 hover:bg-control text-fg">
-                taxon …
-              </button>
-              <button data-testid="filter-add-asvs"
-                onClick={() => { setAsvOpen(true); setAddOpen(false); }}
-                className="w-full text-left px-2 py-1 hover:bg-control text-fg">
-                ASV selection …
-              </button>
-              <button data-testid="filter-add-presence"
-                onClick={() => { setPresenceOpen(true); setAddOpen(false); }}
-                className="w-full text-left px-2 py-1 hover:bg-control text-fg">
-                present in ≥ N samples …
-              </button>
-              <button data-testid="filter-add-abundance" disabled={p.sizeAbsent}
-                title={p.sizeAbsent
-                  ? "not applicable: this dataset carries no read counts (transformed values)"
-                  : undefined}
-                onClick={() => { setAbundanceOpen(true); setAddOpen(false); }}
-                className="w-full text-left px-2 py-1 hover:bg-control text-fg disabled:text-fg-disabled disabled:hover:bg-transparent">
-                abundance …
-              </button>
+              <div className="px-2 pt-2 pb-1 text-2xs font-semibold text-fg-muted">Links</div>
               <button data-testid="filter-add-strength"
-                onClick={() => { setStrengthOpen(true); setAddOpen(false); }}
+                onClick={() => { p.onOpenFilter("strength"); setAddOpen(false); }}
                 className="w-full text-left px-2 py-1 hover:bg-control text-fg">
                 link strength …
+              </button>
+              <button data-testid="filter-add-cross"
+                onClick={() => { p.onFilters({ crossOnly: !filters.crossOnly }); setAddOpen(false); }}
+                className="w-full text-left px-2 py-1 hover:bg-control text-fg">
+                {filters.crossOnly ? "✓ " : ""}only module-crossing links
               </button>
             </div>
           )}
