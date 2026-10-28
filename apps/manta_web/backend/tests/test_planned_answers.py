@@ -276,3 +276,66 @@ def test_keystone_tool_lists_both_criteria(monkeypatch):
     assert out["n_network"] == 5
     assert set(out["both"]) == {r["asv_id"] for r in out["criterion2"]["asvs"]}
     assert "not available" in out["criterion3"]
+
+
+def test_question_is_repeated_after_a_tool_result(calls, monkeypatch):
+    sent = model_says(monkeypatch, {"content": "", "tool_calls": [
+        {"function": {"name": "asv_detail", "arguments": {"asv_id": "euk_asv_001"}}}]},
+        "euk_asv_001 is a Gyrodinium.")
+    agent.run("Is euk_asv_001 rising or falling over time?", DS, model="m")
+    assert sent[1]["messages"][-1] == {
+        "role": "user", "content": agent.QUESTION_NOTE.format(
+            question="Is euk_asv_001 rising or falling over time?")}
+
+
+def test_last_step_has_to_answer(calls, monkeypatch):
+    replies = [{"content": "", "tool_calls": [
+        {"function": {"name": "find_asv", "arguments": {"limit": i}}}]}
+        for i in range(agent.MAX_STEPS - 1)]
+    sent = model_says(monkeypatch, *replies, "euk_asv_001 is in cluster 1.")
+    out = agent.run("In which module is euk_asv_001?", DS, model="m")
+    assert sent[-1]["tools"] is None
+    assert out["answer"] == "euk_asv_001 is in cluster 1." and not out.get("truncated")
+
+
+def test_zero_padded_asv_number_counts_as_its_id():
+    tool = ['{"neighbors": [{"asv_id": "asv_005"}, {"asv_id": "asv_022"}]}']
+    assert grounding.check("It is linked to ASVs 005 and 022.", tool, pool=set()) == []
+    assert grounding.check("It is linked to ASV 023.", tool, pool=set()) == ["023"]
+
+
+def test_german_answer_is_checked_in_english_then_translated(calls, monkeypatch):
+    sent = model_says(monkeypatch, json.dumps({"frage_art": "taxa_composition", "rang": "genus"}),
+                      "Gyrodinium has the most ASVs (12 ASVs) [F1].",
+                      "Gyrodinium hat die meisten ASVs (12 ASVs) [F1].")
+    out = agent.run("Welche Gattungen dominieren hier?", DS, model="m")
+    assert "Write the answer in English" in sent[1]["messages"][-1]["content"]
+    assert out["check"] == "cited"
+    assert out["answer"] == "Gyrodinium hat die meisten ASVs (12 ASVs) [F1]."
+
+
+def test_translation_that_changes_a_number_is_dropped(calls, monkeypatch):
+    model_says(monkeypatch, json.dumps({"frage_art": "taxa_composition", "rang": "genus"}),
+               "Gyrodinium has the most ASVs (12 ASVs) [F1].",
+               "Gyrodinium hat die meisten ASVs (13 ASVs) [F1].")
+    out = agent.run("Welche Gattungen dominieren hier?", DS, model="m")
+    assert out["answer"] == "Gyrodinium has the most ASVs (12 ASVs) [F1]."
+
+
+def test_english_question_is_not_translated():
+    assert not agent._auf_deutsch("Which genera dominate this dataset?")
+    assert not agent._auf_deutsch("What does this module consist of, and who dominates it?")
+    assert agent._auf_deutsch("Gib mir einen Überblick über diesen Datensatz.")
+    assert agent._auf_deutsch("Wie stark sind die Module untereinander verbunden?")
+
+
+def test_spelled_out_number_is_checked_like_digits():
+    tool = ['{"genus": "Synthetica_zeta", "n_asv": 16}']
+    assert grounding.check("Eighteen ASVs belong to Synthetica_zeta.", tool) == ["Eighteen"]
+    assert grounding.check("Sixteen ASVs belong to Synthetica_zeta.", tool) == []
+    assert grounding.check("One genus leads with 16 ASVs.", tool) == []
+    assert grounding.annotate("Eighteen ASVs.", ["Eighteen"]) == "Eighteen [no evidence] ASVs."
+    fs = befunde.taxa_composition({"taxa_composition": TAXA, "dataset_summary": SUMMARY})
+    assert grounding.check_cited("Gyrodinium has twelve ASVs [F1].", fs) == []
+    assert grounding.check_cited("Gyrodinium has eleven ASVs [F1].", fs) == [
+        "eleven is not in F1"]

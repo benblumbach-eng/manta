@@ -27,6 +27,20 @@ def _is_name(text: str, m: re.Match) -> bool:
         return False
     return len(raw) <= 2 if nach.group() == "S" else raw in {"1", "2", "3", "4"}
 
+# Numbers written out ("Eighteen ASVs") are checked like digits. "one"/"eins" are left out: they
+# mostly mean "a single", not a count taken from a tool.
+_ZAHLWOERTER = {w: float(i) for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen "
+    "fifteen sixteen seventeen eighteen nineteen twenty".split()) if w not in {"zero", "one"}}
+_ZAHLWOERTER |= {w: float(10 * i) for i, w in enumerate(
+    "thirty forty fifty sixty seventy eighty ninety".split(), start=3)}
+_ZAHLWOERTER |= {w: float(i) for i, w in enumerate(
+    "null eins zwei drei vier fünf sechs sieben acht neun zehn elf zwölf".split())
+    if w not in {"null", "eins"}}
+_ZAHLWOERTER["zwanzig"] = 20.0
+_ZAHLWORT = re.compile(r"\b(?:" + "|".join(sorted(_ZAHLWOERTER, key=len, reverse=True))
+                       + r")\b", re.I)
+
 # "95 % confidence interval" names the interval, it is not a value
 _KONFIDENZ = re.compile(r"\s*%\s*(?:confidence|CI\b|Konfidenz)", re.I)
 
@@ -40,6 +54,7 @@ _REF = re.compile(
 _WORD_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.:/")
 _TOKEN = re.compile(r"[A-Za-z0-9_\-.:/]+")
 _TRAIL = ".:/-"
+_ID_SUFFIX = re.compile(r"0\d+$")
 
 LABEL_KEYS = frozenset({
     "kingdom", "phylum", "class", "order", "family", "genus", "species", "taxon", "taxa",
@@ -180,10 +195,16 @@ def check(answer: str, tool_texts: list[str], pool: set[float] | None = None,
         wort = _word_at(answer, m.start(), m.end()).rstrip(_TRAIL)
         if _is_identifier(wort) and wort.lower() in tokens:
             continue
+        # "ASV 005" for asv_005: a zero-padded number is an id, not a value
+        if _ID_SUFFIX.match(m.group()) and any(t.endswith("_" + m.group()) for t in tokens):
+            continue
         v = _to_float(m.group())
         if v is None or _covered(v, m.group(), pool):
             continue
         if m.group() not in schlecht:
+            schlecht.append(m.group())
+    for m in _ZAHLWORT.finditer(answer):
+        if not _covered(_ZAHLWOERTER[m.group().lower()], "0", pool) and m.group() not in schlecht:
             schlecht.append(m.group())
     return schlecht
 
@@ -194,6 +215,8 @@ def annotate(answer: str, ungrounded: list[str]) -> str:
     ziel = set(ungrounded)
     gelesen = _minus(answer)
     treffer = [m for m in _NUM.finditer(gelesen) if m.group() in ziel and not _is_name(gelesen, m)]
+    treffer += [m for m in _ZAHLWORT.finditer(gelesen) if m.group() in ziel]
+    treffer.sort(key=lambda m: m.end())
     out = answer
     for m in reversed(treffer):
         out = out[:m.end()] + MARK + out[m.end():]
@@ -252,7 +275,7 @@ def check_cited(answer: str, findings: list[dict], question: str = "") -> list[s
         if not ids:
             # a sentence with no number and no name holds nothing a finding could back
             text = _minus(satz)
-            if (_NUM.search(text) or _ASV_KENNUNG.search(text)
+            if (_NUM.search(text) or _ZAHLWORT.search(text) or _ASV_KENNUNG.search(text)
                     or any(n.lower() not in FREIE_NAMEN for n in _EIGENNAME.findall(text))):
                 probleme.append(f"no finding cited: \"{satz[:80]}\"")
             continue
@@ -270,9 +293,24 @@ def check_cited(answer: str, findings: list[dict], question: str = "") -> list[s
             v = _to_float(m.group())
             if v is not None and not _covered(v, m.group(), pool):
                 probleme.append(f"{m.group()} is not in {', '.join(ids)}")
+        for m in _ZAHLWORT.finditer(text):
+            if not _covered(_ZAHLWOERTER[m.group().lower()], "0", pool):
+                probleme.append(f"{m.group()} is not in {', '.join(ids)}")
         namen = {m.group() for m in _ASV_KENNUNG.finditer(text)}
-        namen |= {m.group() for m in _EIGENNAME.finditer(text)}
+        namen |= {m.group() for m in _EIGENNAME.finditer(text)
+                  if m.group().lower() not in _ZAHLWOERTER}
         for n in sorted(namen):
             if n.lower().rstrip(_TRAIL) not in erlaubt:
                 probleme.append(f"{n} is not in {', '.join(ids)}")
+    return probleme
+
+
+def check_translation(translated: str, original: str) -> list[str]:
+    """A translation of a checked answer may change words, not numbers, ids or citations."""
+    probleme = check(translated, [original])
+    kennungen = {m.group().lower() for m in _ASV_KENNUNG.finditer(original)}
+    probleme += [m.group() for m in _ASV_KENNUNG.finditer(translated)
+                 if m.group().lower() not in kennungen]
+    if sorted(MARKE.findall(translated)) != sorted(MARKE.findall(original)):
+        probleme.append("citations changed")
     return probleme
