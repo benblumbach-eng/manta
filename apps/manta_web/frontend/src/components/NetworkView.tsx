@@ -28,7 +28,7 @@ import ThresholdDialog from "./ThresholdDialog";
 import ErrorNotice from "./ErrorNotice";
 import { esc, fmtP } from "../format";
 import { chainedCounts, clearKind, computeVisible, decodeFilters, emptyFilters, encodeFilters,
-         hiddenBy, isActive, legendRows, thresholdLine, FILTER_KINDS,
+         exploreAdd, hiddenBy, startNone, isActive, legendRows, thresholdLine, FILTER_KINDS,
          type Filters, type FilterKind, type KeystoneParams, KEYSTONE_DEFAULTS, KEYSTONE_LABEL, loadKeystone, saveKeystone, layerLabel,
          occurrenceLabel, rangeLabel, type OccPoint } from "../networkFilters";
 
@@ -97,7 +97,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   onOpenStarred: () => void;
   starredOpen: boolean;
   clusterVonAussen: { label: number; tick: number; ds?: string } | null;
-  vonInspect?: { modules: number[]; asvs: string[]; tick: number } | null;
+  vonInspect?: { modules: number[]; asvs: string[]; tick: number; ds: string } | null;
   onOpenWheel: () => void;
   wheelOpen: boolean;
   extraViews: { view: ExtraView; kind: string; open: boolean; onOpen: () => void }[];
@@ -256,60 +256,54 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   const vis = useMemo(
     () => (net ? computeVisible(net, filters, keyIds, occ) : null),
     [net, filters, keyIds, occ]);
-  // Draft G: explore from one ASV; each click on a point reveals its neighbours.
-  const [erkunden, setErkunden] = useState<Set<string> | null>(null);
+  // Explore: each click on a point adds it and its partners to the shown ASVs.
   const [exploreOn, setExploreOn] = useState(false);
+  // Without an ASV selection a click would collapse the whole network; explore ends there.
+  useEffect(() => { if (filters.asvs == null) setExploreOn(false); }, [filters.asvs]);
 
-  // Undo: every change of filters or of the explored set is one step back.
-  const verlauf = useRef<{ filters: Filters; erkunden: Set<string> | null }[]>([]);
-  const vorher = useRef({ filters, erkunden });
+  // Undo: every change of the filters is one step back; kept per dataset across a reload.
+  const undoKey = `manta-undo:${dataset.dataset_id}`;
+  const verlauf = useRef<string[]>((() => {
+    try { return JSON.parse(sessionStorage.getItem(undoKey) ?? "[]") as string[]; } catch { return []; }
+  })());
+  const vorher = useRef(encodeFilters(filters));
   const rueckgaengig = useRef(false);
-  const [nUndo, setNUndo] = useState(0);
+  const [nUndo, setNUndo] = useState(verlauf.current.length);
   useEffect(() => {
-    if (vorher.current.filters === filters && vorher.current.erkunden === erkunden) return;
+    const jetzt = encodeFilters(filters);
+    if (jetzt === vorher.current) return;
     if (rueckgaengig.current) rueckgaengig.current = false;
     else verlauf.current.push(vorher.current);
-    vorher.current = { filters, erkunden };
+    vorher.current = jetzt;
+    try { sessionStorage.setItem(undoKey, JSON.stringify(verlauf.current.slice(-100))); } catch { }
     setNUndo(verlauf.current.length);
-  }, [filters, erkunden]);
+  }, [filters, undoKey]);
   const undo = () => {
     const s = verlauf.current.pop();
-    if (!s) return;
+    if (s == null) return;
     rueckgaengig.current = true;
-    setFilters(s.filters); setErkunden(s.erkunden);
+    setFilters(decodeFilters(s));
   };
-  useEffect(() => { verlauf.current = []; setNUndo(0); setErkunden(null); setExploreOn(false); },
-    [dataset.dataset_id]);
-  const visibleNodes = useMemo(() => (vis?.nodes ?? [])
-    .filter((n) => erkunden == null || erkunden.has(n.id)), [vis, erkunden]);
-  const visibleEdges = useMemo(() => (vis?.edges ?? [])
-    .filter((e) => erkunden == null || (erkunden.has(e.source) && erkunden.has(e.target))), [vis, erkunden]);
-  const mitPartnern = (basis: Set<string>, id: string) => {
-    const neu = new Set(basis);
-    neu.add(id);
-    for (const e of vis?.edges ?? []) {
-      if (e.source === id) neu.add(e.target);
-      if (e.target === id) neu.add(e.source);
-    }
-    return neu;
-  };
-  const aufdecken = (id: string) => setErkunden((cur) => (cur == null ? cur : mitPartnern(cur, id)));
+  const visibleNodes = vis?.nodes ?? [];
+  const visibleEdges = vis?.edges ?? [];
 
-  // Draft: Inspect -> network. Modules become the module filter; single ASVs stay
-  // highlighted as long as the filters stay exactly as set here.
+  // Inspect -> network, applied once per click in Inspect (not again on reload or in another
+  // dataset). Modules become the module filter; ASVs alone become the shown ASVs. Single ASVs
+  // stay highlighted as long as the filters stay exactly as set here.
   const [heraus, setHeraus] = useState<{ asvs: Set<string>; key: string } | null>(null);
+  const inspectTick = useRef<number | null>(null);
   useEffect(() => {
-    if (!vonInspect || !net) return;
-    // Only ASVs in Inspect: the network shows just these ASVs.
+    if (!vonInspect || !net || vonInspect.ds !== dataset.dataset_id) return;
+    if (inspectTick.current === vonInspect.tick) return;
+    inspectTick.current = vonInspect.tick;
     if (!vonInspect.modules.length) {
       setHeraus(null);
-      setErkunden(new Set(vonInspect.asvs));
+      setFilters((f) => ({ ...f, hidden: new Set(), asvs: { ids: [...vonInspect.asvs], neighbors: false } }));
       return;
     }
     const alle = [...new Set(net.nodes.map((n) => n.cluster))];
-    const neu: Filters = { ...filters,
+    const neu: Filters = { ...filters, asvs: null,
       hidden: new Set(alle.filter((c) => !vonInspect.modules.includes(c))) };
-    setErkunden(null);
     setFilters(neu);
     setHeraus(vonInspect.asvs.length ? { asvs: new Set(vonInspect.asvs), key: encodeFilters(neu) } : null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -693,7 +687,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
           const isOpen = openAsvId != null && (n.id === openAsvId || n.id === gezeichnet(openAsvId));
           const isSelAsv = sel?.kind === "asv" && (n.id === sel.id || n.id === gezeichnet(sel.id));
           const marked = sel != null && sel.kind !== "asv" && markedDrawn.has(n.id);
-          const dimmed = erkunden == null && sel != null && !isSelAsv && !marked && !isOpen;
+          const dimmed = !exploreOn && sel != null && !isSelAsv && !marked && !isOpen;
           const hervor = herausAktiv?.has(n.id) ?? false;
           const tp = taxaById.get(n.id);
           return {
@@ -787,7 +781,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
        c2, keyIds, seedXY, sel, selMarked, markedDrawn, gezeichnet, markColor, edgeWidth, openAsvId, dense,
        scale, edgeStrength, ewMin, ewMax, filters.layers, light, nodeOutline, selRing,
        labelColor, labelBorder, glowColours, tok, modules,
-       linkLen, nSamples, erkunden, herausAktiv]);
+       linkLen, nSamples, exploreOn, herausAktiv]);
 
   const optionRef = useRef(option);
   optionRef.current = option;
@@ -980,18 +974,19 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
       <NetworkSidebar
         dataset={dataset} net={net} c2={c2}
         kp={kp} onKp={patchKp} nCrit1={c1Ids.size} nKey={keyIds.size}
-        visibleNodes={erkunden != null ? (vis?.nodes ?? []) : visibleNodes} nSamples={nSamples}
+        visibleNodes={visibleNodes} nSamples={nSamples}
         clusters={clusters} clusterColor={clusterColor} countByCluster={countByCluster}
         filters={filters} onFilters={patchFilters}
         onClearKind={(k) => setFilters((f) => clearKind(f, k))}
         onClearAll={() => setFilters(emptyFilters())}
+        onStartNone={() => { setSel(null); setFilters(startNone()); }}
         order={order} chipCounts={chipCounts} unknownAsvIds={unknownAsvIds}
         taxaMode={taxaMode} points={points} onPoints={setPoints}
         taxonRank={taxonRank} onTaxonRank={setTaxonRank} taxaLayers={taxaLayers}
         explore={exploreOn}
         onExplore={(on) => {
           setExploreOn(on);
-          if (on && erkunden == null) { setSel(null); setErkunden(new Set()); }
+          if (on && filters.asvs == null) { setSel(null); setFilters((f) => ({ ...f, asvs: { ids: [], neighbors: false } })); }
         }}
         linkLength={linkLen} linkLengthDefault={LINK_LENGTH_DEFAULT}
         onLinkLength={(v) => { roam.current = null; setLinkLen(v); }}
@@ -1000,7 +995,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                  onShowNet: () => { onShowNet(); setSelectedCluster(null); setLegendeOffen(false); },
                  items: viewItems }}
         onPickAsv={(id) => {
-          if (exploreOn) setErkunden((cur) => mitPartnern(cur ?? new Set(), id));
+          if (exploreOn) setFilters((f) => exploreAdd(f, id));
           setSel({ kind: "asv", id, focus: Date.now(), label: true });
         }}
         onOpenAsv={onOpenAsv}
@@ -1028,11 +1023,12 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
           </div>
         )}
 
-        {net && drawnCounts.nodes === 0 && !occLoading && erkunden == null && (
+        {net && drawnCounts.nodes === 0 && !occLoading && (
           <div className="absolute inset-x-0 top-14 z-10 flex justify-center pointer-events-none">
             <p data-testid="canvas-empty"
               className="pointer-events-auto rounded border border-line-strong bg-overlay px-3 py-2 text-xs text-fg">
-              {net.nodes.length === 0 ? "This dataset's network has no nodes." : (
+              {net.nodes.length === 0 ? "This dataset's network has no nodes."
+                : filters.asvs?.ids.length === 0 ? "Nothing shown yet. Search an ASV on the left to add it." : (
                 <>
                   No ASV passes the active filters.{" "}
                   <TextButton data-testid="canvas-empty-clear" onClick={() => setFilters(emptyFilters())}>
@@ -1069,7 +1065,15 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                 <span className="font-mono text-fg">{sel.id}</span>
                 {selNode?.genus && <span className="italic text-fg">{selNode.genus}</span>}
                 {selNode && <span className="text-fg-muted">{modules.label(selNode.cluster)}</span>}
-                {selHiddenBy ? (
+                {selHiddenBy && selHiddenBy.kinds.length === 1 && selHiddenBy.kinds[0] === "asvs" ? (
+                  <>
+                    <span data-testid="highlight-hidden-note" className="text-warn">not shown</span>
+                    <TextButton data-testid="highlight-add" className="whitespace-nowrap"
+                      onClick={() => setFilters((f) => (f.asvs
+                        ? { ...f, asvs: { ...f.asvs, ids: [...new Set([...f.asvs.ids, sel.id])] } } : f))}>
+                      add it</TextButton>
+                  </>
+                ) : selHiddenBy ? (
                   <>
                     <span data-testid="highlight-hidden-note" className="text-warn">
                       not visible — hidden by the filter{selHiddenBy.labels.length > 1 ? "s" : ""}{" "}
@@ -1110,16 +1114,6 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         )}
 
         <div className="absolute top-2 right-2 z-10 flex gap-1">
-          {erkunden != null && (
-            <>
-              <span className="self-center text-xs text-fg-muted px-2" data-testid="explore-count">
-                {erkunden.size === 0 ? "search an ASV to start"
-                  : `${visibleNodes.length} of ${vis?.nodes.length ?? 0} ASVs`}
-              </span>
-              <Button data-testid="explore-end" className="bg-raised"
-                onClick={() => setErkunden(null)}>show all</Button>
-            </>
-          )}
           <Button data-testid="canvas-undo" onClick={undo} disabled={nUndo === 0}
             title="undo the last change of the network" className="bg-raised">↶ undo</Button>
           <Button data-testid="canvas-zoom-reset" onClick={resetZoom}
@@ -1198,7 +1192,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                     clearTimeout(focusTimer.current); focusTimer.current = null;
                   }
                   setSel({ kind: "asv", id: p.data.id, focus: Date.now() });
-                  if (exploreOn) aufdecken(p.data.id);
+                  if (exploreOn) { const id: string = p.data.id; setFilters((f) => exploreAdd(f, id)); }
                 } else if (p.dataType === "edge" && p.data?.manta) {
                   onOpenEdge({ source: p.data.manta.source, target: p.data.manta.target, type: "con" });
                 }
@@ -1214,7 +1208,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
           defaultWidth={460}>
           <FilterWindow key={filterWin} kind={filterWin} net={net} filters={filters}
             onFilters={patchFilters} dates={dates} nSamples={nSamples}
-            datasetId={dataset.dataset_id} occError={occErr} />
+            datasetId={dataset.dataset_id} occError={occErr} onOpenModule={setSelectedCluster} />
         </PanelFrame>
       )}
 

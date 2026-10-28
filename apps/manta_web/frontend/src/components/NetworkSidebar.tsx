@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getAsvList, type Criterion2Summary, type Dataset,
          type Network, type NetNode } from "../api";
 import { useModules } from "../modules";
@@ -11,7 +11,7 @@ import { Button, SectionHeading, TextButton, ToggleButton } from "./ui";
 import { Segmented, SliderNumber } from "./controls";
 import type { WindowKind } from "./FilterWindow";
 
-const WINDOWED: FilterKind[] = ["asvs", "abundance", "strength", "occurrence", "taxon", "presence"];
+const WINDOWED: FilterKind[] = ["modules", "asvs", "abundance", "strength", "occurrence", "taxon", "presence"];
 const BOX = "rounded-md border border-line bg-raised px-2 py-2 mb-2";
 
 const checkCls = (_on: boolean, enabled = true) =>
@@ -50,6 +50,7 @@ export type SidebarProps = {
   onFilters: (patch: Partial<Filters>) => void;
   onClearKind: (k: FilterKind) => void;
   onClearAll: () => void;
+  onStartNone: () => void;
   order: FilterKind[];
   chipCounts: Map<FilterKind, number>;
   unknownAsvIds: string[];
@@ -94,13 +95,15 @@ export default function NetworkSidebar(p: SidebarProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lenDraft]);
   const q = search.trim();
+  // ASVs are searched in the whole network, so a hidden one can be found and added.
+  const shownIds = useMemo(() => new Set(visibleNodes.map((n) => n.id)), [visibleNodes]);
   const results = useMemo(
     () => (q
-      ? visibleNodes.filter((n) => n.id.toLowerCase().includes(q.toLowerCase())
+      ? (net?.nodes ?? []).filter((n) => n.id.toLowerCase().includes(q.toLowerCase())
           || (n.genus ?? "").toLowerCase().includes(q.toLowerCase()))
         .sort((a, b) => (b.rel_abundance ?? 0) - (a.rel_abundance ?? 0))
       : []),
-    [q, visibleNodes]);
+    [q, net]);
   const [searchFocus, setSearchFocus] = useState(false);
   const [topAsvs, setTopAsvs] = useState<{ id: string; cluster: number | null; label: string;
                                            share: number }[]>([]);
@@ -159,26 +162,15 @@ export default function NetworkSidebar(p: SidebarProps) {
   const anyActive = p.order.length > 0;
   const visibleClusters = p.clusters.filter((c) => !filters.hidden.has(c));
 
-  const modListRef = useRef<HTMLDivElement>(null);
-  const [modBelow, setModBelow] = useState(0);
-  const measureModList = useCallback(() => {
-    const el = modListRef.current;
-    if (!el) { setModBelow(0); return; }
-    const bottom = el.scrollTop + el.clientHeight;
-    let n = 0;
-    for (const row of Array.from(el.children) as HTMLElement[]) {
-      if (row.offsetTop + row.offsetHeight > bottom + 1) n++;
-    }
-    setModBelow(n);
-  }, []);
-  useEffect(() => {
-    measureModList();
-    const el = modListRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(measureModList);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [measureModList, p.clusters, modules]);
+  const [collapsed, setCollapsedState] = useState(() => {
+    try { return localStorage.getItem("manta-sidebar-collapsed") === "1"; } catch { return false; }
+  });
+  const setCollapsed = (v: boolean) => {
+    setCollapsedState(v);
+    try { localStorage.setItem("manta-sidebar-collapsed", v ? "1" : "0"); } catch { }
+  };
+  const [details, setDetails] = useState(false);
+  const [keystoneOpen, setKeystoneOpen] = useState(false);
 
   const chipLabel = (k: FilterKind): string => {
     switch (k) {
@@ -191,8 +183,12 @@ export default function NetworkSidebar(p: SidebarProps) {
       case "c2": return "✦ only";
       case "taxon": return filters.taxon ? `${filters.taxon.value} (${filters.taxon.rank})` : "Taxon";
       case "asvs": {
-        const valid = (filters.asvs?.ids.length ?? 0) - p.unknownAsvIds.length;
-        return `ASVs: ${valid}${filters.asvs?.neighbors ? " +neighbours" : ""}`;
+        const ids = (filters.asvs?.ids ?? []).filter((id) => !p.unknownAsvIds.includes(id));
+        if (!ids.length) return "ASVs: none yet";
+        const ex = filters.asvs?.neighbors ? ids.length
+          : (filters.asvs?.expand ?? []).filter((id) => ids.includes(id)).length;
+        return "ASVs " + (ids.length <= 3 ? ids.join(", ") : `${ids.length}`)
+          + (ex === 0 ? "" : ex === ids.length ? " + partners" : ` + partners of ${ex}`);
       }
       case "presence": return `present in ≥ ${filters.presence ?? 1} samples`;
       case "abundance": return `abundance ${rangeLabel(filters.abundance, filters.abundanceMax, (v) => `${v} %`)}`;
@@ -204,19 +200,48 @@ export default function NetworkSidebar(p: SidebarProps) {
     }
   };
 
+  if (collapsed) {
+    return (
+      <aside data-testid="network-sidebar-collapsed"
+        className="w-11 border-r border-line flex flex-col items-center gap-2 py-3">
+        <Button variant="ghost" data-testid="sidebar-expand" title="show the sidebar"
+          aria-label="show the sidebar" onClick={() => setCollapsed(false)}>»</Button>
+        <ToggleButton data-testid="net-tab" pressed={!p.views.anyViewOpen} onClick={p.views.onShowNet}
+          title="Network" className="w-8 justify-center">◉</ToggleButton>
+        {p.views.items.map((v) => (
+          <ToggleButton key={v.key} data-testid={v.testid} onClick={v.onOpen} pressed={v.open}
+            title={v.disabledReason ?? v.label} aria-disabled={v.disabledReason ? true : undefined}
+            className={`w-8 justify-center${v.disabledReason ? " text-fg-disabled" : ""}`}>
+            {v.icon}
+          </ToggleButton>
+        ))}
+        <div className="mt-2 text-2xs text-accent tabular-nums text-center leading-tight"
+          data-testid="sidebar-shown-count" title="ASVs shown">
+          {visibleNodes.length}<br />/{net?.nodes.length ?? "…"}
+        </div>
+      </aside>
+    );
+  }
+
   return (
     <aside data-testid="network-sidebar"
       className="w-72 border-r border-line flex flex-col gap-3 p-3 overflow-auto">
       <div className="space-y-2">
-        <div>
-          <h2 className="text-base font-semibold text-fg truncate">
-            {dataset.region ?? dataset.dataset_id}
-          </h2>
-          <div className="text-xs text-fg-muted" data-testid="dataset-marker">
-            Marker {dataset.marker ?? "?"}
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-base font-semibold text-fg truncate">
+              {dataset.region ?? dataset.dataset_id}
+            </h2>
+            <div className="text-xs text-fg-muted" data-testid="dataset-marker">
+              Marker {dataset.marker ?? "?"} · {dataset.n_asv} ASVs · {dataset.n_sample} time points{" "}
+              <TextButton data-testid="dataset-details" onClick={() => setDetails((v) => !v)}>
+                {details ? "hide details" : "details"}</TextButton>
+            </div>
           </div>
+          <Button variant="ghost" data-testid="sidebar-collapse" title="hide the sidebar"
+            aria-label="hide the sidebar" onClick={() => setCollapsed(true)}>«</Button>
         </div>
-        <DatasetFacts dataset={dataset} />
+        {details && <DatasetFacts dataset={dataset} />}
       </div>
 
       <div>
@@ -237,171 +262,268 @@ export default function NetworkSidebar(p: SidebarProps) {
       </div>
 
       <div>
-        <input data-testid="asv-search" value={search} onChange={(e) => setSearch(e.target.value)}
-          onFocus={() => setSearchFocus(true)} onBlur={() => setTimeout(() => setSearchFocus(false), 150)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && results.length === 1 && taxMatches.length === 0
-                && clusterMatch == null) p.onPickAsv(results[0].id);
-          }}
-          placeholder="search ASV, taxon or cluster …"
-          className="w-full px-2 py-1 rounded-md bg-control border border-line-strong text-sm text-fg placeholder:text-fg-muted" />
-        {searchFocus && !q && topAsvs.length > 0 && (
-          <div className="mt-1 border border-line rounded-md bg-raised" data-testid="top-asvs">
-            <SectionHeading as="h4" className="px-2 pt-1">most abundant ASVs</SectionHeading>
-            <ul className="max-h-60 overflow-auto">
-              {topAsvs.map((a) => (
-                <li key={a.id}>
-                  <button data-testid="top-asv" data-asv={a.id}
-                    onClick={() => (a.cluster != null ? p.onPickAsv(a.id) : p.onOpenAsv(a.id))}
-                    className="w-full flex items-center gap-2 text-left px-2 py-1 hover:bg-control text-sm">
-                    <span className="inline-block w-2 h-2 rounded-full shrink-0"
-                      style={{ background: (a.cluster != null && p.clusterColor.get(a.cluster)) || "var(--text-disabled)" }} />
-                    <span className="text-fg">{a.id}</span>
-                    <span className="text-fg-muted truncate flex-1">
-                      {a.label !== "unassigned" ? a.label : ""}
+        <SectionHeading className="mb-1" aside={
+          <span className="text-xs text-fg tabular-nums" data-testid="shown-count">
+            {visibleNodes.length} of {net?.nodes.length ?? "…"} ASVs</span>}>Shown</SectionHeading>
+        <div className={`${BOX} space-y-2`} data-testid="shown-section">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-fg-muted">start new</span>
+            <Button data-testid="start-all" onClick={p.onClearAll}>all ASVs</Button>
+            <Button data-testid="start-none" onClick={p.onStartNone}>none</Button>
+          </div>
+          <div>
+          <input data-testid="asv-search" value={search} onChange={(e) => setSearch(e.target.value)}
+            onFocus={() => setSearchFocus(true)} onBlur={() => setTimeout(() => setSearchFocus(false), 150)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && results.length === 1 && taxMatches.length === 0
+                  && clusterMatch == null) p.onPickAsv(results[0].id);
+            }}
+            placeholder="search ASV, taxon or cluster …"
+            className="w-full px-2 py-1 rounded-md bg-control border border-line-strong text-sm text-fg placeholder:text-fg-muted" />
+          {searchFocus && !q && topAsvs.length > 0 && (
+            <div className="mt-1 border border-line rounded-md bg-raised" data-testid="top-asvs">
+              <SectionHeading as="h4" className="px-2 pt-1">most abundant ASVs</SectionHeading>
+              <ul className="max-h-60 overflow-auto">
+                {topAsvs.map((a) => (
+                  <li key={a.id}>
+                    <button data-testid="top-asv" data-asv={a.id}
+                      onClick={() => (a.cluster != null ? p.onPickAsv(a.id) : p.onOpenAsv(a.id))}
+                      className="w-full flex items-center gap-2 text-left px-2 py-1 hover:bg-control text-sm">
+                      <span className="inline-block w-2 h-2 rounded-full shrink-0"
+                        style={{ background: (a.cluster != null && p.clusterColor.get(a.cluster)) || "var(--text-disabled)" }} />
+                      <span className="text-fg">{a.id}</span>
+                      <span className="text-fg-muted truncate flex-1">
+                        {a.label !== "unassigned" ? a.label : ""}
+                      </span>
+                      <span className="text-fg font-semibold tabular-nums">{fmtShare(a.share)}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {(results.length > 0 || taxMatches.length > 0 || clusterMatch != null) && (
+            <ul className="mt-1 max-h-40 overflow-auto border border-line rounded-md bg-raised">
+              {clusterMatch != null && (
+                <li>
+                  <button data-testid="cluster-result" onClick={() => p.onPickCluster(clusterMatch)}
+                    className="w-full text-left px-2 py-1 hover:bg-control text-sm">
+                    <span data-testid="cluster-swatch" className="inline-block w-3 h-3 rounded-sm mr-1 align-middle"
+                      style={{ background: p.clusterColor.get(clusterMatch) ?? "var(--text-disabled)" }} />
+                    <span className="text-fg">{modules.label(clusterMatch)}</span>{" "}
+                    <span className="text-fg-muted">
+                      {p.countByCluster.get(clusterMatch) ?? 0} ASVs — mark all
                     </span>
-                    <span className="text-fg font-semibold tabular-nums">{fmtShare(a.share)}</span>
+                  </button>
+                </li>
+              )}
+              {taxMatches.map((t) => (
+                <li key={`${t.rank}:${t.value}`}>
+                  <button data-testid="tax-result" onClick={() => p.onPickTaxon(t.rank, t.value)}
+                    className="w-full text-left px-2 py-1 hover:bg-control text-sm">
+                    <span className="text-warn">◌ {t.value}</span>{" "}
+                    <span className="text-fg-muted">
+                      {t.rank} · {t.n} ASV{t.n === 1 ? "" : "s"} in the network — mark all
+                    </span>
+                  </button>
+                </li>
+              ))}
+              {results.map((n) => (
+                <li key={n.id}>
+                  <button data-testid="asv-result" onClick={() => p.onPickAsv(n.id)}
+                    className="w-full text-left px-2 py-1 hover:bg-control text-sm">
+                    <span className="inline-block w-2 h-2 rounded-full mr-2"
+                      style={{ background: p.clusterColor.get(n.cluster) ?? "var(--text-disabled)" }} />
+                    <span className="text-fg">{n.id}</span>{" "}
+                    <span className="text-fg-muted">{n.genus}</span>{" "}
+                    <span className="text-fg-muted tabular-nums">· {fmtShare(n.rel_abundance)}</span>
+                  {!shownIds.has(n.id) && <span className="text-fg-muted"> · not shown</span>}
                   </button>
                 </li>
               ))}
             </ul>
-          </div>
-        )}
-        {(results.length > 0 || taxMatches.length > 0 || clusterMatch != null) && (
-          <ul className="mt-1 max-h-40 overflow-auto border border-line rounded-md bg-raised">
-            {clusterMatch != null && (
-              <li>
-                <button data-testid="cluster-result" onClick={() => p.onPickCluster(clusterMatch)}
-                  className="w-full text-left px-2 py-1 hover:bg-control text-sm">
-                  <span data-testid="cluster-swatch" className="inline-block w-3 h-3 rounded-sm mr-1 align-middle"
-                    style={{ background: p.clusterColor.get(clusterMatch) ?? "var(--text-disabled)" }} />
-                  <span className="text-fg">{modules.label(clusterMatch)}</span>{" "}
-                  <span className="text-fg-muted">
-                    {p.countByCluster.get(clusterMatch) ?? 0} ASVs — mark all
-                  </span>
-                </button>
-              </li>
-            )}
-            {taxMatches.map((t) => (
-              <li key={`${t.rank}:${t.value}`}>
-                <button data-testid="tax-result" onClick={() => p.onPickTaxon(t.rank, t.value)}
-                  className="w-full text-left px-2 py-1 hover:bg-control text-sm">
-                  <span className="text-warn">◌ {t.value}</span>{" "}
-                  <span className="text-fg-muted">
-                    {t.rank} · {t.n} ASV{t.n === 1 ? "" : "s"} in the network — mark all
-                  </span>
-                </button>
-              </li>
-            ))}
-            {results.map((n) => (
-              <li key={n.id}>
-                <button data-testid="asv-result" onClick={() => p.onPickAsv(n.id)}
-                  className="w-full text-left px-2 py-1 hover:bg-control text-sm">
-                  <span className="inline-block w-2 h-2 rounded-full mr-2"
-                    style={{ background: p.clusterColor.get(n.cluster) ?? "var(--text-disabled)" }} />
-                  <span className="text-fg">{n.id}</span>{" "}
-                  <span className="text-fg-muted">{n.genus}</span>{" "}
-                  <span className="text-fg-muted tabular-nums">· {fmtShare(n.rel_abundance)}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
+          )}
 
-        {q && (
-          <div className="mt-1 space-y-1" data-testid="search-dataset">
-            {ganz.loading && (
-              <p className="text-2xs text-fg-muted" data-testid="search-dataset-loading">
-                searching the whole dataset …
-              </p>
-            )}
-            {ganz.error != null && (
-              <ErrorNotice error={ganz.error} inline testid="search-error"
-                what="The search over the whole dataset failed." />
-            )}
-            {ganz.result && netzLeer && ganz.result.in_network.n_asv > 0 && (
-              <p className="text-xs text-warn leading-snug" data-testid="search-hidden">
-                {ganz.result.in_network.n_asv} matching ASV{ganz.result.in_network.n_asv === 1 ? " is" : "s are"} in
-                the network but hidden by the active filters.{" "}
-                <TextButton data-testid="search-hidden-clear" onClick={p.onClearAll}>clear all</TextButton>
-              </p>
-            )}
-            {ganz.result && ganz.result.outside_network.n_asv > 0 && (() => {
-              const r = ganz.result;
-              const aussen = r.outside_network;
-              const gruppen: typeof aussen.taxa = [];
-              for (const t of aussen.taxa) {
-                const ids = t.asvs.map((a) => a.id);
-                if (t.n_asv === t.asvs.length && gruppen.some((g) =>
-                  ids.every((id) => g.asvs.some((x) => x.id === id)))) continue;
-                gruppen.push(t);
-              }
-              const inGruppe = new Set(aussen.taxa.flatMap((t) => t.asvs.map((a) => a.id)));
-              const nurKennung = aussen.asvs.filter((a) => a.id_match && !inGruppe.has(a.id));
-              const zeile = (a: (typeof aussen.asvs)[number]) => (
-                <li key={a.id}>
-                  <button data-testid="search-outside-asv" data-asv={a.id} onClick={() => p.onOpenAsv(a.id)}
-                    className="w-full text-left px-2 py-1 hover:bg-control text-xs">
-                    <span className="font-mono text-fg">{a.id}</span>{" "}
-                    <span className="text-fg-muted">
-                      {a.label !== "unassigned" ? `${a.label} · ` : ""}{fmtShare(a.share)} · found in {a.n_samples_present} of {r.n_samples} samples
-                    </span>{" "}
-                    <span className="text-accent">→ open</span>
+          {q && (
+            <div className="mt-1 space-y-1" data-testid="search-dataset">
+              {ganz.loading && (
+                <p className="text-2xs text-fg-muted" data-testid="search-dataset-loading">
+                  searching the whole dataset …
+                </p>
+              )}
+              {ganz.error != null && (
+                <ErrorNotice error={ganz.error} inline testid="search-error"
+                  what="The search over the whole dataset failed." />
+              )}
+              {ganz.result && netzLeer && ganz.result.in_network.n_asv > 0 && (
+                <p className="text-xs text-warn leading-snug" data-testid="search-hidden">
+                  {ganz.result.in_network.n_asv} matching ASV{ganz.result.in_network.n_asv === 1 ? " is" : "s are"} in
+                  the network but hidden by the active filters.{" "}
+                  <TextButton data-testid="search-hidden-clear" onClick={p.onClearAll}>clear all</TextButton>
+                </p>
+              )}
+              {ganz.result && ganz.result.outside_network.n_asv > 0 && (() => {
+                const r = ganz.result;
+                const aussen = r.outside_network;
+                const gruppen: typeof aussen.taxa = [];
+                for (const t of aussen.taxa) {
+                  const ids = t.asvs.map((a) => a.id);
+                  if (t.n_asv === t.asvs.length && gruppen.some((g) =>
+                    ids.every((id) => g.asvs.some((x) => x.id === id)))) continue;
+                  gruppen.push(t);
+                }
+                const inGruppe = new Set(aussen.taxa.flatMap((t) => t.asvs.map((a) => a.id)));
+                const nurKennung = aussen.asvs.filter((a) => a.id_match && !inGruppe.has(a.id));
+                const zeile = (a: (typeof aussen.asvs)[number]) => (
+                  <li key={a.id}>
+                    <button data-testid="search-outside-asv" data-asv={a.id} onClick={() => p.onOpenAsv(a.id)}
+                      className="w-full text-left px-2 py-1 hover:bg-control text-xs">
+                      <span className="font-mono text-fg">{a.id}</span>{" "}
+                      <span className="text-fg-muted">
+                        {a.label !== "unassigned" ? `${a.label} · ` : ""}{fmtShare(a.share)} · found in {a.n_samples_present} of {r.n_samples} samples
+                      </span>{" "}
+                      <span className="text-accent">→ open</span>
+                    </button>
+                  </li>
+                );
+                return (
+                  <div className="rounded-md border border-line bg-raised" data-testid="search-outside">
+                    <SectionHeading as="h4" className="px-2 pt-1">
+                      in this dataset, no link in the network
+                    </SectionHeading>
+                    <ul className="max-h-48 overflow-auto pb-1">
+                      {gruppen.map((t) => {
+                        const gk = `${t.rank}:${t.value}`;
+                        const eins = t.n_asv === 1 && t.asvs.length === 1;
+                        const offen = offeneGruppe === gk;
+                        return (
+                          <li key={gk}>
+                            <button data-testid="search-outside-taxon" data-n={t.n_asv}
+                              aria-expanded={eins ? undefined : offen}
+                              onClick={() => (eins ? p.onOpenAsv(t.asvs[0].id) : setOffeneGruppe(offen ? null : gk))}
+                              className="w-full text-left px-2 py-1 hover:bg-control text-sm">
+                              <span className="text-warn">◌ {t.value}</span>{" "}
+                              <span className="text-fg-muted">
+                                · {t.n_asv} ASV{t.n_asv === 1 ? "" : "s"} <span className="text-fg-muted">({t.rank})</span>
+                              </span>{" "}
+                              <span className="text-accent">{eins ? "→ open" : offen ? "▾" : "▸ open"}</span>
+                            </button>
+                            {offen && (
+                              <ul className="ml-3 border-l border-line" data-testid="search-outside-members">
+                                {t.asvs.map(zeile)}
+                                {t.n_asv > t.asvs.length && (
+                                  <li className="px-2 text-2xs text-fg-muted">
+                                    {t.asvs.length} of {t.n_asv} shown — type more to narrow down
+                                  </li>
+                                )}
+                              </ul>
+                            )}
+                          </li>
+                        );
+                      })}
+                      {nurKennung.map(zeile)}
+                    </ul>
+                    {aussen.n_taxa > aussen.taxa.length && (
+                      <p className="px-2 pb-1 text-2xs text-fg-muted">
+                        {aussen.taxa.length} of {aussen.n_taxa} names shown — type more to narrow down
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
+              {ganz.result?.sentence && netzLeer && (
+                <p className="text-2xs text-fg-muted leading-snug" data-testid="search-none">
+                  {ganz.result.sentence}
+                </p>
+              )}
+            </div>
+          )}
+          </div>
+          {anyActive ? (
+            <div className="flex flex-wrap gap-1" data-testid="filter-chips">
+            {p.order.map((k) => (
+              <span key={k} data-testid={`filter-chip-${k}`}
+                className="inline-flex items-center gap-1 text-xs rounded-full border border-accent/60 bg-accent-soft px-2 py-1 text-accent">
+                {WINDOWED.includes(k)
+                  ? <button onClick={() => p.onOpenFilter(k as WindowKind)} className="hover:underline">{chipLabel(k)}</button>
+                  : chipLabel(k)}
+                <span className="tabular-nums text-accent"
+                  data-testid={`filter-chip-${k}-n`}>{p.chipCounts.get(k) ?? "…"}</span>
+                <button data-testid={`filter-chip-${k}-remove`} onClick={() => p.onClearKind(k)}
+                  className="text-accent hover:text-fg" aria-label={`remove ${k} filter`}>×</button>
+              </span>
+            ))}
+            </div>
+          ) : (
+            <p className="text-xs text-fg-muted" data-testid="filter-none">all ASVs · no filter</p>
+          )}
+          <div className="flex items-center gap-2">
+            <div className="relative" ref={addRef}>
+              <Button variant="primary" data-testid="filter-add" aria-expanded={addOpen} onClick={() => setAddOpen((v) => !v)}>
+                + add filter
+              </Button>
+              {addOpen && (
+                <div data-testid="filter-add-menu" data-popup=""
+                  className="absolute z-20 mt-1 w-56 rounded-md border border-line bg-overlay shadow-xl py-1 text-sm">
+                  <div className="px-2 pt-2 pb-1 text-2xs font-semibold text-fg-muted">ASVs</div>
+              <button data-testid="filter-add-modules"
+                onClick={() => { p.onOpenFilter("modules"); setAddOpen(false); }}
+                className="w-full text-left px-2 py-1 hover:bg-control text-fg">
+                modules …
+              </button>
+                  <button data-testid="filter-add-asvs"
+                    onClick={() => { p.onOpenFilter("asvs"); setAddOpen(false); }}
+                    className="w-full text-left px-2 py-1 hover:bg-control text-fg">
+                    ASV selection …
                   </button>
-                </li>
-              );
-              return (
-                <div className="rounded-md border border-line bg-raised" data-testid="search-outside">
-                  <SectionHeading as="h4" className="px-2 pt-1">
-                    in this dataset, no link in the network
-                  </SectionHeading>
-                  <ul className="max-h-48 overflow-auto pb-1">
-                    {gruppen.map((t) => {
-                      const gk = `${t.rank}:${t.value}`;
-                      const eins = t.n_asv === 1 && t.asvs.length === 1;
-                      const offen = offeneGruppe === gk;
-                      return (
-                        <li key={gk}>
-                          <button data-testid="search-outside-taxon" data-n={t.n_asv}
-                            aria-expanded={eins ? undefined : offen}
-                            onClick={() => (eins ? p.onOpenAsv(t.asvs[0].id) : setOffeneGruppe(offen ? null : gk))}
-                            className="w-full text-left px-2 py-1 hover:bg-control text-sm">
-                            <span className="text-warn">◌ {t.value}</span>{" "}
-                            <span className="text-fg-muted">
-                              · {t.n_asv} ASV{t.n_asv === 1 ? "" : "s"} <span className="text-fg-muted">({t.rank})</span>
-                            </span>{" "}
-                            <span className="text-accent">{eins ? "→ open" : offen ? "▾" : "▸ open"}</span>
-                          </button>
-                          {offen && (
-                            <ul className="ml-3 border-l border-line" data-testid="search-outside-members">
-                              {t.asvs.map(zeile)}
-                              {t.n_asv > t.asvs.length && (
-                                <li className="px-2 text-2xs text-fg-muted">
-                                  {t.asvs.length} of {t.n_asv} shown — type more to narrow down
-                                </li>
-                              )}
-                            </ul>
-                          )}
-                        </li>
-                      );
-                    })}
-                    {nurKennung.map(zeile)}
-                  </ul>
-                  {aussen.n_taxa > aussen.taxa.length && (
-                    <p className="px-2 pb-1 text-2xs text-fg-muted">
-                      {aussen.taxa.length} of {aussen.n_taxa} names shown — type more to narrow down
-                    </p>
-                  )}
+                  <button data-testid="filter-add-taxon"
+                    onClick={() => { p.onOpenFilter("taxon"); setAddOpen(false); }}
+                    className="w-full text-left px-2 py-1 hover:bg-control text-fg">
+                    taxon …
+                  </button>
+                  <button data-testid="filter-add-abundance" disabled={p.sizeAbsent}
+                    title={p.sizeAbsent
+                      ? "not applicable: this dataset carries no read counts (transformed values)"
+                      : undefined}
+                    onClick={() => { p.onOpenFilter("abundance"); setAddOpen(false); }}
+                    className="w-full text-left px-2 py-1 hover:bg-control text-fg disabled:text-fg-disabled disabled:hover:bg-transparent">
+                    abundance …
+                  </button>
+                  <button data-testid="filter-add-occurrence" disabled={p.occurrenceReason != null}
+                    title={p.occurrenceReason ?? undefined}
+                    onClick={() => { p.onOpenFilter("occurrence"); setAddOpen(false); }}
+                    className="w-full text-left px-2 py-1 hover:bg-control text-fg disabled:text-fg-disabled disabled:hover:bg-transparent">
+                    occurrence …
+                  </button>
+                  <button data-testid="filter-add-c2"
+                    onClick={() => { p.onFilters({ c2Only: !filters.c2Only }); setAddOpen(false); }}
+                    className="w-full text-left px-2 py-1 hover:bg-control text-fg disabled:text-fg-muted">
+                    {filters.c2Only ? "✓ " : ""}only ✦
+                    <span className="text-fg-muted"> ({p.nKey})</span>
+                  </button>
+                  <div className="px-2 pt-2 pb-1 text-2xs font-semibold text-fg-muted">Links</div>
+                  <button data-testid="filter-add-strength"
+                    onClick={() => { p.onOpenFilter("strength"); setAddOpen(false); }}
+                    className="w-full text-left px-2 py-1 hover:bg-control text-fg">
+                    link strength …
+                  </button>
+                  <button data-testid="filter-add-cross"
+                    onClick={() => { p.onFilters({ crossOnly: !filters.crossOnly }); setAddOpen(false); }}
+                    className="w-full text-left px-2 py-1 hover:bg-control text-fg">
+                    {filters.crossOnly ? "✓ " : ""}only module-crossing links
+                  </button>
                 </div>
-              );
-            })()}
-            {ganz.result?.sentence && netzLeer && (
-              <p className="text-2xs text-fg-muted leading-snug" data-testid="search-none">
-                {ganz.result.sentence}
-              </p>
+              )}
+            </div>
+            {!p.taxaMode && (
+              <>
+                <ToggleButton data-testid="explore-toggle" pressed={p.explore}
+                  onClick={() => p.onExplore(!p.explore)}>explore</ToggleButton>
+                <span className="text-2xs text-fg-muted leading-tight">click a point: add its partners</span>
+              </>
             )}
           </div>
-        )}
+        </div>
       </div>
 
       <div>
@@ -425,6 +547,73 @@ export default function NetworkSidebar(p: SidebarProps) {
             </p>
           )}
 
+          <div className="mb-2" data-testid="layer-control">
+            <div className="text-xs text-fg-muted">Links</div>
+            <div className="mt-1 flex flex-col gap-1">
+              {(() => {
+                const L = filters.layers;
+                const toggle = (k: "con" | "ccm" | "rejected") =>
+                  p.onFilters({ layers: { ...L, [k]: !L[k] } });
+                const cls = checkCls;
+                const mark = checkMark;
+                const recorded = !!net?.layers?.ccm_tested_recorded;
+                const unit = p.taxaMode ? "taxa" : "ASVs";
+                return (
+                  <>
+                    <button data-testid="layer-all" aria-pressed={L.con} onClick={() => toggle("con")}
+                      className={cls(L.con)}>
+                      {mark(L.con)}<span>Links (con) ·{" "}
+                      <span data-testid="layer-n-con">
+                        {p.taxaLayers?.n_con ?? net?.layers?.n_con ?? "…"}</span> links ·{" "}
+                      <span data-testid="layer-asv-con">
+                        {p.taxaLayers?.n_asv_con ?? net?.layers?.n_asv_con ?? "…"}</span> {unit}</span>
+                    </button>
+                    <button data-testid="layer-ccm" aria-pressed={L.ccm} onClick={() => toggle("ccm")}
+                      className={cls(L.ccm)}>
+                      {mark(L.ccm)}<span>Direction (ccm) ·{" "}
+                      <span data-testid="layer-n-ccm">
+                        {p.taxaLayers?.n_con_with_ccm ?? net?.layers?.n_con_with_ccm ?? "…"}</span>{" "}
+                      links ·{" "}
+                      <span data-testid="layer-asv-ccm">
+                        {p.taxaLayers?.n_asv_ccm ?? net?.layers?.n_asv_ccm ?? "…"}</span> {unit}</span>
+                    </button>
+                    <button data-testid="layer-rejected" aria-pressed={L.rejected} disabled={!recorded}
+                      onClick={() => toggle("rejected")} className={cls(L.rejected, recorded)}>
+                      {mark(L.rejected)}<span>⇢ Rejected (ccm) ·{" "}
+                      <span data-testid="layer-n-rejected">
+                        {recorded
+                          ? (p.taxaLayers?.n_con_with_rejected ?? net?.layers?.n_con_with_rejected ?? "…")
+                          : "—"}</span>{" "}
+                      links ·{" "}
+                      <span data-testid="layer-asv-rejected">
+                        {recorded
+                          ? (p.taxaLayers?.n_asv_rejected ?? net?.layers?.n_asv_rejected ?? "…")
+                          : "—"}</span> {unit}</span>
+                    </button>
+                  </>
+                );
+              })()}
+              {net?.layers && !net.layers.ccm_tested_recorded && (
+                <p data-testid="rejected-not-recorded" className="text-xs text-warn leading-snug">
+                  rejected directions not recorded for this dataset
+                </p>
+              )}
+            </div>
+            {filters.layers.rejected && (
+              <p data-testid="rejected-caveat" className="mt-1 text-xs text-warn leading-snug">
+                Dashed arrows: directions OTTER tested and <strong>rejected</strong> (p ≥ 0.05 in
+                its permutation test) — no arrow in the kept network; where the line itself is
+                drawn, the rejected direction bends beside it. Same CCM caveat: predictive value,
+                no convergence test, no evidence of causation.
+              </p>
+            )}
+            {filters.layers.ccm && !layersDefault(filters.layers) && (
+              <p data-testid="ccm-caveat" className="mt-1 text-xs text-warn leading-snug">
+                CCM measures directed predictive value (NMI), <strong>without</strong> a convergence
+                test — no evidence of causation.
+              </p>
+            )}
+          </div>
           <div className="mb-2" data-testid="link-length-control">
             <div className="flex gap-2 items-center">
               <span className="text-xs text-fg-muted whitespace-nowrap">Link length</span>
@@ -438,21 +627,20 @@ export default function NetworkSidebar(p: SidebarProps) {
                 className="rounded-md px-1 text-xs text-fg-muted hover:text-fg hover:bg-control disabled:text-fg-disabled disabled:hover:bg-transparent">↺</button>
             </div>
           </div>
+        </div>
+      </div>
 
-          {!p.taxaMode && (
-            <div className="mb-2 flex items-center gap-2" data-testid="explore-control">
-              <ToggleButton data-testid="explore-toggle" pressed={p.explore}
-                onClick={() => p.onExplore(!p.explore)}>explore</ToggleButton>
-              <span className="text-2xs text-fg-muted leading-snug">
-                {p.explore ? "click a point: show its partners" : "start from one ASV"}</span>
-            </div>
-          )}
-
-          {!p.taxaMode && (
-            <div className="border-t border-line-subtle pt-2" data-testid="keystone-control">
-              <SectionHeading aside={<span className="text-xs text-mark tabular-nums"
-                data-testid="keystone-n">✦ {p.nKey}</span>}>Keystone</SectionHeading>
-              <div className="mt-1 flex flex-col gap-1" role="radiogroup" aria-label="Keystone criterion">
+      {!p.taxaMode && (
+        <div data-testid="keystone-control">
+          <SectionHeading aside={<span className="text-xs text-mark tabular-nums"
+            data-testid="keystone-n">✦ {p.nKey}</span>}>
+            <button data-testid="keystone-toggle" aria-expanded={keystoneOpen}
+              onClick={() => setKeystoneOpen((v) => !v)} className="hover:text-fg">
+              {keystoneOpen ? "▾" : "▸"} Keystone</button>
+          </SectionHeading>
+          {keystoneOpen && (
+            <div className={`${BOX} mt-1`}>
+              <div className="flex flex-col gap-1" role="radiogroup" aria-label="Keystone criterion">
                 {([1, 2] as const).map((k) => {
                   const on = p.kp.crit === k;
                   const enabled = k === 1 || !!c2;
@@ -497,194 +685,7 @@ export default function NetworkSidebar(p: SidebarProps) {
             </div>
           )}
         </div>
-      </div>
-
-      <div>
-        <SectionHeading className="mb-1" aside={anyActive && (
-            <TextButton data-testid="filter-clear-all" onClick={p.onClearAll} className="text-xs">
-              clear all</TextButton>
-          )}>Filter</SectionHeading>
-        {anyActive && (
-          <div className="flex flex-wrap gap-1 mb-2" data-testid="filter-chips">
-            {p.order.map((k) => (
-              <span key={k} data-testid={`filter-chip-${k}`}
-                className="inline-flex items-center gap-1 text-xs rounded-full border border-accent/60 bg-accent-soft px-2 py-1 text-accent">
-                {WINDOWED.includes(k)
-                  ? <button onClick={() => p.onOpenFilter(k as WindowKind)} className="hover:underline">{chipLabel(k)}</button>
-                  : chipLabel(k)}
-                <span className="tabular-nums text-accent"
-                  data-testid={`filter-chip-${k}-n`}>{p.chipCounts.get(k) ?? "…"}</span>
-                <button data-testid={`filter-chip-${k}-remove`} onClick={() => p.onClearKind(k)}
-                  className="text-accent hover:text-fg" aria-label={`remove ${k} filter`}>×</button>
-              </span>
-            ))}
-          </div>
-        )}
-
-        <div className={BOX}>
-          <SectionHeading className="mb-1" aside={<>
-              <Button variant="ghost" data-testid="cluster-all"
-                onClick={() => p.onFilters({ hidden: new Set() })}>all</Button>
-              <Button variant="ghost" data-testid="cluster-none"
-                onClick={() => p.onFilters({ hidden: new Set(p.clusters) })}>none</Button>
-            </>}>Modules</SectionHeading>
-          <div ref={modListRef} onScroll={measureModList} data-testid="cluster-list"
-            className="relative flex flex-col gap-1 max-h-64 overflow-auto">
-            {p.clusters.map((c) => (
-              <div key={c} className="flex items-center gap-2 text-sm text-fg">
-                <input type="checkbox" data-testid={`cluster-check-${c}`}
-                  aria-label={`show ${modules.label(c)}`}
-                  checked={!filters.hidden.has(c)}
-                  onChange={(e) => {
-                    const next = new Set(filters.hidden);
-                    if (e.target.checked) next.delete(c); else next.add(c);
-                    p.onFilters({ hidden: next });
-                  }} />
-                <span data-testid="cluster-swatch" className="inline-block w-3 h-3 rounded-sm shrink-0"
-                  style={{ background: p.clusterColor.get(c) ?? "var(--text-disabled)" }} />
-                <button data-testid={`cluster-open-${c}`} onClick={() => p.onOpenClusterPanel(c)}
-                  className="flex-1 text-left hover:underline">{modules.label(c)}</button>
-                <span className="text-xs text-fg-muted tabular-nums">
-                  {p.countByCluster.get(c) ?? 0}
-                </span>
-              </div>
-            ))}
-          </div>
-          {modBelow > 0 && (
-            <div className="mt-1 text-2xs text-fg-muted" data-testid="cluster-more">
-              +{modBelow} more — scroll
-            </div>
-          )}
-          {net?.partition?.clusters_are_components && (
-            <p className="mt-1 text-xs text-warn leading-snug" data-testid="partition-note">
-              These {net.partition.n_clusters} clusters are exactly the{" "}
-              {net.partition.n_components} unconnected parts of this network — no link crosses a
-              cluster border.
-            </p>
-          )}
-        </div>
-
-        <div className={BOX} data-testid="layer-control">
-          <SectionHeading>Links</SectionHeading>
-          <div className="mt-1 flex flex-col gap-1">
-            {(() => {
-              const L = filters.layers;
-              const toggle = (k: "con" | "ccm" | "rejected") =>
-                p.onFilters({ layers: { ...L, [k]: !L[k] } });
-              const cls = checkCls;
-              const mark = checkMark;
-              const recorded = !!net?.layers?.ccm_tested_recorded;
-              const unit = p.taxaMode ? "taxa" : "ASVs";
-              return (
-                <>
-                  <button data-testid="layer-all" aria-pressed={L.con} onClick={() => toggle("con")}
-                    className={cls(L.con)}>
-                    {mark(L.con)}<span>Links (con) ·{" "}
-                    <span data-testid="layer-n-con">
-                      {p.taxaLayers?.n_con ?? net?.layers?.n_con ?? "…"}</span> links ·{" "}
-                    <span data-testid="layer-asv-con">
-                      {p.taxaLayers?.n_asv_con ?? net?.layers?.n_asv_con ?? "…"}</span> {unit}</span>
-                  </button>
-                  <button data-testid="layer-ccm" aria-pressed={L.ccm} onClick={() => toggle("ccm")}
-                    className={cls(L.ccm)}>
-                    {mark(L.ccm)}<span>Direction (ccm) ·{" "}
-                    <span data-testid="layer-n-ccm">
-                      {p.taxaLayers?.n_con_with_ccm ?? net?.layers?.n_con_with_ccm ?? "…"}</span>{" "}
-                    links ·{" "}
-                    <span data-testid="layer-asv-ccm">
-                      {p.taxaLayers?.n_asv_ccm ?? net?.layers?.n_asv_ccm ?? "…"}</span> {unit}</span>
-                  </button>
-                  <button data-testid="layer-rejected" aria-pressed={L.rejected} disabled={!recorded}
-                    onClick={() => toggle("rejected")} className={cls(L.rejected, recorded)}>
-                    {mark(L.rejected)}<span>⇢ Rejected (ccm) ·{" "}
-                    <span data-testid="layer-n-rejected">
-                      {recorded
-                        ? (p.taxaLayers?.n_con_with_rejected ?? net?.layers?.n_con_with_rejected ?? "…")
-                        : "—"}</span>{" "}
-                    links ·{" "}
-                    <span data-testid="layer-asv-rejected">
-                      {recorded
-                        ? (p.taxaLayers?.n_asv_rejected ?? net?.layers?.n_asv_rejected ?? "…")
-                        : "—"}</span> {unit}</span>
-                  </button>
-                </>
-              );
-            })()}
-            {net?.layers && !net.layers.ccm_tested_recorded && (
-              <p data-testid="rejected-not-recorded" className="text-xs text-warn leading-snug">
-                rejected directions not recorded for this dataset
-              </p>
-            )}
-          </div>
-          {filters.layers.rejected && (
-            <p data-testid="rejected-caveat" className="mt-1 text-xs text-warn leading-snug">
-              Dashed arrows: directions OTTER tested and <strong>rejected</strong> (p ≥ 0.05 in
-              its permutation test) — no arrow in the kept network; where the line itself is
-              drawn, the rejected direction bends beside it. Same CCM caveat: predictive value,
-              no convergence test, no evidence of causation.
-            </p>
-          )}
-          {filters.layers.ccm && !layersDefault(filters.layers) && (
-            <p data-testid="ccm-caveat" className="mt-1 text-xs text-warn leading-snug">
-              CCM measures directed predictive value (NMI), <strong>without</strong> a convergence
-              test — no evidence of causation.
-            </p>
-          )}
-        </div>
-
-        <div className="relative" ref={addRef}>
-          <Button data-testid="filter-add" aria-expanded={addOpen} onClick={() => setAddOpen((v) => !v)}>
-            + add filter
-          </Button>
-          {addOpen && (
-            <div data-testid="filter-add-menu" data-popup=""
-              className="absolute z-20 mt-1 w-56 rounded-md border border-line bg-overlay shadow-xl py-1 text-sm">
-              <div className="px-2 pt-2 pb-1 text-2xs font-semibold text-fg-muted">ASVs</div>
-              <button data-testid="filter-add-asvs"
-                onClick={() => { p.onOpenFilter("asvs"); setAddOpen(false); }}
-                className="w-full text-left px-2 py-1 hover:bg-control text-fg">
-                ASV selection …
-              </button>
-              <button data-testid="filter-add-taxon"
-                onClick={() => { p.onOpenFilter("taxon"); setAddOpen(false); }}
-                className="w-full text-left px-2 py-1 hover:bg-control text-fg">
-                taxon …
-              </button>
-              <button data-testid="filter-add-abundance" disabled={p.sizeAbsent}
-                title={p.sizeAbsent
-                  ? "not applicable: this dataset carries no read counts (transformed values)"
-                  : undefined}
-                onClick={() => { p.onOpenFilter("abundance"); setAddOpen(false); }}
-                className="w-full text-left px-2 py-1 hover:bg-control text-fg disabled:text-fg-disabled disabled:hover:bg-transparent">
-                abundance …
-              </button>
-              <button data-testid="filter-add-occurrence" disabled={p.occurrenceReason != null}
-                title={p.occurrenceReason ?? undefined}
-                onClick={() => { p.onOpenFilter("occurrence"); setAddOpen(false); }}
-                className="w-full text-left px-2 py-1 hover:bg-control text-fg disabled:text-fg-disabled disabled:hover:bg-transparent">
-                occurrence …
-              </button>
-              <button data-testid="filter-add-c2"
-                onClick={() => { p.onFilters({ c2Only: !filters.c2Only }); setAddOpen(false); }}
-                className="w-full text-left px-2 py-1 hover:bg-control text-fg disabled:text-fg-muted">
-                {filters.c2Only ? "✓ " : ""}only ✦
-                <span className="text-fg-muted"> ({p.nKey})</span>
-              </button>
-              <div className="px-2 pt-2 pb-1 text-2xs font-semibold text-fg-muted">Links</div>
-              <button data-testid="filter-add-strength"
-                onClick={() => { p.onOpenFilter("strength"); setAddOpen(false); }}
-                className="w-full text-left px-2 py-1 hover:bg-control text-fg">
-                link strength …
-              </button>
-              <button data-testid="filter-add-cross"
-                onClick={() => { p.onFilters({ crossOnly: !filters.crossOnly }); setAddOpen(false); }}
-                className="w-full text-left px-2 py-1 hover:bg-control text-fg">
-                {filters.crossOnly ? "✓ " : ""}only module-crossing links
-              </button>
-            </div>
-          )}
-        </div>
-      </div>
+      )}
     </aside>
   );
 }
