@@ -722,6 +722,35 @@ from these findings only.
   matters.
 - Do not say which tools ran and do not close with a question."""
 
+# The findings are English and the citation check reads names from them, so a German answer is
+# written and checked in English first and then translated.
+TRANSLATE_PROMPT = """Translate the text into German. Keep every number, every name and every
+bracket like [F1] exactly as it is, in the same place. Output only the translation."""
+_DEUTSCHE_WOERTER = frozenset({
+    "der", "die", "das", "den", "dem", "des", "und", "oder", "ist", "sind", "gibt", "gib", "mir",
+    "welche", "welcher", "welches", "wie", "was", "wer", "wo", "hier", "diesen", "dieser",
+    "diesem", "dieses", "ein", "eine", "einen", "nicht", "mit", "von", "zu", "im", "auf", "untereinander"})
+
+
+def _auf_deutsch(question: str) -> bool:
+    if re.search(r"[äöüßÄÖÜ]", question or ""):
+        return True
+    woerter = re.findall(r"[a-zäöüß]+", (question or "").lower())
+    return sum(w in _DEUTSCHE_WOERTER for w in woerter) >= 2
+
+
+def _uebersetze(answer: str, model: str, provider: SessionProvider | None, notiere,
+                schritte: int) -> str:
+    t0 = time.time()
+    msg = _chat([{"role": "system", "content": TRANSLATE_PROMPT},
+                 {"role": "user", "content": answer}], model=model, provider=provider)
+    deutsch = ((msg.get("message", {}) or {}).get("content") or "").strip()
+    probleme = grounding.check_translation(deutsch, answer) if deutsch else ["empty"]
+    notiere("translation", step=schritte, duration_ms=round((time.time() - t0) * 1000),
+            content=deutsch, problems=probleme)
+    return answer if probleme else deutsch
+
+
 SMALL_MODEL_BELOW_B = 7.0
 
 
@@ -788,7 +817,10 @@ def _run_planned(question: str, art: str, formular: dict, model: str,
 
     messages = [{"role": "system", "content": FORMULATE_PROMPT},
                 {"role": "user", "content": f"Question: {question}\n\nFindings:\n"
-                                            f"{_befund_zeilen(liste)}"}]
+                                            f"{_befund_zeilen(liste)}"
+                                            + ("\n\nWrite the answer in English; it is "
+                                               "translated afterwards." if _auf_deutsch(question)
+                                               else "")}]
     korrigiert = False
     modus = grounding.mode()
     while True:
@@ -820,6 +852,9 @@ def _run_planned(question: str, art: str, formular: dict, model: str,
                 action="listed", draft=answer)
         answer, check = _als_liste(liste), "listed"
         break
+    if check == "cited" and _auf_deutsch(question):
+        schritte += 1
+        answer = _uebersetze(answer, model, provider, notiere, schritte)
     return {"answer": answer, "evidence": evidence, "model": model, "steps": schritte,
             "ungrounded": [], "grounding": modus, "corrected": korrigiert,
             "own_key": provider is not None, "question_kind": art, "findings": liste,
@@ -828,6 +863,9 @@ def _run_planned(question: str, art: str, formular: dict, model: str,
 
 REPEAT_NOTE = ("You already called this tool with these arguments; its result is above. Do not "
                "call it again. Answer the question now from the results you have.")
+# After a tool result qwen3 tended to summarise the whole output instead of answering.
+QUESTION_NOTE = ("Internal note, not a message from the user: answer only this question, from "
+                 "the results above, in a few sentences: {question}")
 
 _TEXT_CALL = re.compile(r"\{.*\}", re.S)
 _TOOL_NAMES = {spec["name"] for spec in registry.TOOL_SPECS}
@@ -979,6 +1017,8 @@ def run(question: str, dataset_id: str | None = None, model: str | None = None,
 
     for _step in range(MAX_STEPS):
         t0 = time.time()
+        if _step == MAX_STEPS - 1:
+            ohne_werkzeuge = True  # the last step has to answer, not call another tool
         if vorgegeben is not None:
             msg, calls, vorgegeben = {"role": "assistant", "content": ""}, vorgegeben, None
         else:
@@ -1099,6 +1139,8 @@ def run(question: str, dataset_id: str | None = None, model: str | None = None,
             messages.append(tool_msg)
         if not neu:
             ohne_werkzeuge = True
+        else:
+            messages.append({"role": "user", "content": QUESTION_NOTE.format(question=question)})
 
     notiere("step_limit", steps=MAX_STEPS)
     return {

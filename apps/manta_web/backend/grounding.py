@@ -40,6 +40,7 @@ _REF = re.compile(
 _WORD_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.:/")
 _TOKEN = re.compile(r"[A-Za-z0-9_\-.:/]+")
 _TRAIL = ".:/-"
+_ID_SUFFIX = re.compile(r"0\d+$")
 
 LABEL_KEYS = frozenset({
     "kingdom", "phylum", "class", "order", "family", "genus", "species", "taxon", "taxa",
@@ -180,6 +181,9 @@ def check(answer: str, tool_texts: list[str], pool: set[float] | None = None,
         wort = _word_at(answer, m.start(), m.end()).rstrip(_TRAIL)
         if _is_identifier(wort) and wort.lower() in tokens:
             continue
+        # "ASV 005" for asv_005: a zero-padded number is an id, not a value
+        if _ID_SUFFIX.match(m.group()) and any(t.endswith("_" + m.group()) for t in tokens):
+            continue
         v = _to_float(m.group())
         if v is None or _covered(v, m.group(), pool):
             continue
@@ -275,4 +279,15 @@ def check_cited(answer: str, findings: list[dict], question: str = "") -> list[s
         for n in sorted(namen):
             if n.lower().rstrip(_TRAIL) not in erlaubt:
                 probleme.append(f"{n} is not in {', '.join(ids)}")
+    return probleme
+
+
+def check_translation(translated: str, original: str) -> list[str]:
+    """A translation of a checked answer may change words, not numbers, ids or citations."""
+    probleme = check(translated, [original])
+    kennungen = {m.group().lower() for m in _ASV_KENNUNG.finditer(original)}
+    probleme += [m.group() for m in _ASV_KENNUNG.finditer(translated)
+                 if m.group().lower() not in kennungen]
+    if sorted(MARKE.findall(translated)) != sorted(MARKE.findall(original)):
+        probleme.append("citations changed")
     return probleme
