@@ -51,6 +51,8 @@ export type SidebarProps = {
   onClearKind: (k: FilterKind) => void;
   onClearAll: () => void;
   onStartNone: () => void;
+  onRemoveShown: (what: { asv: string } | { module: number }) => void;
+  onToggleModule: (c: number) => void;
   order: FilterKind[];
   chipCounts: Map<FilterKind, number>;
   unknownAsvIds: string[];
@@ -136,13 +138,12 @@ export default function NetworkSidebar(p: SidebarProps) {
       .sort((a, b) => b.n - a.n || a.value.localeCompare(b.value))
       .slice(0, 8);
   }, [q, visibleNodes]);
-  const clusterMatch = useMemo(() => {
-    const m = /^c(?:luster)?\s*(\d+)$/i.exec(q);
-    if (!m) return null;
-    const label = Number(m[1]);
-    return p.clusters.includes(label) ? label : null;
+  const clusterMatches = useMemo(() => {
+    const m = /^(?:m|module|c|cluster)\s*(\d*)$/i.exec(q);
+    if (!m) return [];
+    return p.clusters.filter((c) => String(c).startsWith(m[1]));
   }, [q, p.clusters]);
-  const netzLeer = results.length === 0 && taxMatches.length === 0 && clusterMatch == null;
+  const netzLeer = results.length === 0 && taxMatches.length === 0 && clusterMatches.length === 0;
 
   const [addOpen, setAddOpen] = useState(false);
   const addRef = useRef<HTMLDivElement | null>(null);
@@ -278,9 +279,9 @@ export default function NetworkSidebar(p: SidebarProps) {
             onFocus={() => setSearchFocus(true)} onBlur={() => setTimeout(() => setSearchFocus(false), 150)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && results.length === 1 && taxMatches.length === 0
-                  && clusterMatch == null) p.onPickAsv(results[0].id);
+                  && clusterMatches.length === 0) p.onPickAsv(results[0].id);
             }}
-            placeholder="search ASV, taxon or cluster …"
+            placeholder="search ASV, taxon or module …"
             className="w-full px-2 py-1 rounded-md bg-control border border-line-strong text-sm text-fg placeholder:text-fg-muted" />
           {searchFocus && !q && topAsvs.length > 0 && (
             <div className="mt-1 border border-line rounded-md bg-raised" data-testid="top-asvs">
@@ -304,21 +305,25 @@ export default function NetworkSidebar(p: SidebarProps) {
               </ul>
             </div>
           )}
-          {(results.length > 0 || taxMatches.length > 0 || clusterMatch != null) && (
+          {(results.length > 0 || taxMatches.length > 0 || clusterMatches.length > 0) && (
             <ul className="mt-1 max-h-40 overflow-auto border border-line rounded-md bg-raised">
-              {clusterMatch != null && (
-                <li>
-                  <button data-testid="cluster-result" onClick={() => p.onPickCluster(clusterMatch)}
-                    className="w-full text-left px-2 py-1 hover:bg-control text-sm">
-                    <span data-testid="cluster-swatch" className="inline-block w-3 h-3 rounded-sm mr-1 align-middle"
-                      style={{ background: p.clusterColor.get(clusterMatch) ?? "var(--text-disabled)" }} />
-                    <span className="text-fg">{modules.label(clusterMatch)}</span>{" "}
-                    <span className="text-fg-muted">
-                      {p.countByCluster.get(clusterMatch) ?? 0} ASVs — mark all
-                    </span>
-                  </button>
-                </li>
-              )}
+              {clusterMatches.map((c) => {
+                const drin = filters.asvs?.modules?.includes(c) ?? false;
+                return (
+                  <li key={`c${c}`}>
+                    <button data-testid="cluster-result" data-cluster={c} onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => (filters.asvs ? p.onToggleModule(c) : p.onPickCluster(c))}
+                      className="w-full flex items-center gap-2 text-left px-2 py-1 hover:bg-control text-sm">
+                      <span data-testid="cluster-swatch" className="inline-block w-2 h-2 rounded-full shrink-0"
+                        style={{ background: p.clusterColor.get(c) ?? "var(--text-disabled)" }} />
+                      <span className={!filters.asvs || drin ? "text-fg" : "text-fg-muted"}>{modules.label(c)}</span>
+                      <span className="text-fg-muted flex-1">
+                        {p.countByCluster.get(c) ?? 0} ASVs{filters.asvs ? "" : " — mark all"}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
               {taxMatches.map((t) => (
                 <li key={`${t.rank}:${t.value}`}>
                   <button data-testid="tax-result" onClick={() => p.onPickTaxon(t.rank, t.value)}
@@ -334,13 +339,12 @@ export default function NetworkSidebar(p: SidebarProps) {
                 <li key={n.id}>
                   <button data-testid="asv-result" onMouseDown={(e) => e.preventDefault()}
                     onClick={() => p.onPickAsv(n.id)}
-                    className="w-full text-left px-2 py-1 hover:bg-control text-sm">
-                    <span className="inline-block w-2 h-2 rounded-full mr-2"
+                    className="w-full flex items-center gap-2 text-left px-2 py-1 hover:bg-control text-sm">
+                    <span className="inline-block w-2 h-2 rounded-full shrink-0"
                       style={{ background: p.clusterColor.get(n.cluster) ?? "var(--text-disabled)" }} />
-                    <span className="text-fg">{n.id}</span>{" "}
-                    <span className="text-fg-muted">{n.genus}</span>{" "}
-                    <span className="text-fg-muted tabular-nums">· {fmtShare(n.rel_abundance)}</span>
-                  {!shownIds.has(n.id) && <span className="text-fg-muted"> · not shown</span>}
+                    <span className={shownIds.has(n.id) ? "text-fg" : "text-fg-muted"}>{n.id}</span>
+                    <span className="text-fg-muted truncate flex-1">{n.genus}</span>
+                    <span className="text-fg font-semibold tabular-nums">{fmtShare(n.rel_abundance)}</span>
                   </button>
                 </li>
               ))}
@@ -380,19 +384,18 @@ export default function NetworkSidebar(p: SidebarProps) {
                 const zeile = (a: (typeof aussen.asvs)[number]) => (
                   <li key={a.id}>
                     <button data-testid="search-outside-asv" data-asv={a.id} onClick={() => p.onOpenAsv(a.id)}
-                      className="w-full text-left px-2 py-1 hover:bg-control text-xs">
-                      <span className="font-mono text-fg">{a.id}</span>{" "}
-                      <span className="text-fg-muted">
-                        {a.label !== "unassigned" ? `${a.label} · ` : ""}{fmtShare(a.share)} · found in {a.n_samples_present} of {r.n_samples} samples
-                      </span>{" "}
-                      <span className="text-accent">→ open</span>
+                      title={`found in ${a.n_samples_present} of ${r.n_samples} samples`}
+                      className="w-full flex items-center gap-2 text-left px-2 py-1 hover:bg-control text-sm">
+                      <span className="text-fg-muted">{a.id}</span>
+                      <span className="text-fg-muted truncate flex-1">{a.label !== "unassigned" ? a.label : ""}</span>
+                      <span className="text-fg-muted tabular-nums">{fmtShare(a.share)}</span>
                     </button>
                   </li>
                 );
                 return (
                   <div className="rounded-md border border-line bg-raised" data-testid="search-outside">
                     <SectionHeading as="h4" className="px-2 pt-1">
-                      in this dataset, no link in the network
+                      no link in the network · click: details
                     </SectionHeading>
                     <ul className="max-h-48 overflow-auto pb-1">
                       {gruppen.map((t) => {
@@ -459,6 +462,36 @@ export default function NetworkSidebar(p: SidebarProps) {
             </div>
           ) : (
             <p className="text-xs text-fg-muted" data-testid="filter-none">all ASVs · no filter</p>
+          )}
+          {filters.asvs && (filters.asvs.ids.length + (filters.asvs.modules ?? []).length + (filters.asvs.out ?? []).length > 0) && (
+            <div className="flex flex-wrap gap-1 max-h-28 overflow-auto" data-testid="shown-items">
+              {(filters.asvs.modules ?? []).map((c) => (
+                <span key={`m${c}`} data-testid={`shown-module-${c}`}
+                  className="inline-flex items-center gap-1 text-xs rounded border border-line px-1.5 py-0.5 text-fg">
+                  <span className="inline-block w-2 h-2 rounded-full"
+                    style={{ background: p.clusterColor.get(c) ?? "var(--text-disabled)" }} />
+                  {modules.label(c)}
+                  <button onClick={() => p.onRemoveShown({ module: c })} aria-label={`remove ${modules.label(c)}`}
+                    className="text-fg-muted hover:text-fg">×</button>
+                </span>
+              ))}
+              {filters.asvs.ids.filter((id) => !p.unknownAsvIds.includes(id)).map((id) => (
+                <span key={id} data-testid="shown-asv" data-asv={id}
+                  className="inline-flex items-center gap-1 text-xs rounded border border-line px-1.5 py-0.5 text-fg">
+                  {id}
+                  <button onClick={() => p.onRemoveShown({ asv: id })} aria-label={`remove ${id}`}
+                    className="text-fg-muted hover:text-fg">×</button>
+                </span>
+              ))}
+              {(filters.asvs.out ?? []).map((id) => (
+                <span key={`o${id}`} data-testid="shown-out" data-asv={id}
+                  className="inline-flex items-center gap-1 text-xs rounded border border-dashed border-line px-1.5 py-0.5 text-fg-muted line-through">
+                  {id}
+                  <button onClick={() => p.onPickAsv(id)} aria-label={`add ${id} again`}
+                    className="no-underline hover:text-fg">+</button>
+                </span>
+              ))}
+            </div>
           )}
           <div className="flex items-center gap-2">
             <div className="relative" ref={addRef}>

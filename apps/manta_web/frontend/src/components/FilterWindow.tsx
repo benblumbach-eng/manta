@@ -82,7 +82,7 @@ export default function FilterWindow({ kind, net, filters, onFilters, dates, nSa
           )}
           <div className="flex items-center gap-1">
             <Button variant="ghost" data-testid="cluster-all"
-              onClick={() => (f.asvs ? onFilters({ asvs: { ...f.asvs, modules: clusters } })
+              onClick={() => (f.asvs ? onFilters({ asvs: { ...f.asvs, modules: clusters, out: [] } })
                 : onFilters({ hidden: new Set() }))}>all</Button>
             <Button variant="ghost" data-testid="cluster-none"
               onClick={() => (f.asvs ? onFilters({ asvs: { ...f.asvs, modules: [] } })
@@ -97,7 +97,8 @@ export default function FilterWindow({ kind, net, filters, onFilters, dates, nSa
                   onChange={(e) => {
                     if (f.asvs) {
                       const rest = (f.asvs.modules ?? []).filter((x) => x !== c);
-                      onFilters({ asvs: { ...f.asvs, modules: e.target.checked ? [...rest, c] : rest } });
+                      onFilters({ asvs: { ...f.asvs, modules: e.target.checked ? [...rest, c] : rest,
+                        out: (f.asvs.out ?? []).filter((id) => byId.get(id)?.cluster !== c) } });
                       return;
                     }
                     const next = new Set(f.hidden);
