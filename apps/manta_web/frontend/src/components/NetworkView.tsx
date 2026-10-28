@@ -27,8 +27,8 @@ import { memberPoint, taxonLinks, taxonPoints, type TaxonLink, type TaxonRank } 
 import ThresholdDialog from "./ThresholdDialog";
 import ErrorNotice from "./ErrorNotice";
 import { esc, fmtP } from "../format";
-import { chainedCounts, clearKind, computeVisible, decodeFilters, emptyFilters, encodeFilters,
-         exploreAdd, hiddenBy, startNone, isActive, legendRows, thresholdLine, FILTER_KINDS,
+import { clearKind, computeVisible, decodeFilters, emptyFilters, encodeFilters,
+         addAsv, exploreAdd, hiddenBy, startNone, removeShown, toggleModule, isActive, legendRows, thresholdLine, FILTER_KINDS,
          type Filters, type FilterKind, type KeystoneParams, KEYSTONE_DEFAULTS, KEYSTONE_LABEL, loadKeystone, saveKeystone, layerLabel,
          occurrenceLabel, rangeLabel, type OccPoint } from "../networkFilters";
 
@@ -405,9 +405,6 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   const unknownAsvIds = useMemo(
     () => (filters.asvs?.ids ?? []).filter((id) => !allIds.has(id)),
     [filters.asvs, allIds]);
-  const chipCounts = useMemo(
-    () => (net ? chainedCounts(net, filters, keyIds, order, occ) : new Map<FilterKind, number>()),
-    [net, filters, keyIds, order, occ]);
 
   const selMarked = useMemo(() => {
     if (!sel) return new Set<string>();
@@ -980,7 +977,8 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         onClearKind={(k) => setFilters((f) => clearKind(f, k))}
         onClearAll={() => setFilters(emptyFilters())}
         onStartNone={() => { setSel(null); setFilters(startNone()); }}
-        order={order} chipCounts={chipCounts} unknownAsvIds={unknownAsvIds}
+        onRemoveShown={(what) => net && setFilters((f) => removeShown(f, net, what))}
+        order={order} unknownAsvIds={unknownAsvIds}
         taxaMode={taxaMode} points={points} onPoints={setPoints}
         taxonRank={taxonRank} onTaxonRank={setTaxonRank} taxaLayers={taxaLayers}
         explore={exploreOn}
@@ -995,9 +993,16 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                  onShowNet: () => { onShowNet(); setSelectedCluster(null); setLegendeOffen(false); },
                  items: viewItems }}
         onPickAsv={(id) => {
-          if (exploreOn) setFilters((f) => exploreAdd(f, id));
+          if (filters.asvs && net) {
+            // Picking while ASVs are chosen one by one toggles: shown → out, not shown → in.
+            const da = visibleNodes.some((n) => n.id === id);
+            setFilters((f) => (da ? removeShown(f, net, { asv: id }) : exploreOn ? exploreAdd(f, id) : addAsv(f, id)));
+            setSel(null);
+            return;
+          }
           setSel({ kind: "asv", id, focus: Date.now(), label: true });
         }}
+        onToggleModule={(c) => net && setFilters((f) => toggleModule(f, net, c))}
         onOpenAsv={onOpenAsv}
         onPickTaxon={(rank, value) => setSel({ kind: "taxon", rank, value })}
         onPickCluster={(label) => setSel({ kind: "cluster", label })}
@@ -1006,7 +1011,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         occurrenceReason={timeCap && !timeCap.available ? timeCap.detail : null}
       />
 
-      <div className="flex-1 relative" data-testid="network-canvas" data-layout-hash={layoutHash}
+      <div className="flex-1 min-w-0 relative" data-testid="network-canvas" data-layout-hash={layoutHash}
         data-link-length={linkLen}
         data-tax-key={taxKey ?? ""}
         data-tax-marked={sel?.kind === "taxon" ? selMarked.size : 0}
@@ -1069,8 +1074,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                   <>
                     <span data-testid="highlight-hidden-note" className="text-warn">not shown</span>
                     <TextButton data-testid="highlight-add" className="whitespace-nowrap"
-                      onClick={() => setFilters((f) => (f.asvs
-                        ? { ...f, asvs: { ...f.asvs, ids: [...new Set([...f.asvs.ids, sel.id])] } } : f))}>
+                      onClick={() => setFilters((f) => addAsv(f, sel.id))}>
                       add it</TextButton>
                   </>
                 ) : selHiddenBy ? (
@@ -1085,10 +1089,17 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                     </TextButton>
                   </>
                 ) : (
+                  <>
+                  {filters.asvs && net && (
+                    <TextButton data-testid="highlight-remove" className="whitespace-nowrap"
+                      onClick={() => { setFilters((f) => removeShown(f, net, { asv: sel.id })); setSel(null); }}>
+                      remove</TextButton>
+                  )}
                   <TextButton data-testid="highlight-open-details" className="whitespace-nowrap"
                     onClick={() => onOpenAsv(sel.id)}>
                     open details
                   </TextButton>
+                  </>
                 )}
               </>
             )}
