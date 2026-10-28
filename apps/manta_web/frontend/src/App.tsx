@@ -132,7 +132,7 @@ export default function App() {
     window.history.replaceState({}, "", url.pathname + url.search + url.hash);
   }, [focusRequest]);
   const [vonInspect, setVonInspect] =
-    useState<{ modules: number[]; asvs: string[]; tick: number } | null>(null);
+    useState<{ modules: number[]; asvs: string[]; tick: number; ds: string } | null>(null);
   const [starredCluster, setStarredCluster] =
     useState<{ label: number; tick: number; ds?: string } | null>(null);
   const wishCluster = (l: number) =>
@@ -144,7 +144,7 @@ export default function App() {
 
   const selectDataset = (d: Dataset | null) => {
     const wechsel = (d?.dataset_id ?? null) !== (selected?.dataset_id ?? null);
-    if (wechsel) { setStarredCluster(null); setOffen([]); }
+    if (wechsel) { setStarredCluster(null); setOffen([]); setVonInspect(null); }
     setSelected(d);
     const u = new URL(window.location.href);
     if (d) {
@@ -391,7 +391,8 @@ export default function App() {
               initialSample={finde("compare")!.sample} mark={finde("compare")!.mark}
               sampleTick={finde("compare")!.tick} link={finde("compare")!.link}
               onOpenEdge={openEdgeDetails}
-              onToNetwork={(modules, asvs) => setVonInspect({ modules, asvs, tick: Date.now() })}
+              onToNetwork={(modules, asvs) => selected
+                && setVonInspect({ modules, asvs, tick: Date.now(), ds: selected.dataset_id })}
               onClose={() => schliesse("compare")} onOpenAsv={openAsv} />
           </ErrorBoundary></PanelFrame>
         )}

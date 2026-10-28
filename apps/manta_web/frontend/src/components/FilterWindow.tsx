@@ -4,11 +4,12 @@ import { ABUNDANCE_STEPS, type Filters, type OccurrenceFilter } from "../network
 import { Segmented, SliderNumber } from "./controls";
 import { Button, ToggleButton } from "./ui";
 import { TAX_RANKS } from "./NetworkSidebar";
+import { useModules } from "../modules";
 
-export type WindowKind = "asvs" | "abundance" | "strength" | "occurrence" | "taxon" | "presence";
+export type WindowKind = "modules" | "asvs" | "abundance" | "strength" | "occurrence" | "taxon" | "presence";
 
 export const WINDOW_TITLE: Record<WindowKind, string> = {
-  asvs: "ASV filter", abundance: "Abundance filter", strength: "Link strength filter",
+  modules: "Module filter", asvs: "ASV filter", abundance: "Abundance filter", strength: "Link strength filter",
   occurrence: "Occurrence filter", taxon: "Taxon filter", presence: "Presence filter",
 };
 
@@ -18,7 +19,7 @@ const ROW = "grid grid-cols-[4.5rem_1fr] items-center gap-x-2 gap-y-2 text-xs";
 const SELECT = "flex-1 min-w-0 px-1 py-1 rounded bg-control border border-line-strong text-xs text-fg";
 
 export default function FilterWindow({ kind, net, filters, onFilters, dates, nSamples, datasetId,
-                                       occError }: {
+                                       occError, onOpenModule }: {
   kind: WindowKind;
   net: Network;
   filters: Filters;
@@ -27,7 +28,15 @@ export default function FilterWindow({ kind, net, filters, onFilters, dates, nSa
   nSamples: number;
   datasetId: string;
   occError: unknown;
+  onOpenModule?: (label: number) => void;
 }) {
+  const modules = useModules();
+  const clusters = useMemo(() => [...new Set(net.nodes.map((n) => n.cluster))].sort((a, b) => a - b), [net]);
+  const perCluster = useMemo(() => {
+    const m = new Map<number, number>();
+    net.nodes.forEach((n) => m.set(n.cluster, (m.get(n.cluster) ?? 0) + 1));
+    return m;
+  }, [net]);
   const f = filters;
   const [q, setQ] = useState("");
   const [taxRank, setTaxRank] = useState(f.taxon?.rank ?? "genus");
@@ -43,7 +52,8 @@ export default function FilterWindow({ kind, net, filters, onFilters, dates, nSa
   const name = (n: NetNode) => n.species ?? n.genus ?? "";
   const setIds = (next: string[]) => {
     const uniq = [...new Set(next)];
-    onFilters({ asvs: uniq.length ? { ids: uniq, neighbors: f.asvs?.neighbors ?? false } : null });
+    onFilters({ asvs: uniq.length || f.asvs ? { ids: uniq, neighbors: f.asvs?.neighbors ?? false,
+      expand: (f.asvs?.expand ?? []).filter((id) => uniq.includes(id)) } : null });
   };
   const unknown = ids.filter((id) => !byId.has(id));
   const [starredNote, setStarredNote] = useState<string | null>(null);
@@ -64,6 +74,43 @@ export default function FilterWindow({ kind, net, filters, onFilters, dates, nSa
 
   return (
     <div data-testid={`filter-window-${kind}`} className="p-3 text-fg">
+      {kind === "modules" && (
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" data-testid="cluster-all"
+              onClick={() => onFilters({ hidden: new Set() })}>all</Button>
+            <Button variant="ghost" data-testid="cluster-none"
+              onClick={() => onFilters({ hidden: new Set(clusters) })}>none</Button>
+          </div>
+          <div data-testid="cluster-list" className="flex flex-col gap-1 max-h-96 overflow-auto">
+            {clusters.map((c) => (
+              <div key={c} className="flex items-center gap-2 text-sm text-fg">
+                <input type="checkbox" data-testid={`cluster-check-${c}`}
+                  aria-label={`show ${modules.label(c)}`}
+                  checked={!f.hidden.has(c)}
+                  onChange={(e) => {
+                    const next = new Set(f.hidden);
+                    if (e.target.checked) next.delete(c); else next.add(c);
+                    onFilters({ hidden: next });
+                  }} />
+                <span data-testid="cluster-swatch" className="inline-block w-3 h-3 rounded-sm shrink-0"
+                  style={{ background: modules.color(c) }} />
+                <button data-testid={`cluster-open-${c}`} onClick={() => onOpenModule?.(c)}
+                  className="flex-1 text-left hover:underline">{modules.label(c)}</button>
+                <span className="text-xs text-fg-muted tabular-nums">{perCluster.get(c) ?? 0}</span>
+              </div>
+            ))}
+          </div>
+          {net.partition?.clusters_are_components && (
+            <p className="text-xs text-warn leading-snug" data-testid="partition-note">
+              These {net.partition.n_clusters} clusters are exactly the{" "}
+              {net.partition.n_components} unconnected parts of this network — no link crosses a
+              cluster border.
+            </p>
+          )}
+        </div>
+      )}
+
       {kind === "asvs" && (
         <div className="flex flex-col gap-2">
           <input data-testid="fw-asv-input" value={q} onChange={(e) => setQ(e.target.value)} autoFocus

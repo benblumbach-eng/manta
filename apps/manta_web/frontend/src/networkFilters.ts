@@ -27,7 +27,9 @@ export type FilterKind = "modules" | "layer" | "cross" | "c2" | "taxon" | "asvs"
   | "presence" | "abundance" | "strength" | "occurrence";
 
 export type TaxonFilter = { rank: string; value: string };
-export type AsvFilter = { ids: string[]; neighbors: boolean };
+// ids empty = nothing shown yet ("start new: none"). expand = ids whose partners are shown too
+// (explore clicks); neighbors = the partners of all ids are shown.
+export type AsvFilter = { ids: string[]; neighbors: boolean; expand?: string[] };
 export type OccurrenceFilter = {
   from: string | null; to: string | null; months: number[]; share: number; min: number;
 };
@@ -84,7 +86,7 @@ export const isActive = (f: Filters, k: FilterKind): boolean => {
     case "cross": return f.crossOnly;
     case "c2": return f.c2Only;
     case "taxon": return f.taxon != null;
-    case "asvs": return (f.asvs?.ids.length ?? 0) > 0;
+    case "asvs": return f.asvs != null;
     case "presence": return f.presence != null;
     case "abundance": return f.abundance != null || f.abundanceMax != null;
     case "strength": return f.strength != null || f.strengthMax != null || f.nmi != null;
@@ -109,6 +111,16 @@ export const takeKind = (dst: Filters, src: Filters, k: FilterKind): Filters => 
 };
 
 export const clearKind = (f: Filters, k: FilterKind): Filters => takeKind(f, emptyFilters(), k);
+
+// "start new: none": nothing shown until ASVs are added.
+export const startNone = (): Filters => ({ ...emptyFilters(), asvs: { ids: [], neighbors: false } });
+
+// Explore: add the ASV to the shown ASVs, together with its partners.
+export function exploreAdd(f: Filters, id: string): Filters {
+  const a = f.asvs ?? { ids: [], neighbors: false };
+  return { ...f, asvs: { ...a, ids: [...new Set([...a.ids, id])],
+                         expand: [...new Set([...(a.expand ?? []), id])] } };
+}
 
 export type Visible = {
   nodes: NetNode[];
@@ -145,21 +157,21 @@ export function occurrenceLabel(o: OccurrenceFilter): string {
 export function computeVisible(net: Network, f: Filters, c2Ids: Set<string>,
                                occ?: Map<string, OccPoint[]> | null): Visible {
   const asvSet = new Set(f.asvs?.ids ?? []);
+  const offen = f.asvs?.neighbors ? asvSet : new Set(f.asvs?.expand ?? []);
   const neighborSet = new Set<string>();
-  if (f.asvs?.neighbors && asvSet.size) {
+  if (offen.size) {
     for (const e of net.edges) {
-      if (asvSet.has(e.source)) neighborSet.add(e.target);
-      if (asvSet.has(e.target)) neighborSet.add(e.source);
+      if (offen.has(e.source)) neighborSet.add(e.target);
+      if (offen.has(e.target)) neighborSet.add(e.source);
     }
   }
-  const asvActive = asvSet.size > 0;
+  const asvActive = f.asvs != null;
   const pass = (n: NetNode): boolean => {
     if (f.hidden.has(n.cluster)) return false;
     if (f.c2Only && !c2Ids.has(n.id)) return false;
     if (f.taxon
         && (n as unknown as Record<string, unknown>)[f.taxon.rank] !== f.taxon.value) return false;
-    if (asvActive && !asvSet.has(n.id)
-        && !(f.asvs!.neighbors && neighborSet.has(n.id))) return false;
+    if (asvActive && !asvSet.has(n.id) && !neighborSet.has(n.id)) return false;
     if (f.presence != null && (n.n_samples_present ?? 0) < f.presence) return false;
     if (f.abundance != null && (n.rel_abundance ?? 0) * 100 < f.abundance) return false;
     if (f.abundanceMax != null && (n.rel_abundance ?? 0) * 100 > f.abundanceMax) return false;
@@ -230,8 +242,11 @@ export function encodeFilters(f: Filters): string {
   if (f.crossOnly) seg.push("x");
   if (f.c2Only) seg.push("c2");
   if (f.taxon) seg.push(`t-${f.taxon.rank}-${encodeURIComponent(f.taxon.value)}`);
-  if (f.asvs?.ids.length)
+  if (f.asvs) {
     seg.push("a" + (f.asvs.neighbors ? "n" : "") + "-" + f.asvs.ids.join("."));
+    const ex = (f.asvs.expand ?? []).filter((id) => f.asvs!.ids.includes(id));
+    if (ex.length && !f.asvs.neighbors) seg.push("ax-" + ex.join("."));
+  }
   if (f.presence != null) seg.push(`pr-${f.presence}`);
   if (f.abundance != null) seg.push(`ab-${f.abundance}`);
   if (f.strength != null) seg.push(`r-${f.strength}`);
@@ -248,6 +263,7 @@ export function encodeFilters(f: Filters): string {
 export function decodeFilters(s: string | null): Filters {
   const f = emptyFilters();
   if (!s) return f;
+  let expand: string[] = [];
   for (const seg of s.split(";")) {
     if (seg === "ccm") f.layers = { ...f.layers, con: false, ccm: true };
     else if (seg === "nocon") f.layers = { ...f.layers, con: false };
@@ -263,7 +279,9 @@ export function decodeFilters(s: string | null): Filters {
     } else if (seg.startsWith("a-") || seg.startsWith("an-")) {
       const neighbors = seg.startsWith("an-");
       const ids = seg.slice(neighbors ? 3 : 2).split(".").filter(Boolean);
-      if (ids.length) f.asvs = { ids, neighbors };
+      f.asvs = { ids, neighbors };
+    } else if (seg.startsWith("ax-")) {
+      expand = seg.slice(3).split(".").filter(Boolean);
     } else if (/^pr-\d+$/.test(seg)) {
       const n = Number(seg.slice(3));
       if (n >= 1) f.presence = n;
@@ -291,6 +309,7 @@ export function decodeFilters(s: string | null): Filters {
       if (v > 0 && v <= 1) f.strength = v;
     }
   }
+  if (f.asvs && expand.length) f.asvs = { ...f.asvs, expand: expand.filter((id) => f.asvs!.ids.includes(id)) };
   return f;
 }
 
