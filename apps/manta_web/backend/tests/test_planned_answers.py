@@ -137,6 +137,14 @@ def test_other_suggested_questions_call_their_tool_first(calls, monkeypatch):
     assert out["evidence"][0]["tool"] == "asv_seasonality"
 
 
+def test_suggested_question_is_answered_from_its_own_tool_only(calls, monkeypatch):
+    sent = model_says(monkeypatch, "It is made up mostly of Gyrodinium.")
+    agent.run("What does this module consist of, and who dominates it?", DS, model="m",
+              cluster=1, question_kind="cluster_detail")
+    assert calls[-1] == ("cluster_detail", {"dataset_id": DS, "cluster": 1})
+    assert len(sent) == 1 and sent[0]["tools"] is None
+
+
 def test_suggestion_from_a_view_calls_its_tool_with_the_given_arguments(calls, monkeypatch):
     model_says(monkeypatch, "The link is kept in one direction.")
     out = agent.run("How strong is the link between euk_asv_001 and euk_asv_002?", DS,
@@ -205,8 +213,66 @@ def test_cited_check_rejects_numbers_and_names_from_elsewhere():
     fs = befunde.taxa_composition({"taxa_composition": TAXA, "dataset_summary": SUMMARY})
     assert grounding.check_cited("Gyrodinium has the most ASVs (12) [F1].", fs) == []
     probleme = grounding.check_cited(
-        "Gyrodinium has 36 ASVs [F1]. Prochlorococcus follows [F2]. Nothing cited here.", fs)
+        "Gyrodinium has 36 ASVs [F1]. Prochlorococcus follows [F2]. Phaeocystis is second.", fs)
     assert probleme == ["36 is not in F1", "Prochlorococcus is not in F2",
-                        'no finding cited: "Nothing cited here."']
+                        'no finding cited: "Phaeocystis is second."']
     # 220 is a real value, but of F4, not of the finding the sentence cites
     assert grounding.check_cited("Gyrodinium has 220 ASVs [F1].", fs) == ["220 is not in F1"]
+
+
+def test_local_model_is_asked_not_to_think(monkeypatch):
+    gesendet = {}
+
+    class Antwort:
+        status_code = 200
+
+        def json(self):
+            return {"message": {"role": "assistant", "content": "ok"}}
+
+    def post(url, json, timeout):
+        gesendet.update(json)
+        return Antwort()
+
+    monkeypatch.setattr(agent.httpx, "post", post)
+    agent._chat([{"role": "user", "content": "hi"}], model="qwen3:8b")
+    assert gesendet["think"] is False
+    monkeypatch.setattr(agent, "OLLAMA_THINK", "")
+    gesendet.clear()
+    agent._chat([{"role": "user", "content": "hi"}], model="qwen3:8b")
+    assert "think" not in gesendet
+
+
+def test_sentence_without_numbers_or_names_needs_no_citation():
+    fs = befunde.taxa_composition({"taxa_composition": TAXA, "dataset_summary": SUMMARY})
+    assert grounding.check_cited(
+        "Additionally, the ranking counts ASVs, not reads. Gyrodinium has the most ASVs (12) "
+        "[F1].", fs) == []
+
+
+def test_typographic_minus_is_read_as_minus():
+    assert grounding.check("rho = \u22120.86, 95 % confidence interval", ["rho -0.86"]) == []
+    assert grounding.check("rho = \u22120.87", ["rho -0.86"]) == ["-0.87"]
+    assert grounding.annotate("rho = \u22120.87.", ["-0.87"]) == "rho = \u22120.87 [no evidence]."
+
+
+def test_keystone_tool_lists_both_criteria(monkeypatch):
+    import tools
+
+    modules = [{"id": a, "module": 0} for a in ("a", "b", "c", "d", "e")]
+    # a-b-c-d chain plus a shortcut a-c; e has no significant CCM link
+    links = [("a", "b", 0.9, 0.0), ("b", "c", 0.9, 0.0), ("c", "d", 0.9, 0.0),
+             ("a", "c", 0.5, 0.01), ("d", "e", 0.9, 0.5)]
+
+    def q(query, **_):
+        if "INFLUENCES" in query:
+            return [{"source": s, "target": t, "nmi": n, "p": p} for s, t, n, p in links]
+        return modules
+
+    monkeypatch.setattr(tools, "_require_dataset", lambda d: None)
+    monkeypatch.setattr(tools, "_q", q)
+    monkeypatch.setattr(tools, "_envelope", lambda tool, query, params, data, n: data)
+    out = tools.keystone_asvs(DS)
+    assert [r["asv_id"] for r in out["criterion1"]["asvs"]] == ["a", "b", "c", "d"]
+    assert out["n_network"] == 5
+    assert set(out["both"]) == {r["asv_id"] for r in out["criterion2"]["asvs"]}
+    assert "not available" in out["criterion3"]

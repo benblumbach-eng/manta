@@ -130,6 +130,10 @@ OLLAMA_TEMPERATURE = os.environ.get("OLLAMA_TEMPERATURE") or None
 
 OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "16384"))
 
+# Thinking models (qwen3) reason before every answer unless told not to; that made answers take
+# minutes on esclabor. "true" turns it back on, empty leaves the model's default.
+OLLAMA_THINK = os.environ.get("OLLAMA_THINK", "false").strip().lower()
+
 MAX_STEPS = 6
 MAX_RESULT_ROWS = 40
 MAX_RESULT_CHARS = 12000
@@ -154,6 +158,9 @@ third of the whole series? Does a clear seasonal signal sit beside a trend the t
 separate from noise? Is a value unusual against the others from the same call? Say so. Where a
 reading invites a wrong conclusion, say what it does NOT show. If nothing stands out, say that
 plainly; never manufacture significance.
+
+Answer exactly the question asked, in a few sentences: no headings, no bullet lists, no
+overview of everything a tool returned.
 
 Stop when the finding is stated.
 
@@ -310,6 +317,8 @@ def _chat(messages: list[dict], tools: list[dict] | None = None, timeout: float 
     elif OLLAMA_TEMPERATURE is not None:
         options["temperature"] = float(OLLAMA_TEMPERATURE)
     payload = {"model": model, "messages": messages, "stream": False, "options": options}
+    if OLLAMA_THINK:
+        payload["think"] = OLLAMA_THINK == "true"
     if tools:
         payload["tools"] = tools
     if fmt:
@@ -964,7 +973,9 @@ def run(question: str, dataset_id: str | None = None, model: str | None = None,
                              and isinstance(z.get("content"), str)]
     korrigiert = False
     gerufen: set[str] = set()
-    ohne_werkzeuge = False
+    # a suggested question is answered from its own tool only (the run showed qwen3 drifting
+    # off to other tools and answering a different question)
+    ohne_werkzeuge = vorgegeben is not None
 
     for _step in range(MAX_STEPS):
         t0 = time.time()

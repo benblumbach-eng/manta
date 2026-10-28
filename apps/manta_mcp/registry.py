@@ -142,11 +142,26 @@ TOOL_SPECS: list[dict] = [
             "properties": {
                 "dataset_id": {"type": "string"},
                 "genus": {"type": "string", "description": "genus name, substring match allowed"},
-                "asv_id": {"type": "string", "description": "exact ASV id, e.g. euk_asv_000"},
+                "asv_id": {"type": "string", "description": "exact ASV id as find_asv returns it"},
                 "cluster": {"type": "integer", "description": "Louvain cluster number"},
                 "limit": {"type": "integer", "minimum": 1,
                           "maximum": tools.MAX_LIMIT, "default": 25},
             },
+            "required": ["dataset_id"],
+        },
+    },
+    {
+        "name": "keystone_asvs",
+        "description": (
+            "WHICH ASVs MEET THE KEYSTONE CRITERIA of Oldenburg et al. 2024, for the whole "
+            "dataset: criterion 1 (at least one significant CCM link), criterion 2 (high "
+            "closeness in the network of significant CCM links) and both. Use this for every "
+            "'which ASVs are keystone / central / hubs' question. Criterion 3 is not available, "
+            "so no ASV is a keystone in the full sense — say so."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"dataset_id": {"type": "string"}},
             "required": ["dataset_id"],
         },
     },
@@ -623,6 +638,7 @@ _DISPATCH: dict[str, Callable[..., Any]] = {
     "neighbors": tools.neighbors,
     "edge": tools.edge,
     "cluster_detail": tools.cluster_detail,
+    "keystone_asvs": tools.keystone_asvs,
     "cluster_timeseries": tools.cluster_timeseries,
     "cluster_bridges": tools.cluster_bridges,
     "cluster_network": tools.cluster_network,

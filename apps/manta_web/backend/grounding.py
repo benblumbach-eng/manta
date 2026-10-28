@@ -27,6 +27,9 @@ def _is_name(text: str, m: re.Match) -> bool:
         return False
     return len(raw) <= 2 if nach.group() == "S" else raw in {"1", "2", "3", "4"}
 
+# "95 % confidence interval" names the interval, it is not a value
+_KONFIDENZ = re.compile(r"\s*%\s*(?:confidence|CI\b|Konfidenz)", re.I)
+
 _LINE_ENUM = re.compile(r"(?m)^[ \t]*(\d{1,2})[.)][ \t]")
 _PAREN = re.compile(r"\(\s*(\d{1,2})\s*\)")
 _PAREN_AT_LINE_START = re.compile(r"(?m)^[ \t]*\(\s*(\d{1,2})\s*\)")
@@ -42,6 +45,12 @@ LABEL_KEYS = frozenset({
     "kingdom", "phylum", "class", "order", "family", "genus", "species", "taxon", "taxa",
     "top_genera", "genera", "region", "name", "display", "cluster_display", "module_name",
     "s_genus", "t_genus", "mine_genus", "other_genus"})
+
+
+# Models write the typographic minus (U+2212); read as "-" so "−0.86" is checked as -0.86,
+# not as 0.86. One character for one, so positions in the text stay the same.
+def _minus(text: str) -> str:
+    return (text or "").replace("\u2212", "-")
 
 
 def _to_float(raw: str) -> float | None:
@@ -159,11 +168,14 @@ def check(answer: str, tool_texts: list[str], pool: set[float] | None = None,
     tokens = _tokens(tool_texts)
     ref_spans = _reference_spans(answer, references)
 
+    answer = _minus(answer)
     schlecht: list[str] = []
     for m in _NUM.finditer(answer):
         if any(a <= m.start() < b for a, b in ref_spans):
             continue
         if _is_name(answer, m):
+            continue
+        if m.group() in {"90", "95", "99"} and _KONFIDENZ.match(answer, m.end()):
             continue
         wort = _word_at(answer, m.start(), m.end()).rstrip(_TRAIL)
         if _is_identifier(wort) and wort.lower() in tokens:
@@ -180,7 +192,8 @@ def annotate(answer: str, ungrounded: list[str]) -> str:
     if not ungrounded:
         return answer
     ziel = set(ungrounded)
-    treffer = [m for m in _NUM.finditer(answer) if m.group() in ziel and not _is_name(answer, m)]
+    gelesen = _minus(answer)
+    treffer = [m for m in _NUM.finditer(gelesen) if m.group() in ziel and not _is_name(gelesen, m)]
     out = answer
     for m in reversed(treffer):
         out = out[:m.end()] + MARK + out[m.end():]
@@ -219,6 +232,9 @@ FREIE_NAMEN = frozenset({
     "some", "many", "several", "half", "more", "less", "fewer", "none", "just", "even", "after",
     "before", "beyond", "behind", "almost", "nearly", "roughly", "around", "apart", "besides",
     "instead", "then", "thus", "hence", "such", "every", "much",
+    "additionally", "notably", "furthermore", "moreover", "finally", "first", "second",
+    "following", "ranked", "caveat", "importantly", "specifically", "similarly", "likewise",
+    "therefore", "remaining", "another", "summary", "total", "others", "other", "rest",
     "clearly", "directed", "cluster", "clusters", "module", "modules", "links", "link",
     "network", "dataset", "genus", "genera", "family", "families", "read", "reads", "samples"})
 
@@ -234,7 +250,11 @@ def check_cited(answer: str, findings: list[dict], question: str = "") -> list[s
     for satz in saetze(answer):
         ids = [i.strip() for m in MARKE.finditer(satz) for i in re.split(r"[,;]", m.group(1))]
         if not ids:
-            probleme.append(f"no finding cited: \"{satz[:80]}\"")
+            # a sentence with no number and no name holds nothing a finding could back
+            text = _minus(satz)
+            if (_NUM.search(text) or _ASV_KENNUNG.search(text)
+                    or any(n.lower() not in FREIE_NAMEN for n in _EIGENNAME.findall(text))):
+                probleme.append(f"no finding cited: \"{satz[:80]}\"")
             continue
         unbekannt = [i for i in ids if i not in nach_id]
         if unbekannt:
@@ -245,7 +265,7 @@ def check_cited(answer: str, findings: list[dict], question: str = "") -> list[s
             [f["text"] for f in zitiert])
         erlaubt = _tokens([f["text"] for f in zitiert] + [n for f in zitiert for n in f["namen"]]
                           + [question]) | FREIE_NAMEN
-        text = MARKE.sub(" ", satz)
+        text = _minus(MARKE.sub(" ", satz))
         for m in _NUM.finditer(text):
             v = _to_float(m.group())
             if v is not None and not _covered(v, m.group(), pool):
