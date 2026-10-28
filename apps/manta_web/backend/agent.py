@@ -729,7 +729,8 @@ bracket like [F1] exactly as it is, in the same place. Output only the translati
 _DEUTSCHE_WOERTER = frozenset({
     "der", "die", "das", "den", "dem", "des", "und", "oder", "ist", "sind", "gibt", "gib", "mir",
     "welche", "welcher", "welches", "wie", "was", "wer", "wo", "hier", "diesen", "dieser",
-    "diesem", "dieses", "ein", "eine", "einen", "nicht", "mit", "von", "zu", "im", "auf", "untereinander"})
+    "diesem", "dieses", "ein", "eine", "einen", "nicht", "mit", "von", "zu", "im", "auf",
+    "untereinander"})
 
 
 def _auf_deutsch(question: str) -> bool:
