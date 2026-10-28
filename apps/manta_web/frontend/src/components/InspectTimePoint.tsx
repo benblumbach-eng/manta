@@ -117,7 +117,11 @@ export default function InspectTimePoint({ datasetId, samples, sample, onSample,
               </div>
             )}
             {envHier.map((v) => (
-              <div key={v.key} className="contents">
+              <div key={v.key} data-curve={colours.has(`env:${v.key}`) || undefined}
+                className={colours.has(`env:${v.key}`)
+                  ? "col-span-2 flex justify-between gap-3 -mx-1 px-1 rounded" : "contents"}
+                style={colours.has(`env:${v.key}`)
+                  ? { outline: `2px solid ${colours.get(`env:${v.key}`)}`, outlineOffset: "-1px" } : undefined}>
                 <dt className="text-fg-muted">{v.label}</dt>
                 <dd className="text-right tabular-nums" data-testid="tp-env">
                   {Number(v.value.toFixed(3))}{v.unit ? ` ${v.unit}` : ""}
