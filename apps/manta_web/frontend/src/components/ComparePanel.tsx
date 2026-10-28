@@ -408,6 +408,7 @@ export default function ComparePanel({ datasetId, initialAsvId, initialSample, m
           <InspectTimePoint datasetId={datasetId} samples={samples} sample={punkt}
             onSample={setPunkt} env={env} onOpenAsv={onOpenAsv}
             chosen={chosen} marked={markiert} full={curves.length >= MAX_CURVES}
+            colours={new Map(curves.map((c, i) => [c.key, seriesColour(i, tok.light)]))}
             onAdd={(kind, id) => add(kind, id)} />
         ) : <>
         {err != null && <ErrorNotice error={err} inline what="Could not add this curve." />}

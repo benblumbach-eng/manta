@@ -10,7 +10,7 @@ const PAGE = 50;
 const pct = (v: number | null) => (v == null ? "—" : `${(100 * v).toFixed(v < 0.001 ? 3 : 2)} %`);
 
 export default function InspectTimePoint({ datasetId, samples, sample, onSample, env, onOpenAsv,
-                                           chosen, marked, full, onAdd }: {
+                                           chosen, marked, full, colours, onAdd }: {
   datasetId: string;
   samples: SampleList["samples"];
   sample: string | null;
@@ -20,6 +20,7 @@ export default function InspectTimePoint({ datasetId, samples, sample, onSample,
   chosen: Set<string>;
   marked: string | null;
   full: boolean;
+  colours: Map<string, string>;
   onAdd: (kind: "asv" | "cluster", id: string) => void;
 }) {
   const modules = useModules();
@@ -116,7 +117,11 @@ export default function InspectTimePoint({ datasetId, samples, sample, onSample,
               </div>
             )}
             {envHier.map((v) => (
-              <div key={v.key} className="contents">
+              <div key={v.key} data-curve={colours.has(`env:${v.key}`) || undefined}
+                className={colours.has(`env:${v.key}`)
+                  ? "col-span-2 flex justify-between gap-3 -mx-1 px-1 rounded" : "contents"}
+                style={colours.has(`env:${v.key}`)
+                  ? { outline: `2px solid ${colours.get(`env:${v.key}`)}`, outlineOffset: "-1px" } : undefined}>
                 <dt className="text-fg-muted">{v.label}</dt>
                 <dd className="text-right tabular-nums" data-testid="tp-env">
                   {Number(v.value.toFixed(3))}{v.unit ? ` ${v.unit}` : ""}
@@ -131,9 +136,11 @@ export default function InspectTimePoint({ datasetId, samples, sample, onSample,
               {data.modules.map((m) => {
                 const an = modul === m.cluster;
                 const mark = marked === `cluster:${m.cluster}`;
+                const kurve = colours.get(`cluster:${m.cluster}`);
                 return (
-                  <li key={m.cluster} data-marked={mark || undefined}
-                    className={`flex items-center gap-1 rounded ${mark ? "ring-1 ring-accent" : ""}`}>
+                  <li key={m.cluster} data-marked={mark || undefined} data-curve={kurve ? true : undefined}
+                    className={`flex items-center gap-1 rounded ${mark ? "ring-1 ring-accent" : ""}`}
+                    style={kurve ? { outline: `2px solid ${kurve}`, outlineOffset: "-1px" } : undefined}>
                     <button data-testid="tp-module" aria-pressed={an}
                       onClick={() => setModul(an ? null : m.cluster)}
                       className={`flex-1 min-w-0 grid grid-cols-[6rem_1fr_4.5rem] items-center gap-2 rounded px-1 py-1 text-left ${an
@@ -186,7 +193,10 @@ export default function InspectTimePoint({ datasetId, samples, sample, onSample,
             <ul data-testid="tp-asvs">
               {(alle ? gezeigt : gezeigt.slice(0, PAGE)).map((a) => (
                 <li key={a.id} data-marked={marked === `asv:${a.id}` || undefined}
-                  className={`flex items-center gap-1 rounded ${marked === `asv:${a.id}` ? "ring-1 ring-accent" : ""}`}>
+                  data-curve={colours.has(`asv:${a.id}`) || undefined}
+                  className={`flex items-center gap-1 rounded ${marked === `asv:${a.id}` ? "ring-1 ring-accent" : ""}`}
+                  style={colours.has(`asv:${a.id}`)
+                    ? { outline: `2px solid ${colours.get(`asv:${a.id}`)}`, outlineOffset: "-1px" } : undefined}>
                   <button data-testid="tp-asv" onClick={() => onOpenAsv(a.id)}
                     className={`flex-1 min-w-0 grid grid-cols-[2rem_1fr_5rem_4.5rem] items-center gap-2 rounded px-1 py-1 text-left ${
                       marked === `asv:${a.id}` ? "bg-accent-soft" : "hover:bg-control"}`}>
