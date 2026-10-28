@@ -12,3 +12,5 @@ apps/manta_web/backend/import_fixture/
 deploy/backups/
 logs/
 tools/env_links/out/
+
+.update_stand
