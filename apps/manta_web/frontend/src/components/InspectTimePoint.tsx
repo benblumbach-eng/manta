@@ -189,7 +189,10 @@ export default function InspectTimePoint({ datasetId, samples, sample, onSample,
             <ul data-testid="tp-asvs">
               {(alle ? gezeigt : gezeigt.slice(0, PAGE)).map((a) => (
                 <li key={a.id} data-marked={marked === `asv:${a.id}` || undefined}
-                  className={`flex items-center gap-1 rounded ${marked === `asv:${a.id}` ? "ring-1 ring-accent" : ""}`}>
+                  data-curve={colours.has(`asv:${a.id}`) || undefined}
+                  className={`flex items-center gap-1 rounded ${marked === `asv:${a.id}` ? "ring-1 ring-accent" : ""}`}
+                  style={colours.has(`asv:${a.id}`)
+                    ? { outline: `2px solid ${colours.get(`asv:${a.id}`)}`, outlineOffset: "-1px" } : undefined}>
                   <button data-testid="tp-asv" onClick={() => onOpenAsv(a.id)}
                     className={`flex-1 min-w-0 grid grid-cols-[2rem_1fr_5rem_4.5rem] items-center gap-2 rounded px-1 py-1 text-left ${
                       marked === `asv:${a.id}` ? "bg-accent-soft" : "hover:bg-control"}`}>
