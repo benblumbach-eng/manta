@@ -732,6 +732,7 @@ async def start_import_upload(
     lat: float | None = Form(None),
     lon: float | None = Form(None),
     replace: bool = Form(False),
+    keep_otter: bool = Form(False),
     con_tr: float | None = Form(None),
     con_alpha: float | None = Form(None),
     ccmn_tr: float | None = Form(None),
@@ -804,14 +805,16 @@ async def start_import_upload(
                                              time_axis=time_axis, thresholds=thresholds or None,
                                              reserved=True,
                                              replace_wipe=_replace_hook(dataset_id, replace,
-                                                                        me.username))
+                                                                        me.username),
+                                             keep_otter=keep_otter)
         else:
             _require_tools("dada2")
             job_id = import_job.start_import(dataset_id, marker=marker, region=region, rdata_dir=tmp,
                                              station=station, lat=lat, lon=lon,
                                              thresholds=thresholds or None, reserved=True,
                                              replace_wipe=_replace_hook(dataset_id, replace,
-                                                                        me.username))
+                                                                        me.username),
+                                             keep_otter=keep_otter)
     except BaseException:
         import_job.release(dataset_id)
         if tmp is not None:
@@ -898,6 +901,7 @@ async def start_import_fastq(
     num_permutations: int = Form(PRODUCTION_DEFAULTS["num_permutations"]),
     num_samples: int = Form(PRODUCTION_DEFAULTS["num_samples"]),
     replace: bool = Form(False),
+    keep_otter: bool = Form(False),
     files: list[UploadFile] = File(...),
     metadata: UploadFile | None = File(None),
     me: auth.User = Depends(auth.admin),
@@ -991,7 +995,8 @@ async def start_import_fastq(
                                          fastq_dir=fq, dada2_env=dada2_env, time_axis=time_axis,
                                          thresholds=thresholds, reserved=True,
                                          replace_wipe=_replace_hook(dataset_id, replace,
-                                                                    me.username))
+                                                                    me.username),
+                                         keep_otter=keep_otter)
     except BaseException:
         import_job.release(dataset_id)
         if tmp is not None:
