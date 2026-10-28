@@ -810,7 +810,7 @@ export type AgentStatus = {
 };
 export type AgentContext = {
   dataset_id?: string; asv_id?: string; cluster?: number | null;
-  concept?: string; question_kind?: string;
+  concept?: string; question_kind?: string; question_args?: Record<string, unknown>;
 };
 export type Finding = { id: string; art: "befund" | "vorbehalt"; text: string;
                         werte: number[]; namen: string[] };
@@ -878,6 +878,7 @@ export const askAgent = (question: string, ctx: AgentContext, model?: string,
                            dataset_id: ctx.dataset_id,
                            asv_id: ctx.asv_id, cluster: ctx.cluster ?? null,
                            concept: ctx.concept, question_kind: ctx.question_kind,
+                           question_args: ctx.question_args,
                            history: history?.length ? history : undefined,
                            conversation_id: conversationId ?? undefined }),
   }).then(async (r) => {
@@ -950,9 +951,10 @@ export const getDatasets = () => get<{ datasets: Dataset[] }>("/datasets");
 export const getImportStatus = (jobId: string) => get<ImportStatus>(`/import/${jobId}`);
 export const uploadImport = (files: File[], dataset_id: string, region?: string,
   opts?: { station?: string; lat?: number; lon?: number; marker?: string;
-           thresholds?: ThresholdInput }) => {
+           thresholds?: ThresholdInput; keep_otter?: boolean }) => {
   const fd = new FormData();
   fd.append("dataset_id", dataset_id);
+  if (opts?.keep_otter) fd.append("keep_otter", "true");
   if (region) fd.append("region", region);
   if (opts?.marker) fd.append("marker", opts.marker);
   if (opts?.station) fd.append("station", opts.station);
@@ -1194,10 +1196,11 @@ export const uploadFastq = (
   fastq: File[], dataset_id: string, region: string,
   opts?: { metadata?: File | null; ncores?: number; taxonomy_ref?: string;
            station?: string; lat?: number; lon?: number; marker?: string;
-           thresholds?: ThresholdInput },
+           thresholds?: ThresholdInput; keep_otter?: boolean },
 ) => {
   const fd = new FormData();
   fd.append("dataset_id", dataset_id);
+  if (opts?.keep_otter) fd.append("keep_otter", "true");
   fd.append("region", region);
   if (opts?.ncores) fd.append("ncores", String(opts.ncores));
   if (opts?.taxonomy_ref) fd.append("taxonomy_ref", opts.taxonomy_ref);

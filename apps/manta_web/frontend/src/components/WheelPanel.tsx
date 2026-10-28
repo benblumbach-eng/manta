@@ -1,5 +1,6 @@
 import { SectionHeading, StateNotice, ToggleButton } from "./ui";
 import { useEffect, useMemo, useState } from "react";
+import { subject, usePublishView } from "../viewContext";
 import { getAsvList, getWheel, type Wheel, type WheelMonth } from "../api";
 import { Chooser, ChooserRow } from "./controls";
 import InfoTip from "./InfoTip";
@@ -157,6 +158,11 @@ export default function WheelPanel({ datasetId, onClose, onOpenCluster, onOpenEn
                 clusterLabel: r.kind === "cluster" ? Number(r.id) : undefined }];
     });
   }, [w, rings, modules, envVars, RING_COLOURS]);
+
+  usePublishView("wheel", w ? {
+    view: "wheel", subjects: shown.map((r) => subject(r.kind, r.id, r.label)),
+    year: year != null ? Number(year) : null, years: (w.years ?? []).map((y) => Number(y.year)),
+  } : null);
 
   const ringStep = shown.length > 1 ? (R_MAX - R_MIN) / (shown.length - 1) : 0;
   const ringR = (i: number) => (shown.length === 1 ? (R_MAX + R_MIN) / 2 : R_MIN + i * ringStep);

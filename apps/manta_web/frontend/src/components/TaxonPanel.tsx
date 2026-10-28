@@ -6,6 +6,8 @@ import ProvenanceFooter from "./ProvenanceFooter";
 import ErrorNotice from "./ErrorNotice";
 import { PanelHeader } from "./PanelFrame";
 import { useModules } from "../modules";
+import { TAXONOMY_PLACEHOLDERS, TAXONOMY_RANKS } from "../taxonView";
+import { usePublishView } from "../viewContext";
 
 export default function TaxonPanel({ datasetId, asvId, onClose, onOpenAsv }: {
   datasetId: string;
@@ -25,6 +27,11 @@ export default function TaxonPanel({ datasetId, asvId, onClose, onOpenAsv }: {
       .catch((e) => { if (alive) setErr(e); });
     return () => { alive = false; };
   }, [datasetId, asvId, nochmal]);
+
+  const tief = d ? TAXONOMY_RANKS.filter((r) => d.path[r]
+    && !(TAXONOMY_PLACEHOLDERS as readonly string[]).includes(d.path[r]!)).pop() : undefined;
+  usePublishView("taxon", d && tief
+    ? { view: "taxon", rank: tief, name: d.path[tief]!, label: d.label } : null);
 
   return (
     <div data-testid="taxon-panel">

@@ -26,6 +26,7 @@ import PanelFrame from "./components/PanelFrame";
 import ThemeSwitch, { type Theme } from "./components/ThemeSwitch";
 import { Button } from "./components/ui";
 import { Z } from "./design/layers";
+import { usePublishView } from "./viewContext";
 
 export type EdgeRef = { source: string; target: string; type: "con" | "ccm" };
 
@@ -174,6 +175,9 @@ export default function App() {
   }, [selected]);
 
   const asvId = finde("asv")?.id;
+  const kante = finde("edge")?.edge;
+  usePublishView("asv", asvId ? { view: "asv", asv: asvId } : null);
+  usePublishView("edge", kante ? { view: "edge", source: kante.source, target: kante.target } : null);
 
   const refresh = () => {
     const seq = ++listSeq.current;
