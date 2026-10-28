@@ -27,7 +27,7 @@ import { memberPoint, taxonLinks, taxonPoints, type TaxonLink, type TaxonRank } 
 import ThresholdDialog from "./ThresholdDialog";
 import ErrorNotice from "./ErrorNotice";
 import { esc, fmtP } from "../format";
-import { chainedCounts, clearKind, computeVisible, decodeFilters, emptyFilters, encodeFilters,
+import { clearKind, computeVisible, decodeFilters, emptyFilters, encodeFilters,
          addAsv, exploreAdd, hiddenBy, startNone, removeShown, toggleModule, isActive, legendRows, thresholdLine, FILTER_KINDS,
          type Filters, type FilterKind, type KeystoneParams, KEYSTONE_DEFAULTS, KEYSTONE_LABEL, loadKeystone, saveKeystone, layerLabel,
          occurrenceLabel, rangeLabel, type OccPoint } from "../networkFilters";
@@ -405,9 +405,6 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
   const unknownAsvIds = useMemo(
     () => (filters.asvs?.ids ?? []).filter((id) => !allIds.has(id)),
     [filters.asvs, allIds]);
-  const chipCounts = useMemo(
-    () => (net ? chainedCounts(net, filters, keyIds, order, occ) : new Map<FilterKind, number>()),
-    [net, filters, keyIds, order, occ]);
 
   const selMarked = useMemo(() => {
     if (!sel) return new Set<string>();
@@ -981,7 +978,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         onClearAll={() => setFilters(emptyFilters())}
         onStartNone={() => { setSel(null); setFilters(startNone()); }}
         onRemoveShown={(what) => net && setFilters((f) => removeShown(f, net, what))}
-        order={order} chipCounts={chipCounts} unknownAsvIds={unknownAsvIds}
+        order={order} unknownAsvIds={unknownAsvIds}
         taxaMode={taxaMode} points={points} onPoints={setPoints}
         taxonRank={taxonRank} onTaxonRank={setTaxonRank} taxaLayers={taxaLayers}
         explore={exploreOn}

@@ -54,7 +54,6 @@ export type SidebarProps = {
   onRemoveShown: (what: { asv: string } | { module: number }) => void;
   onToggleModule: (c: number) => void;
   order: FilterKind[];
-  chipCounts: Map<FilterKind, number>;
   unknownAsvIds: string[];
   taxaMode: boolean;
   points: "asvs" | "taxa";
@@ -161,6 +160,10 @@ export default function NetworkSidebar(p: SidebarProps) {
     };
   }, [addOpen]);
   const anyActive = p.order.length > 0;
+  // Single ASVs/modules are listed one by one below, so the ASV chip is left out then.
+  const einzeln = filters.asvs != null
+    && filters.asvs.ids.length + (filters.asvs.modules ?? []).length + (filters.asvs.out ?? []).length > 0;
+  const chipKinds = p.order.filter((k) => !(k === "asvs" && einzeln));
   const visibleClusters = p.clusters.filter((c) => !filters.hidden.has(c));
 
   const [collapsed, setCollapsedState] = useState(() => {
@@ -200,6 +203,34 @@ export default function NetworkSidebar(p: SidebarProps) {
             ? `r ${rangeLabel(filters.strength, filters.strengthMax, String)}` : null,
           filters.nmi != null ? `NMI ≥ ${filters.nmi}` : null].filter(Boolean).join(" · ");
       case "occurrence": return filters.occurrence ? occurrenceLabel(filters.occurrence) : "occurrence";
+    }
+  };
+
+  // Each active filter as small boxes; filters made of several parts get one box per part.
+  type Teil = { key: string; kind: FilterKind; label: string; dot?: string; struck?: boolean; onRemove: () => void };
+  const teile = (k: FilterKind): Teil[] => {
+    const ganz = (label = chipLabel(k)): Teil[] => [{ key: k, kind: k, label, onRemove: () => p.onClearKind(k) }];
+    switch (k) {
+      case "modules":
+        return [...filters.hidden].sort((x, y) => x - y).map((c) => ({
+          key: `m${c}`, kind: k, label: modules.label(c), struck: true,
+          dot: p.clusterColor.get(c) ?? "var(--text-disabled)",
+          onRemove: () => p.onFilters({ hidden: new Set([...filters.hidden].filter((x) => x !== c)) }) }));
+      case "abundance": return [
+        filters.abundance != null && { key: "ab", kind: k, label: `abundance ≥ ${filters.abundance} %`,
+          onRemove: () => p.onFilters({ abundance: null }) },
+        filters.abundanceMax != null && { key: "abx", kind: k, label: `abundance ≤ ${filters.abundanceMax} %`,
+          onRemove: () => p.onFilters({ abundanceMax: null }) },
+      ].filter(Boolean) as Teil[];
+      case "strength": return [
+        filters.strength != null && { key: "r", kind: k, label: `r ≥ ${filters.strength}`,
+          onRemove: () => p.onFilters({ strength: null }) },
+        filters.strengthMax != null && { key: "rx", kind: k, label: `r ≤ ${filters.strengthMax}`,
+          onRemove: () => p.onFilters({ strengthMax: null }) },
+        filters.nmi != null && { key: "nmi", kind: k, label: `NMI ≥ ${filters.nmi}`,
+          onRemove: () => p.onFilters({ nmi: null }) },
+      ].filter(Boolean) as Teil[];
+      default: return ganz();
     }
   };
 
@@ -445,25 +476,26 @@ export default function NetworkSidebar(p: SidebarProps) {
             </div>
           )}
           </div>
-          {anyActive ? (
+          {anyActive && chipKinds.length > 0 && (
             <div className="flex flex-wrap gap-1" data-testid="filter-chips">
-            {p.order.map((k) => (
-              <span key={k} data-testid={`filter-chip-${k}`}
-                className="inline-flex items-center gap-1 text-xs rounded-full border border-accent/60 bg-accent-soft px-2 py-1 text-accent">
-                {WINDOWED.includes(k)
-                  ? <button onClick={() => p.onOpenFilter(k as WindowKind)} className="hover:underline">{chipLabel(k)}</button>
-                  : chipLabel(k)}
-                <span className="tabular-nums text-accent"
-                  data-testid={`filter-chip-${k}-n`}>{p.chipCounts.get(k) ?? "…"}</span>
-                <button data-testid={`filter-chip-${k}-remove`} onClick={() => p.onClearKind(k)}
-                  className="text-accent hover:text-fg" aria-label={`remove ${k} filter`}>×</button>
+            {chipKinds.flatMap((k) => teile(k)).map((t) => (
+              <span key={t.key} data-testid={`filter-chip-${t.kind}`}
+                className={`inline-flex items-center gap-1 text-xs rounded border px-1.5 py-0.5 ${
+                  t.struck ? "border-dashed border-line text-fg-muted" : "border-line text-fg"}`}>
+                {t.dot && <span className="inline-block w-2 h-2 rounded-full" style={{ background: t.dot }} />}
+                {WINDOWED.includes(t.kind)
+                  ? <button onClick={() => p.onOpenFilter(t.kind as WindowKind)}
+                      className={`hover:underline ${t.struck ? "line-through" : ""}`}>{t.label}</button>
+                  : <span className={t.struck ? "line-through" : ""}>{t.label}</span>}
+                <button data-testid={`filter-chip-${t.kind}-remove`} onClick={t.onRemove}
+                  className="text-fg-muted hover:text-fg" aria-label={`${t.struck ? "show" : "remove"} ${t.label}`}>
+                  {t.struck ? "+" : "×"}</button>
               </span>
             ))}
             </div>
-          ) : (
-            <p className="text-xs text-fg-muted" data-testid="filter-none">all ASVs · no filter</p>
           )}
-          {filters.asvs && (filters.asvs.ids.length + (filters.asvs.modules ?? []).length + (filters.asvs.out ?? []).length > 0) && (
+          {!anyActive && <p className="text-xs text-fg-muted" data-testid="filter-none">all ASVs · no filter</p>}
+          {einzeln && filters.asvs && (
             <div className="flex flex-wrap gap-1 max-h-28 overflow-auto" data-testid="shown-items">
               {(filters.asvs.modules ?? []).map((c) => (
                 <span key={`m${c}`} data-testid={`shown-module-${c}`}
@@ -479,6 +511,7 @@ export default function NetworkSidebar(p: SidebarProps) {
                 <span key={id} data-testid="shown-asv" data-asv={id}
                   className="inline-flex items-center gap-1 text-xs rounded border border-line px-1.5 py-0.5 text-fg">
                   {id}
+                  {(filters.asvs!.neighbors || filters.asvs!.expand?.includes(id)) && <span className="text-fg-muted">+ partners</span>}
                   <button onClick={() => p.onRemoveShown({ asv: id })} aria-label={`remove ${id}`}
                     className="text-fg-muted hover:text-fg">×</button>
                 </span>

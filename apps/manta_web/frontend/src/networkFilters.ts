@@ -262,19 +262,6 @@ export function hiddenBy(net: Network, f: Filters, c2Ids: Set<string>, id: strin
   return FILTER_KINDS.filter((k) => schuld.includes(k));
 }
 
-export function chainedCounts(net: Network, f: Filters, c2Ids: Set<string>,
-                              order: FilterKind[],
-                              occ?: Map<string, OccPoint[]> | null): Map<FilterKind, number> {
-  const m = new Map<FilterKind, number>();
-  let partial = emptyFilters();
-  for (const k of order) {
-    partial = takeKind(partial, f, k);
-    m.set(k, computeVisible(net, partial, c2Ids, occ).nodes.length);
-  }
-  return m;
-}
-
-
 export function encodeFilters(f: Filters): string {
   const seg: string[] = [];
   if (f.hidden.size) seg.push("m-" + [...f.hidden].sort((a, b) => a - b).join("."));
