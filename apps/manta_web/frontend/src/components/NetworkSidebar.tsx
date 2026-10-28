@@ -203,7 +203,7 @@ export default function NetworkSidebar(p: SidebarProps) {
   if (collapsed) {
     return (
       <aside data-testid="network-sidebar-collapsed"
-        className="w-11 border-r border-line flex flex-col items-center gap-2 py-3">
+        className="w-11 shrink-0 border-r border-line flex flex-col items-center gap-2 py-3">
         <Button variant="ghost" data-testid="sidebar-expand" title="show the sidebar"
           aria-label="show the sidebar" onClick={() => setCollapsed(false)}>»</Button>
         <ToggleButton data-testid="net-tab" pressed={!p.views.anyViewOpen} onClick={p.views.onShowNet}
@@ -225,7 +225,7 @@ export default function NetworkSidebar(p: SidebarProps) {
 
   return (
     <aside data-testid="network-sidebar"
-      className="w-72 border-r border-line flex flex-col gap-3 p-3 overflow-auto">
+      className="w-72 shrink-0 border-r border-line flex flex-col gap-3 p-3 overflow-auto">
       <div className="space-y-2">
         <div className="flex items-start gap-2">
           <div className="min-w-0 flex-1">

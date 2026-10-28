@@ -1006,7 +1006,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
         occurrenceReason={timeCap && !timeCap.available ? timeCap.detail : null}
       />
 
-      <div className="flex-1 relative" data-testid="network-canvas" data-layout-hash={layoutHash}
+      <div className="flex-1 min-w-0 relative" data-testid="network-canvas" data-layout-hash={layoutHash}
         data-link-length={linkLen}
         data-tax-key={taxKey ?? ""}
         data-tax-marked={sel?.kind === "taxon" ? selMarked.size : 0}
