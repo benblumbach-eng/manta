@@ -327,3 +327,15 @@ def test_english_question_is_not_translated():
     assert not agent._auf_deutsch("What does this module consist of, and who dominates it?")
     assert agent._auf_deutsch("Gib mir einen Überblick über diesen Datensatz.")
     assert agent._auf_deutsch("Wie stark sind die Module untereinander verbunden?")
+
+
+def test_spelled_out_number_is_checked_like_digits():
+    tool = ['{"genus": "Synthetica_zeta", "n_asv": 16}']
+    assert grounding.check("Eighteen ASVs belong to Synthetica_zeta.", tool) == ["Eighteen"]
+    assert grounding.check("Sixteen ASVs belong to Synthetica_zeta.", tool) == []
+    assert grounding.check("One genus leads with 16 ASVs.", tool) == []
+    assert grounding.annotate("Eighteen ASVs.", ["Eighteen"]) == "Eighteen [no evidence] ASVs."
+    fs = befunde.taxa_composition({"taxa_composition": TAXA, "dataset_summary": SUMMARY})
+    assert grounding.check_cited("Gyrodinium has twelve ASVs [F1].", fs) == []
+    assert grounding.check_cited("Gyrodinium has eleven ASVs [F1].", fs) == [
+        "eleven is not in F1"]
