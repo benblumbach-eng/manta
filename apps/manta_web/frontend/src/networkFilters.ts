@@ -28,8 +28,8 @@ export type FilterKind = "modules" | "layer" | "cross" | "c2" | "taxon" | "asvs"
 
 export type TaxonFilter = { rank: string; value: string };
 // ids empty = nothing shown yet ("start new: none"). expand = ids whose partners are shown too
-// (explore clicks); neighbors = the partners of all ids are shown.
-export type AsvFilter = { ids: string[]; neighbors: boolean; expand?: string[] };
+// (explore clicks); neighbors = the partners of all ids are shown; modules = shown in full.
+export type AsvFilter = { ids: string[]; neighbors: boolean; expand?: string[]; modules?: number[] };
 export type OccurrenceFilter = {
   from: string | null; to: string | null; months: number[]; share: number; min: number;
 };
@@ -113,7 +113,13 @@ export const takeKind = (dst: Filters, src: Filters, k: FilterKind): Filters => 
 export const clearKind = (f: Filters, k: FilterKind): Filters => takeKind(f, emptyFilters(), k);
 
 // "start new: none": nothing shown until ASVs are added.
-export const startNone = (): Filters => ({ ...emptyFilters(), asvs: { ids: [], neighbors: false } });
+export const startNone = (): Filters => ({ ...emptyFilters(), asvs: { ids: [], neighbors: false, modules: [] } });
+
+// While ASVs are chosen one by one, picking one adds it at once.
+export function addAsv(f: Filters, id: string): Filters {
+  if (!f.asvs) return f;
+  return { ...f, asvs: { ...f.asvs, ids: [...new Set([...f.asvs.ids, id])] } };
+}
 
 // Explore: add the ASV to the shown ASVs, together with its partners.
 export function exploreAdd(f: Filters, id: string): Filters {
@@ -166,12 +172,13 @@ export function computeVisible(net: Network, f: Filters, c2Ids: Set<string>,
     }
   }
   const asvActive = f.asvs != null;
+  const modSet = new Set(f.asvs?.modules ?? []);
   const pass = (n: NetNode): boolean => {
     if (f.hidden.has(n.cluster)) return false;
     if (f.c2Only && !c2Ids.has(n.id)) return false;
     if (f.taxon
         && (n as unknown as Record<string, unknown>)[f.taxon.rank] !== f.taxon.value) return false;
-    if (asvActive && !asvSet.has(n.id) && !neighborSet.has(n.id)) return false;
+    if (asvActive && !asvSet.has(n.id) && !neighborSet.has(n.id) && !modSet.has(n.cluster)) return false;
     if (f.presence != null && (n.n_samples_present ?? 0) < f.presence) return false;
     if (f.abundance != null && (n.rel_abundance ?? 0) * 100 < f.abundance) return false;
     if (f.abundanceMax != null && (n.rel_abundance ?? 0) * 100 > f.abundanceMax) return false;
@@ -246,6 +253,7 @@ export function encodeFilters(f: Filters): string {
     seg.push("a" + (f.asvs.neighbors ? "n" : "") + "-" + f.asvs.ids.join("."));
     const ex = (f.asvs.expand ?? []).filter((id) => f.asvs!.ids.includes(id));
     if (ex.length && !f.asvs.neighbors) seg.push("ax-" + ex.join("."));
+    if (f.asvs.modules?.length) seg.push("am-" + [...f.asvs.modules].sort((a, b) => a - b).join("."));
   }
   if (f.presence != null) seg.push(`pr-${f.presence}`);
   if (f.abundance != null) seg.push(`ab-${f.abundance}`);
@@ -264,6 +272,7 @@ export function decodeFilters(s: string | null): Filters {
   const f = emptyFilters();
   if (!s) return f;
   let expand: string[] = [];
+  let addMods: number[] = [];
   for (const seg of s.split(";")) {
     if (seg === "ccm") f.layers = { ...f.layers, con: false, ccm: true };
     else if (seg === "nocon") f.layers = { ...f.layers, con: false };
@@ -280,6 +289,8 @@ export function decodeFilters(s: string | null): Filters {
       const neighbors = seg.startsWith("an-");
       const ids = seg.slice(neighbors ? 3 : 2).split(".").filter(Boolean);
       f.asvs = { ids, neighbors };
+    } else if (seg.startsWith("am-")) {
+      addMods = seg.slice(3).split(".").map(Number).filter(Number.isInteger);
     } else if (seg.startsWith("ax-")) {
       expand = seg.slice(3).split(".").filter(Boolean);
     } else if (/^pr-\d+$/.test(seg)) {
@@ -310,6 +321,7 @@ export function decodeFilters(s: string | null): Filters {
     }
   }
   if (f.asvs && expand.length) f.asvs = { ...f.asvs, expand: expand.filter((id) => f.asvs!.ids.includes(id)) };
+  if (f.asvs && addMods.length) f.asvs = { ...f.asvs, modules: addMods };
   return f;
 }
 

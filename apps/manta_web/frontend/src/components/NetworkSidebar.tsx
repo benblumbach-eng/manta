@@ -184,11 +184,13 @@ export default function NetworkSidebar(p: SidebarProps) {
       case "taxon": return filters.taxon ? `${filters.taxon.value} (${filters.taxon.rank})` : "Taxon";
       case "asvs": {
         const ids = (filters.asvs?.ids ?? []).filter((id) => !p.unknownAsvIds.includes(id));
-        if (!ids.length) return "ASVs: none yet";
+        const mods = filters.asvs?.modules ?? [];
+        const modTxt = mods.length ? (ids.length ? " + " : "") + mods.map((c) => modules.label(c)).join(", ") : "";
+        if (!ids.length) return mods.length ? `ASVs ${modTxt}` : "ASVs: none yet";
         const ex = filters.asvs?.neighbors ? ids.length
           : (filters.asvs?.expand ?? []).filter((id) => ids.includes(id)).length;
         return "ASVs " + (ids.length <= 3 ? ids.join(", ") : `${ids.length}`)
-          + (ex === 0 ? "" : ex === ids.length ? " + partners" : ` + partners of ${ex}`);
+          + (ex === 0 ? "" : ex === ids.length ? " + partners" : ` + partners of ${ex}`) + modTxt;
       }
       case "presence": return `present in ≥ ${filters.presence ?? 1} samples`;
       case "abundance": return `abundance ${rangeLabel(filters.abundance, filters.abundanceMax, (v) => `${v} %`)}`;
@@ -286,7 +288,7 @@ export default function NetworkSidebar(p: SidebarProps) {
               <ul className="max-h-60 overflow-auto">
                 {topAsvs.map((a) => (
                   <li key={a.id}>
-                    <button data-testid="top-asv" data-asv={a.id}
+                    <button data-testid="top-asv" data-asv={a.id} onMouseDown={(e) => e.preventDefault()}
                       onClick={() => (a.cluster != null ? p.onPickAsv(a.id) : p.onOpenAsv(a.id))}
                       className="w-full flex items-center gap-2 text-left px-2 py-1 hover:bg-control text-sm">
                       <span className="inline-block w-2 h-2 rounded-full shrink-0"
@@ -330,7 +332,8 @@ export default function NetworkSidebar(p: SidebarProps) {
               ))}
               {results.map((n) => (
                 <li key={n.id}>
-                  <button data-testid="asv-result" onClick={() => p.onPickAsv(n.id)}
+                  <button data-testid="asv-result" onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => p.onPickAsv(n.id)}
                     className="w-full text-left px-2 py-1 hover:bg-control text-sm">
                     <span className="inline-block w-2 h-2 rounded-full mr-2"
                       style={{ background: p.clusterColor.get(n.cluster) ?? "var(--text-disabled)" }} />

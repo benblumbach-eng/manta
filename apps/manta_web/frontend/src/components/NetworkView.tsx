@@ -28,7 +28,7 @@ import ThresholdDialog from "./ThresholdDialog";
 import ErrorNotice from "./ErrorNotice";
 import { esc, fmtP } from "../format";
 import { chainedCounts, clearKind, computeVisible, decodeFilters, emptyFilters, encodeFilters,
-         exploreAdd, hiddenBy, startNone, isActive, legendRows, thresholdLine, FILTER_KINDS,
+         addAsv, exploreAdd, hiddenBy, startNone, isActive, legendRows, thresholdLine, FILTER_KINDS,
          type Filters, type FilterKind, type KeystoneParams, KEYSTONE_DEFAULTS, KEYSTONE_LABEL, loadKeystone, saveKeystone, layerLabel,
          occurrenceLabel, rangeLabel, type OccPoint } from "../networkFilters";
 
@@ -995,7 +995,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                  onShowNet: () => { onShowNet(); setSelectedCluster(null); setLegendeOffen(false); },
                  items: viewItems }}
         onPickAsv={(id) => {
-          if (exploreOn) setFilters((f) => exploreAdd(f, id));
+          setFilters((f) => (exploreOn ? exploreAdd(f, id) : addAsv(f, id)));
           setSel({ kind: "asv", id, focus: Date.now(), label: true });
         }}
         onOpenAsv={onOpenAsv}
@@ -1069,8 +1069,7 @@ export default function NetworkView({ dataset, onOpenAsv, onOpenEdge,
                   <>
                     <span data-testid="highlight-hidden-note" className="text-warn">not shown</span>
                     <TextButton data-testid="highlight-add" className="whitespace-nowrap"
-                      onClick={() => setFilters((f) => (f.asvs
-                        ? { ...f, asvs: { ...f.asvs, ids: [...new Set([...f.asvs.ids, sel.id])] } } : f))}>
+                      onClick={() => setFilters((f) => addAsv(f, sel.id))}>
                       add it</TextButton>
                   </>
                 ) : selHiddenBy ? (

@@ -52,7 +52,7 @@ export default function FilterWindow({ kind, net, filters, onFilters, dates, nSa
   const name = (n: NetNode) => n.species ?? n.genus ?? "";
   const setIds = (next: string[]) => {
     const uniq = [...new Set(next)];
-    onFilters({ asvs: uniq.length || f.asvs ? { ids: uniq, neighbors: f.asvs?.neighbors ?? false,
+    onFilters({ asvs: uniq.length || f.asvs ? { ...f.asvs, ids: uniq, neighbors: f.asvs?.neighbors ?? false,
       expand: (f.asvs?.expand ?? []).filter((id) => uniq.includes(id)) } : null });
   };
   const unknown = ids.filter((id) => !byId.has(id));
@@ -76,19 +76,30 @@ export default function FilterWindow({ kind, net, filters, onFilters, dates, nSa
     <div data-testid={`filter-window-${kind}`} className="p-3 text-fg">
       {kind === "modules" && (
         <div className="flex flex-col gap-2">
+          {f.asvs && (
+            <p className="text-xs text-fg-muted" data-testid="cluster-add-note">
+              checked modules are shown in full</p>
+          )}
           <div className="flex items-center gap-1">
             <Button variant="ghost" data-testid="cluster-all"
-              onClick={() => onFilters({ hidden: new Set() })}>all</Button>
+              onClick={() => (f.asvs ? onFilters({ asvs: { ...f.asvs, modules: clusters } })
+                : onFilters({ hidden: new Set() }))}>all</Button>
             <Button variant="ghost" data-testid="cluster-none"
-              onClick={() => onFilters({ hidden: new Set(clusters) })}>none</Button>
+              onClick={() => (f.asvs ? onFilters({ asvs: { ...f.asvs, modules: [] } })
+                : onFilters({ hidden: new Set(clusters) }))}>none</Button>
           </div>
           <div data-testid="cluster-list" className="flex flex-col gap-1 max-h-96 overflow-auto">
             {clusters.map((c) => (
               <div key={c} className="flex items-center gap-2 text-sm text-fg">
                 <input type="checkbox" data-testid={`cluster-check-${c}`}
                   aria-label={`show ${modules.label(c)}`}
-                  checked={!f.hidden.has(c)}
+                  checked={f.asvs ? (f.asvs.modules ?? []).includes(c) : !f.hidden.has(c)}
                   onChange={(e) => {
+                    if (f.asvs) {
+                      const rest = (f.asvs.modules ?? []).filter((x) => x !== c);
+                      onFilters({ asvs: { ...f.asvs, modules: e.target.checked ? [...rest, c] : rest } });
+                      return;
+                    }
                     const next = new Set(f.hidden);
                     if (e.target.checked) next.delete(c); else next.add(c);
                     onFilters({ hidden: next });
