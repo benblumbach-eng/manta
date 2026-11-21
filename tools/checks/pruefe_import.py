@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Check a finished MANTA import against a saved copy of its OTTER work folder.
 
-The folder must hold csv/ (OTTER's input tables) and otter/ (OTTER's output with
+The folder must hold input/ or csv/ (OTTER's input tables) and otter/ (OTTER's output with
 manta_manifest.json), as in the import's temporary folder. Every CSV is read here
 independently of ingest.py, so a reading error in the import shows up as a difference.
 
 Run with the ingest venv, which has the neo4j driver:
-  tools/neo4j_ingest/.venv/bin/python tools/checks/pruefe_import.py --ordner ~/otter_sicherung
+  tools/neo4j_ingest/.venv/bin/python tools/checks/pruefe_import.py --ordner ~/otter_sicherung/<dataset>/<time>
 """
 from __future__ import annotations
 
@@ -101,7 +101,9 @@ def tabelle_ok(pfad: Path, trenner: str) -> str | None:
 
 def pruefe_ordner(ordner: Path) -> dict | None:
     print("\nTeil 1: Ist die Sicherung vollständig?")
-    csv_dir, out_dir = ordner / "csv", ordner / "otter"
+    # The import's checkbox saves OTTER's input as input/, its temporary folder calls it csv/.
+    csv_dir = ordner / "input" if (ordner / "input").is_dir() else ordner / "csv"
+    out_dir = ordner / "otter"
     man_pfad = out_dir / "manta_manifest.json"
     if not man_pfad.exists():
         melde("OTTER ist fertig geworden (manta_manifest.json vorhanden)", False,
@@ -298,7 +300,7 @@ def finde_datensatz(session, proben: set) -> str | None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Prüft einen fertigen MANTA-Import gegen die gesicherten OTTER-Tabellen.")
-    ap.add_argument("--ordner", required=True, type=Path, help="gesicherter Arbeitsordner mit csv/ und otter/")
+    ap.add_argument("--ordner", required=True, type=Path, help="gesicherter Arbeitsordner mit input/ (oder csv/) und otter/")
     ap.add_argument("--datensatz", help="Name des Datensatzes in MANTA (ohne: wird über die Proben gesucht)")
     ap.add_argument("--env", type=Path, default=Path.home() / "manta/apps/manta_web/backend/.env",
                     help="Datei mit NEO4J_URI und NEO4J_PASSWORD (Standard: %(default)s)")

@@ -4,7 +4,7 @@
 (run_on_terminal_main.main), and compare the tables cell by cell.
 
 Run with OTTER's venv:
-  ~/manta/submodules/otter/.venv/bin/python vergleiche_mit_otter.py --ordner ~/otter_sicherung
+  ~/manta/submodules/otter/.venv/bin/python vergleiche_mit_otter.py --ordner ~/otter_sicherung/<dataset>/<time>
 """
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ def vergleiche_module(a: pd.DataFrame, b: pd.DataFrame) -> bool:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Rechnet einen Ausschnitt über MANTA und mit OTTER allein und vergleicht.")
-    ap.add_argument("--ordner", required=True, type=Path, help="gesicherter Arbeitsordner mit csv/ und otter/")
+    ap.add_argument("--ordner", required=True, type=Path, help="gesicherter Arbeitsordner mit input/ (oder csv/) und otter/")
     ap.add_argument("--asvs", type=int, default=200, help="so viele ASVs (die ersten der Tabelle) rechnen (Standard: %(default)s)")
     ap.add_argument("--manta", type=Path, default=Path.home() / "manta",
                     help="MANTA-Ordner mit submodules/otter (Standard: %(default)s)")
@@ -77,9 +77,10 @@ def main() -> int:
     perm, samp = int(p.get("num_permutations", 999)), int(p.get("num_samples", 10))
 
     arbeit = Path(tempfile.mkdtemp(prefix="manta_vergleich_"))
-    ab = pd.read_csv(ordner / "csv" / "abundance.csv", sep=";", index_col=0)
+    eingabe = ordner / "input" if (ordner / "input").is_dir() else ordner / "csv"
+    ab = pd.read_csv(eingabe / "abundance.csv", sep=";", index_col=0)
     ab.iloc[:, :a.asvs].to_csv(arbeit / "abundance.csv", sep=";")
-    taxa, env = ordner / "csv" / "taxa_info.csv", ordner / "csv" / "environment_info.csv"
+    taxa, env = eingabe / "taxa_info.csv", eingabe / "environment_info.csv"
     print(f"Rechne die ersten {min(a.asvs, ab.shape[1])} von {ab.shape[1]} ASVs zweimal "
           f"({perm} Wiederholungen). Das dauert einige Minuten. Arbeitsordner: {arbeit}", flush=True)
 
