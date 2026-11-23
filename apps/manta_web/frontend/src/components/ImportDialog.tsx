@@ -2,7 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import * as echarts from "echarts";
 import ReactECharts from "echarts-for-react";
 import { getFastqPreflight, getImportTools, uploadFastq, uploadImport, PRODUCTION_THRESHOLDS,
-         type FastqPreflight, type ImportTools, type ThresholdInput } from "../api";
+         getPrimerPairs, savePrimerPair, deletePrimerPair,
+         type FastqPreflight, type ImportTools, type ThresholdInput, type PrimerPair,
+         type PrimerPairIn } from "../api";
 import InfoTip from "./InfoTip";
 import { Button, Dialog, StateNotice } from "./ui";
 import { Segmented } from "./controls";
@@ -153,6 +155,108 @@ function LocationPicker({ lat, lon, onPick }:
   );
 }
 
+const PRIMER = /^[ACGTRYSWKMBDHVN]{10,60}$/;
+const NEW = "new";
+const bases = (v: string) => v.toUpperCase().replace(/\s/g, "");
+
+function PrimerPicker({ marker, onChange }:
+  { marker: string; onChange: (p: PrimerPair | null) => void }) {
+  const [pairs, setPairs] = useState<PrimerPair[]>([]);
+  const [sel, setSel] = useState("");
+  const [edit, setEdit] = useState<(PrimerPairIn & { id: number | null }) | null>(null);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const markerDefault = (ps: PrimerPair[], m: string) =>
+    String(Math.max(0, ps.findIndex((p) => p.marker === m)));
+  useEffect(() => {
+    getPrimerPairs().then((r) => { setPairs(r.pairs); setSel(markerDefault(r.pairs, marker)); })
+      .catch((e) => setErr(String(e instanceof Error ? e.message : e)));
+  }, []);
+  useEffect(() => { if (pairs.length) { setSel(markerDefault(pairs, marker)); setEdit(null); } },
+            [marker]);
+  const pair = edit || sel === NEW ? null : pairs[Number(sel)] ?? null;
+  useEffect(() => { onChange(pair); }, [pair?.fwd, pair?.rev]);
+
+  const editOk = !!edit && edit.label.trim() !== "" && PRIMER.test(edit.fwd) && PRIMER.test(edit.rev);
+  async function run(call: Promise<{ pairs: PrimerPair[] }>, label: string | null) {
+    setErr(null);
+    try {
+      const ps = (await call).pairs;
+      setPairs(ps); setEdit(null); setConfirmDel(false);
+      const i = label == null ? -1 : ps.findIndex((p) => p.label === label);
+      setSel(i >= 0 ? String(i) : markerDefault(ps, marker));
+    } catch (e) { setErr(String(e instanceof Error ? e.message : e)); }
+  }
+  const box = (key: "label" | "fwd" | "rev", label: string) => (
+    <Field label={label}>
+      <input data-testid={`primer-edit-${key}`} value={edit![key]}
+        className={inputCls + (key === "label" ? "" : " font-mono")}
+        onChange={(e) => setEdit({ ...edit!, [key]: key === "label" ? e.target.value
+                                                                     : bases(e.target.value) })} />
+    </Field>
+  );
+  const link = "text-accent hover:underline";
+
+  return (
+    <div className="col-span-2 space-y-1">
+      <Field label="Primer pair" tip={<><p>cutadapt removes the forward primer from the start
+        of R1 and the reverse primer from the start of R2. Read pairs without both primers are
+        discarded.</p><p>If fewer than 80 % of the read pairs of a sample carry both primers, the
+        import stops.</p></>}>
+        <select data-testid="import-primer-pair" value={edit ? NEW : sel} className={inputCls}
+          disabled={!!edit && edit.id != null}
+          onChange={(e) => {
+            setConfirmDel(false); setErr(null);
+            if (e.target.value === NEW) setEdit({ id: null, label: "", fwd: "", rev: "" });
+            else { setSel(e.target.value); setEdit(null); }
+          }}>
+          {pairs.map((p, i) => <option key={i} value={String(i)}>
+            {p.label}{p.id != null ? " (own)" : ""}</option>)}
+          <option value={NEW}>New pair …</option>
+        </select>
+      </Field>
+      {edit ? (
+        <div data-testid="primer-edit" className="space-y-2 rounded-md border border-line p-2">
+          {box("label", "Name")}
+          <div className="grid grid-cols-2 gap-3">
+            {box("fwd", "Fwd primer (5'→3')")}{box("rev", "Rev primer (5'→3')")}
+          </div>
+          <div className="flex gap-3 text-xs">
+            <button type="button" data-testid="primer-save" disabled={!editOk}
+              className={editOk ? link : "text-fg-muted"}
+              onClick={() => run(savePrimerPair(
+                { label: edit.label.trim(), fwd: edit.fwd, rev: edit.rev }, edit.id),
+                edit.label.trim())}>Save</button>
+            <button type="button" className={link} onClick={() => { setEdit(null); setErr(null); }}>
+              Cancel</button>
+            {!editOk && <span className="text-warn">name, and 10–60 IUPAC bases (ACGTRYSWKMBDHVN) each</span>}
+          </div>
+        </div>
+      ) : pair && (
+        <div data-testid="import-primer-seqs"
+          className="flex flex-wrap items-center gap-x-3 text-xs text-fg-muted">
+          <span className="font-mono">Fwd {pair.fwd} · Rev {pair.rev}</span>
+          {pair.id != null && (confirmDel ? (
+            <span>Delete “{pair.label}”?{" "}
+              <button type="button" data-testid="primer-delete-yes" className="text-danger hover:underline"
+                onClick={() => run(deletePrimerPair(pair.id!), null)}>Delete</button>{" "}
+              <button type="button" className={link} onClick={() => setConfirmDel(false)}>Keep</button>
+            </span>
+          ) : (<>
+            <button type="button" data-testid="primer-edit-open" className={link}
+              onClick={() => setEdit({ id: pair.id, label: pair.label, fwd: pair.fwd, rev: pair.rev })}>
+              Edit</button>
+            <button type="button" data-testid="primer-delete" className={link}
+              onClick={() => setConfirmDel(true)}>Delete</button>
+          </>))}
+        </div>
+      )}
+      {err && <div data-testid="primer-error" className="text-xs text-danger">{err}</div>}
+    </div>
+  );
+}
+
 const DEFAULT_THRESHOLDS: ThresholdInput = PRODUCTION_THRESHOLDS;
 
 export default function ImportDialog({ onClose, onStarted }:
@@ -173,6 +277,7 @@ export default function ImportDialog({ onClose, onStarted }:
   const [showMap, setShowMap] = useState(false);
   const [thr, setThr] = useState<ThresholdInput>(DEFAULT_THRESHOLDS);
   const [keepOtter, setKeepOtter] = useState(false);
+  const [pair, setPair] = useState<PrimerPair | null>(null);
 
   const [tools, setTools] = useState<ImportTools | null>(null);
 
@@ -195,7 +300,7 @@ export default function ImportDialog({ onClose, onStarted }:
   const otterOutTablesOk = has(OTTER_OUT_MANIFEST) || OTTER_OUT_DEFAULT_TABLES.every(has);
   const stage1Ok = dada2Missing.length === 0 || tablesMissing.length === 0;
   const canStart = idOk && !busy && files.length > 0 && entryState?.ok !== false &&
-    (source === "fastq" ? fastqOk
+    (source === "fastq" ? fastqOk && pair !== null
       : source === "dada2" ? stage1Ok
       : otterOutMissing.length === 0 && otterOutTablesOk);
 
@@ -212,6 +317,7 @@ export default function ImportDialog({ onClose, onStarted }:
       const res = source === "fastq"
         ? await uploadFastq(files, datasetId, opts.region,
             { metadata, station: opts.station, lat: opts.lat, lon: opts.lon, marker,
+              fwd_primer: pair?.fwd, rev_primer: pair?.rev,
               thresholds: thr, keep_otter: keepOtter })
         : await uploadImport(files, datasetId, opts.region,
             { station: opts.station, lat: opts.lat, lon: opts.lon, marker,
@@ -304,6 +410,7 @@ export default function ImportDialog({ onClose, onStarted }:
               <option value="16S">16S (prokaryotes)</option>
             </select>
           </Field>
+          {source === "fastq" && <PrimerPicker marker={marker} onChange={setPair} />}
         </div>
 
         <fieldset className="border border-line rounded-md p-2">
@@ -447,6 +554,7 @@ export default function ImportDialog({ onClose, onStarted }:
                       : ` — missing: ${dada2Missing.join("; ")}`}`}
           {datasetId && !idOk && <span className="text-warn"> · name needs at least 3 characters (a–z, 0–9, _)</span>}
           {source === "fastq" && !metadata && <span> · without metadata.csv: no season statements</span>}
+          {source === "fastq" && !pair && <span className="text-warn"> · choose a primer pair</span>}
         </div>
 
         {err && <div data-testid="import-error" className="text-xs text-danger">{err}</div>}

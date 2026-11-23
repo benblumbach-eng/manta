@@ -33,6 +33,7 @@ import import_job
 import mailer
 import otter_estimate
 import own_model
+import primers
 import settings
 import semantics
 import transcripts
@@ -566,10 +567,8 @@ LIMITS = {"ncores_max": 64, "fft_coeffs_max": 64,
           "num_permutations_max": 10_000, "num_samples_max": 10_000,
           "note_max_chars": MAX_NOTE_CHARS, "region_max_chars": MAX_REGION_CHARS}
 
-DEFAULT_PRIMERS = {
-    "18S": ("GCGGTAATTCCAGCTCCAA", "ACTTTCGTTCTTGATYRR"),
-    "16S": ("CCTACGGGNGGCWGCAG", "GACTACHVGGGTATCTAATCC"),
-}
+DEFAULT_PRIMERS = {m: next((p["fwd"], p["rev"]) for p in primers.BUILTIN if p["marker"] == m)
+                   for m in ("18S", "16S")}
 
 
 @app.post("/import", dependencies=[Depends(auth.admin)])
@@ -876,6 +875,49 @@ def fastq_preflight():
     return out
 
 
+class PrimerPairIn(BaseModel):
+    label: str
+    fwd: str
+    rev: str
+
+
+@app.get("/import/primers", dependencies=[Depends(auth.admin)])
+def list_primer_pairs():
+    return {"pairs": primers.list_all()}
+
+
+@app.post("/import/primers", dependencies=[Depends(auth.admin)])
+def create_primer_pair(body: PrimerPairIn, me: auth.User = Depends(auth.admin)):
+    try:
+        primers.save(body.label, body.fwd, body.rev, me.username)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    audit.note(me.username, "primer pair created", body.label)
+    return {"pairs": primers.list_all()}
+
+
+@app.put("/import/primers/{pair_id}", dependencies=[Depends(auth.admin)])
+def update_primer_pair(pair_id: int, body: PrimerPairIn, me: auth.User = Depends(auth.admin)):
+    try:
+        primers.save(body.label, body.fwd, body.rev, me.username, pair_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except KeyError:
+        raise HTTPException(404, "no such primer pair")
+    audit.note(me.username, "primer pair changed", f"{pair_id}: {body.label}")
+    return {"pairs": primers.list_all()}
+
+
+@app.delete("/import/primers/{pair_id}", dependencies=[Depends(auth.admin)])
+def delete_primer_pair(pair_id: int, me: auth.User = Depends(auth.admin)):
+    try:
+        primers.delete(pair_id)
+    except KeyError:
+        raise HTTPException(404, "no such primer pair")
+    audit.note(me.username, "primer pair deleted", str(pair_id))
+    return {"pairs": primers.list_all()}
+
+
 @app.post("/import/fastq", dependencies=[Depends(auth.admin)])
 async def start_import_fastq(
     dataset_id: str = Form(...),
@@ -912,6 +954,15 @@ async def start_import_fastq(
     if min(trunc_f, trunc_r, min_overlap) < 0 or min(maxee_f, maxee_r) <= 0:
         raise HTTPException(422, "trunc_f, trunc_r and min_overlap must not be negative, "
                                  "maxee_f and maxee_r must be greater than 0.")
+    if not fwd_primer or not rev_primer:
+        if marker not in DEFAULT_PRIMERS:
+            raise HTTPException(400, f"There are no default primers for marker {marker!r} — "
+                                     f"please give fwd_primer and rev_primer.")
+        fwd_primer, rev_primer = DEFAULT_PRIMERS[marker]
+    fwd_primer, rev_primer = fwd_primer.strip().upper(), rev_primer.strip().upper()
+    if not (primers.PRIMER_RE.match(fwd_primer) and primers.PRIMER_RE.match(rev_primer)):
+        raise HTTPException(400, "primers must be 10-60 IUPAC bases (A C G T R Y S W K M B "
+                                 "D H V N), written 5'->3'.")
     _reserve(dataset_id, "a FASTQ upload request")
     tmp: Path | None = None
     try:
@@ -968,12 +1019,6 @@ async def start_import_fastq(
             raise HTTPException(400, f"implausible coordinate lat={lat}, lon={lon}")
         if taxonomy_ref and not Path(taxonomy_ref).exists():
             raise HTTPException(400, f"taxonomy reference not found: {taxonomy_ref}")
-
-        if not fwd_primer or not rev_primer:
-            if marker not in DEFAULT_PRIMERS:
-                raise HTTPException(400, f"There are no default primers for marker {marker!r} — "
-                                         f"please give fwd_primer and rev_primer.")
-            fwd_primer, rev_primer = DEFAULT_PRIMERS[marker]
 
         dada2_env = {
             "MANTA_NCORES": str(max(1, ncores)),

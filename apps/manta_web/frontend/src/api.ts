@@ -1181,6 +1181,17 @@ export type FastqPreflight = {
   ok: boolean; rscript: boolean; cutadapt: boolean; dada2: boolean;
   dada2_version: string | null; error?: string; hinweis: string;
 };
+export type PrimerPair = { id: number | null; label: string; marker: string | null;
+                           fwd: string; rev: string };
+export type PrimerPairIn = { label: string; fwd: string; rev: string };
+const primerBody = (p: PrimerPairIn) => ({
+  headers: { "Content-Type": "application/json" }, body: JSON.stringify(p) });
+export const getPrimerPairs = () => get<{ pairs: PrimerPair[] }>("/import/primers");
+export const savePrimerPair = (p: PrimerPairIn, id: number | null) =>
+  F(`${BASE}/import/primers${id == null ? "" : `/${id}`}`,
+    { method: id == null ? "POST" : "PUT", ...primerBody(p) }).then(okJson<{ pairs: PrimerPair[] }>);
+export const deletePrimerPair = (id: number) =>
+  F(`${BASE}/import/primers/${id}`, { method: "DELETE" }).then(okJson<{ pairs: PrimerPair[] }>);
 export const getFastqPreflight = () => get<FastqPreflight>("/import/fastq/preflight");
 
 export type ImportEntry = "fastq" | "dada2" | "tables" | "otterout" | "recompute";
@@ -1196,7 +1207,8 @@ export const uploadFastq = (
   fastq: File[], dataset_id: string, region: string,
   opts?: { metadata?: File | null; ncores?: number; taxonomy_ref?: string;
            station?: string; lat?: number; lon?: number; marker?: string;
-           thresholds?: ThresholdInput; keep_otter?: boolean },
+           thresholds?: ThresholdInput; keep_otter?: boolean;
+           fwd_primer?: string; rev_primer?: string },
 ) => {
   const fd = new FormData();
   fd.append("dataset_id", dataset_id);
@@ -1205,6 +1217,8 @@ export const uploadFastq = (
   if (opts?.ncores) fd.append("ncores", String(opts.ncores));
   if (opts?.taxonomy_ref) fd.append("taxonomy_ref", opts.taxonomy_ref);
   if (opts?.marker) fd.append("marker", opts.marker);
+  if (opts?.fwd_primer) fd.append("fwd_primer", opts.fwd_primer);
+  if (opts?.rev_primer) fd.append("rev_primer", opts.rev_primer);
   if (opts?.station) fd.append("station", opts.station);
   if (opts?.lat != null) fd.append("lat", String(opts.lat));
   if (opts?.lon != null) fd.append("lon", String(opts.lon));
