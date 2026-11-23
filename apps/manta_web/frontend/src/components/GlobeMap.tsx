@@ -239,6 +239,8 @@ export default function GlobeMap({ datasets, editId, light, onSelect, onHover, o
         const p = d.derived?.params;
         const zeilen = [
           c ? `${c[1].toFixed(2)}°N ${c[0].toFixed(2)}°E${d.station ? ` · ${d.station}` : ""}` : null,
+          d.depth_from_m != null
+            ? `depth ${d.depth_from_m}${d.depth_to_m != null ? `–${d.depth_to_m}` : ""} m` : null,
           `${d.n_sample} samples`,
           `${d.n_asv} ASVs · ${d.n_network} in the network`,
           d.derived ? `recomputed ${(d.derived.at ?? "").slice(0, 10) || "—"}`

@@ -496,6 +496,13 @@ class ImportRequest(BaseModel):
 
 
 
+def _check_depth(depth_from: float | None, depth_to: float | None) -> None:
+    if depth_to is not None and depth_from is None:
+        raise HTTPException(422, "depth to needs depth from.")
+    if depth_from is not None and (depth_from < 0 or (depth_to is not None and depth_to < depth_from)):
+        raise HTTPException(422, "depth from must not be negative, and depth to not less than it.")
+
+
 def _require_free_dataset_id(dataset_id: str, replace: bool) -> None:
     if not dataset_id or not dataset_id.strip():
         raise HTTPException(422, "dataset_id must not be empty")
@@ -732,6 +739,8 @@ async def start_import_upload(
     lon: float | None = Form(None),
     replace: bool = Form(False),
     keep_otter: bool = Form(False),
+    depth_from: float | None = Form(None),
+    depth_to: float | None = Form(None),
     con_tr: float | None = Form(None),
     con_alpha: float | None = Form(None),
     ccmn_tr: float | None = Form(None),
@@ -743,6 +752,7 @@ async def start_import_upload(
     me: auth.User = Depends(auth.admin),
 ):
     _check_new_dataset(dataset_id, region, marker)
+    _check_depth(depth_from, depth_to)
     _reserve(dataset_id, "an upload request")
     tmp: Path | None = None
     try:
@@ -794,7 +804,8 @@ async def start_import_upload(
                                              otter_out_dir=tmp, station=station, lat=lat, lon=lon,
                                              time_axis=time_axis, reserved=True,
                                              replace_wipe=_replace_hook(dataset_id, replace,
-                                                                        me.username))
+                                                                        me.username),
+                                             depth_from=depth_from, depth_to=depth_to)
         elif has_tables:
             _require_tools("tables")
             time_axis = await run_in_threadpool(_validate_tables_upload, tmp)
@@ -805,7 +816,8 @@ async def start_import_upload(
                                              reserved=True,
                                              replace_wipe=_replace_hook(dataset_id, replace,
                                                                         me.username),
-                                             keep_otter=keep_otter)
+                                             keep_otter=keep_otter,
+                                             depth_from=depth_from, depth_to=depth_to)
         else:
             _require_tools("dada2")
             job_id = import_job.start_import(dataset_id, marker=marker, region=region, rdata_dir=tmp,
@@ -813,7 +825,8 @@ async def start_import_upload(
                                              thresholds=thresholds or None, reserved=True,
                                              replace_wipe=_replace_hook(dataset_id, replace,
                                                                         me.username),
-                                             keep_otter=keep_otter)
+                                             keep_otter=keep_otter,
+                                             depth_from=depth_from, depth_to=depth_to)
     except BaseException:
         import_job.release(dataset_id)
         if tmp is not None:
@@ -944,11 +957,14 @@ async def start_import_fastq(
     num_samples: int = Form(PRODUCTION_DEFAULTS["num_samples"]),
     replace: bool = Form(False),
     keep_otter: bool = Form(False),
+    depth_from: float | None = Form(None),
+    depth_to: float | None = Form(None),
     files: list[UploadFile] = File(...),
     metadata: UploadFile | None = File(None),
     me: auth.User = Depends(auth.admin),
 ):
     _check_new_dataset(dataset_id, region, marker)
+    _check_depth(depth_from, depth_to)
     if not 1 <= ncores <= LIMITS["ncores_max"]:
         raise HTTPException(422, f"ncores must be between 1 and {LIMITS['ncores_max']}.")
     if min(trunc_f, trunc_r, min_overlap) < 0 or min(maxee_f, maxee_r) <= 0:
@@ -1041,7 +1057,8 @@ async def start_import_fastq(
                                          thresholds=thresholds, reserved=True,
                                          replace_wipe=_replace_hook(dataset_id, replace,
                                                                     me.username),
-                                         keep_otter=keep_otter)
+                                         keep_otter=keep_otter,
+                                         depth_from=depth_from, depth_to=depth_to)
     except BaseException:
         import_job.release(dataset_id)
         if tmp is not None:
@@ -1955,6 +1972,7 @@ def datasets():
         RETURN d.dataset_id AS dataset_id, d.region AS region, d.marker AS marker,
                coalesce(d.visibility, '""" + access.DEFAULT_VISIBILITY + """') AS visibility,
                d.station AS ds_station, d.lat AS lat, d.lon AS lon,
+               d.depth_from_m AS depth_from_m, d.depth_to_m AS depth_to_m,
                coalesce(d.time_axis, 'ordinal') AS time_axis,
                coalesce(d.value_kind, 'unknown') AS value_kind,
                COUNT { MATCH (a:ASV {dataset_id: d.dataset_id}) } AS n_asv,

@@ -665,6 +665,12 @@ def ingest_dada2_provenance(driver, dataset_id, entry_point="unknown"):
     return {"dada2_provenance": state}
 
 
+def set_depth(driver, dataset_id, depth_from, depth_to):
+    with driver.session() as s:
+        s.run("MATCH (d:Dataset {dataset_id:$d}) SET d.depth_from_m=$f, d.depth_to_m=$t",
+              d=dataset_id, f=depth_from, t=depth_to)
+
+
 def ingest_all(driver, dataset_id, run_id, marker=None, region=None, station=None,
                lat=None, lon=None, time_axis=None, entry_point="unknown",
                source_doi=None, citation=None, tables=None):
@@ -781,6 +787,11 @@ def main():
                         "position on the world map")
     p.add_argument("--lon", type=float, default=None,
                    help="longitude of the sampling site in decimal degrees")
+    p.add_argument("--depth-from", type=float, default=None,
+                   help="nominal sampling depth of the dataset in m, or the upper end of a range "
+                        "(optional); describes the dataset, never a sample")
+    p.add_argument("--depth-to", type=float, default=None,
+                   help="lower end of the depth range in m; needs --depth-from")
     p.add_argument("--time-axis", choices=["dates", "ordinal"], default=None,
                    help="'dates' if the sample names (first column of abundance.csv) are real "
                         "calendar dates (YYYY-MM-DD), 'ordinal' if they only give the order; "
@@ -809,6 +820,10 @@ def main():
                              f"rerun run_dada2.R with MANTA_METADATA pointing to the real sampling "
                              f"dates.")
     placeholder_check(args.time_axis)
+    if args.depth_to is not None and (args.depth_from is None or args.depth_to < args.depth_from):
+        raise SystemExit("ABORT: --depth-to needs --depth-from, and must not be less than it.")
+    if args.depth_from is not None and args.depth_from < 0:
+        raise SystemExit("ABORT: --depth-from must not be negative.")
     missing = missing_inputs(args.network_only)
     if missing:
         raise SystemExit("Input files not found:\n  " + "\n  ".join(str(m) for m in missing)
@@ -832,6 +847,8 @@ def main():
                      marker=args.marker, region=args.region, station=args.station,
                      lat=args.lat, lon=args.lon, time_axis=args.time_axis,
                      source_doi=args.source_doi, citation=args.citation, tables=tables, **extra)
+        if not args.network_only or args.depth_from is not None:
+            set_depth(driver, args.dataset_id, args.depth_from, args.depth_to)
         print(f"Ingestion ok ({args.dataset_id}): {counts}")
     finally:
         driver.close()
