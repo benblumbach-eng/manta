@@ -62,15 +62,27 @@ if [ "$alt" != "$neu" ] && ! git merge-base --is-ancestor "$neu" "$alt" &&
   echo "  git clone $(git remote get-url origin) <new folder>" >&2
   exit 1
 fi
+STAND=.update_stand
+stand="$(cat "$STAND" 2>/dev/null || true)"
 if [ "$alt" = "$neu" ] || git merge-base --is-ancestor "$neu" "$alt"; then
   echo "MANTA is up to date ($(git log -1 --format='%h  %ad' --date=short))"
-  otter_blocked || exit 0
-  if [ "$NUR_SEHEN" = 1 ]; then
+  if [ "$stand" != "$alt" ]; then
+    if [ "$NUR_SEHEN" = 1 ]; then
+      echo "but the running MANTA was not rebuilt since the last git pull; run 'bash update.sh'"
+      exit 10
+    fi
+    echo "-- the code changed without update.sh (git pull?); rebuilding"
+    if [ -n "$stand" ] && git cat-file -e "$stand^{commit}" 2>/dev/null; then alt="$stand"; fi
+    neu="$(git rev-parse HEAD)"
+  elif ! otter_blocked; then
+    exit 0
+  elif [ "$NUR_SEHEN" = 1 ]; then
     echo "but OTTER is missing in $OTTER; run 'bash update.sh' to fetch it"
     exit 0
+  else
+    echo "-- OTTER is missing; finishing the previous update"
+    RESUME=1
   fi
-  echo "-- OTTER is missing; finishing the previous update"
-  RESUME=1
 else
   anzahl="$(git rev-list --count "$alt..$neu")"
   echo "A newer MANTA is available: $anzahl commit(s), $(git log -1 --format='%ad' --date=short "$neu")"
@@ -137,6 +149,7 @@ own_services() {
 WEB_PORT="$( { sed -n 's/^HTTP_PORT=//p' deploy/.env 2>/dev/null || true; } | tail -1)"
 if [ -f deploy/.env ] && ! docker info >/dev/null 2>&1; then
   warn "Docker not reachable; afterwards run: cd deploy && docker compose up -d --build"
+  pending "cd deploy && docker compose up -d --build"
 fi
 services="$(own_services || true)"
 if [ -n "$services" ]; then
@@ -146,6 +159,7 @@ if [ -n "$services" ]; then
     case " $services " in *" caddy "*) echo "   site: http://localhost:${WEB_PORT:-8080}" ;; esac
   else
     warn "the update is installed, but the containers did not restart; run: cd deploy && docker compose up -d --build $services"
+    pending "cd deploy && docker compose up -d --build $services"
   fi
 fi
 
@@ -157,6 +171,7 @@ if bash apps/manta_web/dev.sh status >/dev/null 2>&1; then
 fi
 
 echo "MANTA is now at $(git log -1 --format='%h  %ad' --date=short)"
+[ -n "$PENDING" ] || git rev-parse HEAD > "$STAND"
 if [ -n "$PENDING" ]; then
   echo "Some steps failed (see the messages above). Fix the cause, then run in $PWD:$PENDING" >&2
   exit 1
