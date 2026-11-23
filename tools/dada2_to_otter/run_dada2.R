@@ -27,6 +27,9 @@ if (any(args %in% c("-h", "--help"))) {
     "  MANTA_NCORES       threads (default 4)",
     "  MANTA_FWD_PRIMER   forward primer (default GCGGTAATTCCAGCTCCAA)",
     "  MANTA_REV_PRIMER   reverse primer (default ACTTTCGTTCTTGATYRR)",
+  "                     cutadapt looks for each primer only at the start of its read and",
+  "                     discards read pairs without both primers; below 80 % of read pairs",
+  "                     with primers in a sample the run stops",
     "  MANTA_TRUNC_F / MANTA_TRUNC_R       truncLen (default 260 / 210)",
     "  MANTA_MAXEE_F / MANTA_MAXEE_R       maxEE (default 2.6 / 2.1)",
     "  MANTA_MIN_OVERLAP  minOverlap for mergePairs (default 15)",
@@ -50,6 +53,8 @@ TRUNC_R <- as.integer(Sys.getenv("MANTA_TRUNC_R", "210"))
 MAXEE_F <- as.numeric(Sys.getenv("MANTA_MAXEE_F", "2.60"))
 MAXEE_R <- as.numeric(Sys.getenv("MANTA_MAXEE_R", "2.10"))
 MIN_OVERLAP <- as.integer(Sys.getenv("MANTA_MIN_OVERLAP", "15"))
+PRIMER_TRIM <- "anchored 5', pairs without both primers discarded"
+MIN_PRIMER_SHARE <- 0.8
 META_IN <- Sys.getenv("MANTA_METADATA", "")
 PLACEHOLDER_DATES <- "placeholder_dates.txt"
 KINGDOM <- Sys.getenv("MANTA_KINGDOM", "unassigned")
@@ -195,7 +200,7 @@ cache_path <- function(name) {
 }
 cache <- cache_path("_seqtab_cache.Rdata")
 
-params_now <- list(fwd_primer = FWD_PRIMER, rev_primer = REV_PRIMER,
+params_now <- list(fwd_primer = FWD_PRIMER, rev_primer = REV_PRIMER, primer_trim = PRIMER_TRIM,
                    trunc_len_f = TRUNC_F, trunc_len_r = TRUNC_R,
                    max_ee_f = MAXEE_F, max_ee_r = MAXEE_R,
                    min_overlap = MIN_OVERLAP, min_len = 100)
@@ -213,7 +218,8 @@ if (file.exists(cache)) {
       identical(as.character(params_now[[k]]), as.character(dada2_params[[k]])), logical(1))]
     if (length(anders))
       stop("the DADA2 cache ", cache, " was built with other parameters (",
-           paste0(anders, " ", vapply(anders, function(k) as.character(dada2_params[[k]]), ""),
+           paste0(anders, " ", vapply(anders, function(k)
+                    paste(as.character(dada2_params[[k]]), collapse = ""), ""),
                   " -> ", vapply(anders, function(k) as.character(params_now[[k]]), ""),
                   collapse = "; "),
            "). Delete ", tmp, " or use a new OUT_DIR.", call. = FALSE)
@@ -265,15 +271,30 @@ stop_empty("the prefilter (minLen 100)", file.exists(fnFs.pre) & file.exists(fnR
 cat("prefilter ok\n")
 
 fnFs.cut <- file.path(cut_dir, basename(fnFs)); fnRs.cut <- file.path(cut_dir, basename(fnRs))
+primer_reads <- integer(length(fnFs))
 for (i in seq_along(fnFs)) {
-  rc <- system2("cutadapt", args = c(paste("-g", FWD_PRIMER, "-a", REV.RC),
-                                     paste("-G", REV_PRIMER, "-A", FWD.RC), "-n", 2,
-                                     "-o", fnFs.cut[i], "-p", fnRs.cut[i],
-                                     fnFs.pre[i], fnRs.pre[i]), stdout = NULL)
+  rep <- suppressWarnings(system2("cutadapt", args = c(
+    "-a", shQuote(paste0("^", FWD_PRIMER, "...", REV.RC)),
+    "-A", shQuote(paste0("^", REV_PRIMER, "...", FWD.RC)),
+    "--discard-untrimmed", "--pair-filter=any", "--report=minimal",
+    "-o", fnFs.cut[i], "-p", fnRs.cut[i], fnFs.pre[i], fnRs.pre[i]), stdout = TRUE))
+  rc <- attr(rep, "status"); if (is.null(rc)) rc <- 0L
   if (!identical(as.integer(rc), 0L) || !file.exists(fnFs.cut[i]) || !file.exists(fnRs.cut[i]))
     stop("cutadapt failed for the sample ", sample.names[i], " (exit status ", rc, ").",
          call. = FALSE)
+  primer_reads[i] <- read.delim(text = rep, check.names = FALSE)$out_reads
 }
+primer_share <- primer_reads / pre_ft[, "reads.out"]
+cat("\n=== PRIMERS (read pairs with both primers at the read start) ===\n")
+print(data.frame(sample = sample.names, input = as.integer(pre_ft[, "reads.out"]),
+                 primer = primer_reads, share = round(primer_share, 4)), row.names = FALSE)
+low <- primer_share < MIN_PRIMER_SHARE
+if (any(low))
+  stop(sum(low), " sample(s) have fewer than ", 100 * MIN_PRIMER_SHARE, " % read pairs with ",
+       "both primers (", FWD_PRIMER, " / ", REV_PRIMER, "): ",
+       paste(sprintf("%s %.1f %%", sample.names[low], 100 * primer_share[low]), collapse = ", "),
+       ". Check the primer pair; with the wrong primers nothing is removed or the reads are cut ",
+       "at the wrong place.", call. = FALSE)
 cat("cutadapt ok\n")
 
 filtFs <- file.path(filt_dir, basename(fnFs)); filtRs <- file.path(filt_dir, basename(fnRs))
@@ -299,9 +320,9 @@ seqtab.nochim <- removeBimeraDenovo(seqtab2, method = "consensus", multithread =
                                     verbose = TRUE)
 
 getN <- function(x) sum(getUniques(x))
-track <- cbind(track_ft, sapply(dadaFs, getN), sapply(dadaRs, getN),
+track <- cbind(pre_ft[, "reads.out"], track_ft, sapply(dadaFs, getN), sapply(dadaRs, getN),
                sapply(mergers, getN), rowSums(seqtab.nochim))
-colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+colnames(track) <- c("input", "primer", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
 rownames(track) <- sample.names
 dada2_params <- c(params_now, list(length_window_lo = lft, length_window_hi = rgt,
                                    inputs = input_files(src)))
@@ -458,6 +479,7 @@ manifest <- j_obj(list(
     min_len = j_num(P$min_len),
     fwd_primer = j_str(P$fwd_primer),
     rev_primer = j_str(P$rev_primer),
+    primer_trim = j_str(P$primer_trim),
     chimera_method = j_str("consensus"),
     reference = j_str(ref_name),
     reference_version = j_str(ref_ver),
