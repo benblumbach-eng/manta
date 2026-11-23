@@ -346,6 +346,8 @@ export type Dataset = {
   n_network: number;
   n_sample: number;
   station: string | null;
+  depth_from_m?: number | null;
+  depth_to_m?: number | null;
   coords: [number, number] | null;
   derived?: DerivedInfo | null;
 };
@@ -951,7 +953,8 @@ export const getDatasets = () => get<{ datasets: Dataset[] }>("/datasets");
 export const getImportStatus = (jobId: string) => get<ImportStatus>(`/import/${jobId}`);
 export const uploadImport = (files: File[], dataset_id: string, region?: string,
   opts?: { station?: string; lat?: number; lon?: number; marker?: string;
-           thresholds?: ThresholdInput; keep_otter?: boolean }) => {
+           thresholds?: ThresholdInput; keep_otter?: boolean;
+           depth_from?: number; depth_to?: number }) => {
   const fd = new FormData();
   fd.append("dataset_id", dataset_id);
   if (opts?.keep_otter) fd.append("keep_otter", "true");
@@ -960,6 +963,8 @@ export const uploadImport = (files: File[], dataset_id: string, region?: string,
   if (opts?.station) fd.append("station", opts.station);
   if (opts?.lat != null) fd.append("lat", String(opts.lat));
   if (opts?.lon != null) fd.append("lon", String(opts.lon));
+  if (opts?.depth_from != null) fd.append("depth_from", String(opts.depth_from));
+  if (opts?.depth_to != null) fd.append("depth_to", String(opts.depth_to));
   if (opts?.thresholds) {
     Object.entries(opts.thresholds).forEach(([k, v]) => fd.append(k, String(v)));
   }
@@ -1208,7 +1213,8 @@ export const uploadFastq = (
   opts?: { metadata?: File | null; ncores?: number; taxonomy_ref?: string;
            station?: string; lat?: number; lon?: number; marker?: string;
            thresholds?: ThresholdInput; keep_otter?: boolean;
-           fwd_primer?: string; rev_primer?: string },
+           fwd_primer?: string; rev_primer?: string;
+           depth_from?: number; depth_to?: number },
 ) => {
   const fd = new FormData();
   fd.append("dataset_id", dataset_id);
@@ -1222,6 +1228,8 @@ export const uploadFastq = (
   if (opts?.station) fd.append("station", opts.station);
   if (opts?.lat != null) fd.append("lat", String(opts.lat));
   if (opts?.lon != null) fd.append("lon", String(opts.lon));
+  if (opts?.depth_from != null) fd.append("depth_from", String(opts.depth_from));
+  if (opts?.depth_to != null) fd.append("depth_to", String(opts.depth_to));
   if (opts?.metadata) fd.append("metadata", opts.metadata);
   if (opts?.thresholds) {
     Object.entries(opts.thresholds).forEach(([k, v]) => fd.append(k, String(v)));

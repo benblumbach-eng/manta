@@ -317,7 +317,8 @@ def _run(job_id: str, rdata_dir: Path, dataset_id: str, run_id: str,
          tables_dir: Path | None = None, otter_out_dir: Path | None = None,
          source_doi: str | None = None, citation: str | None = None,
          replace_wipe: "Callable[[], Callable[[], None] | None] | None" = None,
-         keep_otter: bool = False) -> None:
+         keep_otter: bool = False,
+         depth_from: float | None = None, depth_to: float | None = None) -> None:
     work = Path(tempfile.mkdtemp(prefix=f"manta_import_{job_id}_"))
     alt_geloescht = False
     csv_dir, otter_out = work / "csv", work / "otter"
@@ -405,6 +406,10 @@ def _run(job_id: str, rdata_dir: Path, dataset_id: str, run_id: str,
             ingest_cmd += ["--source-doi", source_doi]
         if citation:
             ingest_cmd += ["--citation", citation]
+        if depth_from is not None:
+            ingest_cmd += ["--depth-from", str(depth_from)]
+        if depth_to is not None:
+            ingest_cmd += ["--depth-to", str(depth_to)]
         zurueck = None
         if replace_wipe is not None:
             _set(job_id, stage_detail="replacing the old dataset")
@@ -617,7 +622,8 @@ def start_import(dataset_id: str, marker: str = "18S",
                  source_doi: str | None = None, citation: str | None = None,
                  reserved: bool = False,
                  replace_wipe: "Callable[[], Callable[[], None] | None] | None" = None,
-                 keep_otter: bool = False) -> str:
+                 keep_otter: bool = False,
+                 depth_from: float | None = None, depth_to: float | None = None) -> str:
     rdata_dir = (Path(rdata_dir) if rdata_dir
                  else (None if (fastq_dir or tables_dir or otter_out_dir) else FIXTURE))
     if rdata_dir == FIXTURE and not ensure_fixture():
@@ -638,5 +644,5 @@ def start_import(dataset_id: str, marker: str = "18S",
                          "started_at": time.time(), "stage_started_at": time.time()}
     args = (job_id, rdata_dir, dataset_id, run_id, marker, region, station, lat, lon,
             fastq_dir, dada2_env, time_axis, thresholds, tables_dir, otter_out_dir,
-            source_doi, citation, replace_wipe, keep_otter)
+            source_doi, citation, replace_wipe, keep_otter, depth_from, depth_to)
     return _start(_run, args, job_id, dataset_id, reserved, background)

@@ -268,6 +268,8 @@ export default function ImportDialog({ onClose, onStarted }:
   const [station, setStation] = useState("");
   const [lat, setLat] = useState("");
   const [lon, setLon] = useState("");
+  const [depthFrom, setDepthFrom] = useState("");
+  const [depthTo, setDepthTo] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [metadata, setMetadata] = useState<File | null>(null);
   const [pre, setPre] = useState<FastqPreflight | null>(null);
@@ -299,7 +301,11 @@ export default function ImportDialog({ onClose, onStarted }:
   const otterOutMissing = OTTER_OUT_REQUIRED.filter((n) => !has(n));
   const otterOutTablesOk = has(OTTER_OUT_MANIFEST) || OTTER_OUT_DEFAULT_TABLES.every(has);
   const stage1Ok = dada2Missing.length === 0 || tablesMissing.length === 0;
-  const canStart = idOk && !busy && files.length > 0 && entryState?.ok !== false &&
+  const dFrom = depthFrom.trim() === "" ? undefined : Number(depthFrom);
+  const dTo = depthTo.trim() === "" ? undefined : Number(depthTo);
+  const depthOk = (dTo === undefined || (dFrom !== undefined && dTo >= dFrom)) &&
+    (dFrom === undefined || dFrom >= 0);
+  const canStart = idOk && depthOk && !busy && files.length > 0 && entryState?.ok !== false &&
     (source === "fastq" ? fastqOk && pair !== null
       : source === "dada2" ? stage1Ok
       : otterOutMissing.length === 0 && otterOutTablesOk);
@@ -313,14 +319,17 @@ export default function ImportDialog({ onClose, onStarted }:
         station: station.trim() || undefined,
         lat: lat.trim() ? Number(lat) : undefined,
         lon: lon.trim() ? Number(lon) : undefined,
+        depth_from: dFrom, depth_to: dTo,
       };
       const res = source === "fastq"
         ? await uploadFastq(files, datasetId, opts.region,
             { metadata, station: opts.station, lat: opts.lat, lon: opts.lon, marker,
+              depth_from: opts.depth_from, depth_to: opts.depth_to,
               fwd_primer: pair?.fwd, rev_primer: pair?.rev,
               thresholds: thr, keep_otter: keepOtter })
         : await uploadImport(files, datasetId, opts.region,
             { station: opts.station, lat: opts.lat, lon: opts.lon, marker,
+              depth_from: opts.depth_from, depth_to: opts.depth_to,
               thresholds: source === "otterout" ? undefined : thr,
               keep_otter: source === "otterout" ? undefined : keepOtter });
       onStarted(res.job_id);
@@ -430,6 +439,14 @@ export default function ImportDialog({ onClose, onStarted }:
               onChange={(e) => setLat(e.target.value)} placeholder="79.0" /></Field>
             <Field label="Longitude (°E)"><input data-testid="import-lon" value={lon} className={input}
               onChange={(e) => setLon(e.target.value)} placeholder="4.17" /></Field>
+            <Field label="Depth from (m)" tip={<><p>The nominal depth of the time series, if known.
+              It describes the dataset and is never used as the depth of a sample.</p><p>Measured
+              depths per sample go into metadata.csv, column <code>depth</code>.</p></>}>
+              <input data-testid="import-depth-from" type="number" min={0} value={depthFrom}
+                className={input} onChange={(e) => setDepthFrom(e.target.value)} placeholder="optional" /></Field>
+            <Field label="Depth to (m)"><input data-testid="import-depth-to" type="number" min={0}
+              value={depthTo} className={input} onChange={(e) => setDepthTo(e.target.value)}
+              placeholder="optional" /></Field>
           </div>
           <button type="button" data-testid="import-map-toggle"
             onClick={() => setShowMap((v) => !v)}
@@ -530,7 +547,9 @@ export default function ImportDialog({ onClose, onStarted }:
         {source === "fastq" && (
           <Field label="metadata.csv (optional)" tip={
             <><p>Holds the real sampling dates. <strong>Without it</strong> MANTA knows only the
-            order of the samples and shows no month, year or season statements.</p></>}>
+            order of the samples and shows no month, year or season statements.</p>
+            <p>Optional column <code>depth</code>: the measured depth of each sample in m; leave a
+            cell empty if unknown.</p></>}>
             <input data-testid="import-metadata" type="file" accept=".csv" className={input + " file:mr-2 file:text-xs"}
               onChange={(e) => setMetadata(e.target.files?.[0] ?? null)} />
           </Field>
@@ -552,6 +571,7 @@ export default function ImportDialog({ onClose, onStarted }:
                     : tablesMissing.length < dada2Missing.length
                       ? ` — missing: ${tablesMissing.join(", ")}`
                       : ` — missing: ${dada2Missing.join("; ")}`}`}
+          {!depthOk && <span className="text-warn"> · depth: "to" needs "from" and must not be less than it</span>}
           {datasetId && !idOk && <span className="text-warn"> · name needs at least 3 characters (a–z, 0–9, _)</span>}
           {source === "fastq" && !metadata && <span> · without metadata.csv: no season statements</span>}
           {source === "fastq" && !pair && <span className="text-warn"> · choose a primer pair</span>}
